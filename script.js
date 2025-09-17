@@ -2,9 +2,9 @@
 // VARIABLES GLOBALES Y ENLACE API
 // ===========================================================
 let movieDatabase = {}, seriesDatabase = {}, seriesEpisodesData = {}, allMoviesFull = {};
-const seriesDataUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRqIdD74zBDdD0VCVj6TDa2ooajoCQA_eToJ6Bv0hNbHp5o3N8NmGERsufM7yF47exLcAUfhHt1OflE/pub?gid=1424954432&single=true&output=csv'; 
-const episodesDataUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRqIdD74zBDdD0VCVj6TDa2ooajoCQA_eToJ6Bv0hNbHp5o3N8NmGERsufM7yF47exLcAUfhHt1OflE/pub?gid=1865775313&single=true&output=csv'; 
-const allMoviesDataUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRqIdD74zBDdD0VCVj6TDa2ooajoCQA_eToJ6Bv0hNbHp5o3N8NmGERsufM7yF47exLcAUfhHt1OflE/pub?gid=0&single=true&output=csv'; 
+const seriesDataUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRqIdD74zBDdD0VCVj6TDa2ooajoCQA_eToJ6Bv0hNbHp5o3N8NmGERsufM7yF47exLcAUfhHt1OflE/pub?gid=1424954432&single=true&output=csv';
+const episodesDataUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRqIdD74zBDdD0VCVj6TDa2ooajoCQA_eToJ6Bv0hNbHp5o3N8NmGERsufM7yF47exLcAUfhHt1OflE/pub?gid=1865775313&single=true&output=csv';
+const allMoviesDataUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRqIdD74zBDdD0VCVj6TDa2ooajoCQA_eToJ6Bv0hNbHp5o3N8NmGERsufM7yF47exLcAUfhHt1OflE/pub?gid=0&single=true&output=csv';
 const playerState = {};
 
 // ===========================================================
@@ -58,6 +58,29 @@ document.addEventListener('DOMContentLoaded', () => {
         preloader.style.opacity = 1;
         preloader.style.visibility = 'visible';
     };
+    
+    // Función auxiliar para parsear CSV y convertirlo a JSON
+    const parseCsv = (csvText) => {
+        const lines = csvText.split('\n');
+        const headers = lines[0].split(',');
+        const data = {};
+        for (let i = 1; i < lines.length; i++) {
+            const values = lines[i].split(',');
+            if (values.length === headers.length) {
+                const entry = {};
+                for (let j = 0; j < headers.length; j++) {
+                    const key = headers[j].trim();
+                    const value = values[j].trim();
+                    entry[key] = value;
+                }
+                if (entry.id) {
+                    data[entry.id] = entry;
+                }
+            }
+        }
+        return data;
+    };
+
 
     Promise.all([
         fetchWithTimeout(seriesDataUrl, {}, API_TIMEOUT),
@@ -69,34 +92,23 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!res.ok) {
                 return Promise.reject(new Error(`Error en la respuesta de la API (Status: ${res.status})`));
             }
-            return res.text().then(text => {
-                const contentType = (res.headers && typeof res.headers.get === 'function') ? (res.headers.get('content-type') || '') : '';
-                if (!contentType.includes('application/json')) {
-                    const snippet = String(text).replace(/\s+/g, ' ').slice(0, 300);
-                    return Promise.reject(new Error(
-                        `Respuesta inesperada desde la API. Content-Type: ${contentType}. Primeros caracteres: ${snippet}`
-                    ));
-                }
-                try {
-                    const parsed = JSON.parse(text);
-                    return parsed;
-                } catch (e) {
-                    return Promise.reject(new Error(`JSON inválido: ${e.message}`));
-                }
-            });
+            return res.text();
         }));
     })
-    .then(([series, episodes, allMovies]) => {
-        if (typeof allMovies !== 'object' || allMovies === null) {
+    .then(([seriesCsv, episodesCsv, allMoviesCsv]) => {
+        const parsedSeries = parseCsv(seriesCsv);
+        const parsedEpisodes = parseCsv(episodesCsv);
+        const parsedAllMovies = parseCsv(allMoviesCsv);
+
+        if (typeof parsedAllMovies !== 'object' || parsedAllMovies === null) {
             throw new Error("Los datos de películas recibidos no son válidos");
         }
-        if (typeof series !== 'object' || series === null) {
+        if (typeof parsedSeries !== 'object' || parsedSeries === null) {
             throw new Error("Los datos de series recibidos no son válidos");
         }
-
-        seriesDatabase = series;
-        seriesEpisodesData = episodes;
-        allMoviesFull = allMovies;
+        seriesDatabase = parsedSeries;
+        seriesEpisodesData = parsedEpisodes;
+        allMoviesFull = parsedAllMovies;
 
         const movieEntries = Object.keys(allMoviesFull)
             .sort((a, b) => allMoviesFull[b].tr - allMoviesFull[a].tr)
