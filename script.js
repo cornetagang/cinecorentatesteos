@@ -2,7 +2,9 @@
 // VARIABLES GLOBALES Y ENLACE API
 // ===========================================================
 let movieDatabase = {}, seriesDatabase = {}, seriesEpisodesData = {}, allMoviesFull = {};
-const API_URL = 'https://script.google.com/macros/s/AKfycbw2htAwcmR48wYvELXyTIKQmWtwu_zgqZH8uSivzpgOitcYYNXKGDIEnrDvtQIpydJA/exec';
+const seriesDataUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRqIdD74zBDdD0VCVj6TDa2ooajoCQA_eToJ6Bv0hNbHp5o3N8NmGERsufM7yF47exLcAUfhHt1OflE/pub?gid=1424954432&single=true&output=csv'; 
+const episodesDataUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRqIdD74zBDdD0VCVj6TDa2ooajoCQA_eToJ6Bv0hNbHp5o3N8NmGERsufM7yF47exLcAUfhHt1OflE/pub?gid=1865775313&single=true&output=csv'; 
+const allMoviesDataUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRqIdD74zBDdD0VCVj6TDa2ooajoCQA_eToJ6Bv0hNbHp5o3N8NmGERsufM7yF47exLcAUfhHt1OflE/pub?gid=0&single=true&output=csv'; 
 const playerState = {};
 
 // ===========================================================
@@ -58,9 +60,9 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     Promise.all([
-        fetchWithTimeout(`${API_URL}?data=series`, {}, API_TIMEOUT),
-        fetchWithTimeout(`${API_URL}?data=episodes`, {}, API_TIMEOUT),
-        fetchWithTimeout(`${API_URL}?data=allMovies`, {}, API_TIMEOUT)
+        fetchWithTimeout(seriesDataUrl, {}, API_TIMEOUT),
+        fetchWithTimeout(episodesDataUrl, {}, API_TIMEOUT),
+        fetchWithTimeout(allMoviesDataUrl, {}, API_TIMEOUT)
     ])
     .then(responses => {
         return Promise.all(responses.map(res => {
