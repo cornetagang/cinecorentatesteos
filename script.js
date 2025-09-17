@@ -59,7 +59,7 @@ document.addEventListener('DOMContentLoaded', () => {
         preloader.style.visibility = 'visible';
     };
     
-    // Función auxiliar para parsear CSV y convertirlo a JSON
+    // Función auxiliar para parsear CSV y convertirlo a un objeto de datos
     const parseCsv = (csvText) => {
         const lines = csvText.split('\n');
         const headers = lines[0].split(',');
@@ -88,6 +88,7 @@ document.addEventListener('DOMContentLoaded', () => {
         fetchWithTimeout(allMoviesDataUrl, {}, API_TIMEOUT)
     ])
     .then(responses => {
+        // En lugar de response.json(), ahora usamos response.text()
         return Promise.all(responses.map(res => {
             if (!res.ok) {
                 return Promise.reject(new Error(`Error en la respuesta de la API (Status: ${res.status})`));
@@ -96,6 +97,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }));
     })
     .then(([seriesCsv, episodesCsv, allMoviesCsv]) => {
+        // Ahora, parseamos el texto CSV con nuestra nueva función
         const parsedSeries = parseCsv(seriesCsv);
         const parsedEpisodes = parseCsv(episodesCsv);
         const parsedAllMovies = parseCsv(allMoviesCsv);
@@ -743,7 +745,7 @@ function openSeriesPlayer(seriesId) {
         populateSeasonsMenu(seriesId);
     } else {
         modal.classList.remove('season-selection-active');
-        const seasonKeys = dataSet.seasons ? Object.keys(dataSet.seasons) : Object.keys(dataSet);
+        const seasonKeys = dataSet.seasons && Object.keys(dataSet.seasons).length > 0 ? Object.keys(dataSet.seasons) : Object.keys(dataSet);
         const initialSeason = seasonKeys[0];
         
         const episodeToOpen = loadProgress(seriesId, initialSeason);
