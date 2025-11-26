@@ -22,55 +22,44 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 200); 
     });
 
+    // --- 🛑 AQUÍ ESTABA EL CÓDIGO MOLESTO, YA LO QUITÉ ---
+
     document.getElementById('btnScanCamera').addEventListener('click', toggleCamera);
     setupFormListeners();
 });
 
 // --- NUEVA FUNCIÓN: CALCULAR DÍGITO VERIFICADOR EAN13 ---
 function calculateEAN13Checksum(code) {
-    // El código debe tener 12 dígitos para calcular el 13
     if (code.length !== 12) return "";
-    
     let sum = 0;
     for (let i = 0; i < 12; i++) {
         let digit = parseInt(code[i]);
-        // Posiciones impares se multiplican por 1, pares por 3
-        if (i % 2 === 0) {
-            sum += digit * 1;
-        } else {
-            sum += digit * 3;
-        }
+        if (i % 2 === 0) sum += digit * 1;
+        else sum += digit * 3;
     }
-    
     let remainder = sum % 10;
     let checkDigit = (10 - remainder) % 10;
     return code + checkDigit;
 }
 
-// --- GENERADOR CORREGIDO ---
+// --- GENERADOR ---
 function generateRandomCode() {
     const type = document.getElementById('codeType').value;
     let code = "";
-    
     if (type === "EAN13") {
-        // 1. Generamos 12 dígitos base
         let base = "780" + Math.floor(Math.random() * 1000000000).toString().padStart(9, "0");
-        // 2. Calculamos el dígito 13 real
         code = calculateEAN13Checksum(base);
     } else {
         code = Math.floor(100000 + Math.random() * 900000).toString();
     }
-    
     document.getElementById('prodCode').value = code;
     renderBarcode(code);
 }
 
-// --- EL RESTO DEL CÓDIGO SIGUE IGUAL ---
-
+// --- EL RESTO DEL CÓDIGO ---
 function renderBarcode(value) {
     if(!value) return;
     try { 
-        // Importante: flat: true evita que JsBarcode agregue OTRO dígito si ya tiene 13
         JsBarcode("#barcode", value, { 
             format: document.getElementById('codeType').value, 
             lineColor: "#000", width: 2, height: 40, displayValue: true, fontSize: 14, margin: 5,
@@ -85,25 +74,26 @@ function searchAndDisplay(code) {
 
     if (foundItem) {
         document.getElementById('resPrice').innerText = "$" + foundItem["Precio"];
-        document.getElementById('resPrice').className = "display-3 fw-bold text-success";
+        document.getElementById('resPrice').className = "display-3 fw-bold text-success mb-0";
         document.getElementById('resName').innerText = foundItem["Nombre Producto"];
         document.getElementById('resStock').innerText = foundItem["Stock"];
         const units = foundItem["Unidades"] ? ` (${foundItem["Unidades"]} unid.)` : "";
         document.getElementById('resDesc').innerText = foundItem["Descripción"] + units;
-        document.getElementById('resDesc').className = "badge bg-light text-dark fs-5";
+        document.getElementById('resDesc').className = "badge bg-light text-dark fs-6";
         resultBox.style.display = 'block';
         playSound('success');
     } else {
         document.getElementById('resPrice').innerText = "NO REGISTRADO";
-        document.getElementById('resPrice').className = "display-4 fw-bold text-danger";
-        document.getElementById('resName').innerText = "Este código no está en tu inventario";
+        document.getElementById('resPrice').className = "display-5 fw-bold text-danger mb-0";
+        document.getElementById('resName').innerText = "Código desconocido";
         document.getElementById('resStock').innerText = "0";
-        document.getElementById('resDesc').innerText = "Código: " + code;
-        document.getElementById('resDesc').className = "badge bg-danger text-white fs-5";
+        document.getElementById('resDesc').innerText = code;
+        document.getElementById('resDesc').className = "badge bg-danger text-white fs-6";
         resultBox.style.display = 'block';
         playSound('error');
     }
-    setTimeout(() => { document.getElementById('scannerInput').value = ''; }, 2500);
+    // Limpiar input después de un momento
+    setTimeout(() => { document.getElementById('scannerInput').value = ''; }, 3000);
 }
 
 function playSound(type) {
@@ -118,7 +108,6 @@ function loadFromCloud() {
     .then(data => {
         inventoryList = [];
         data.forEach(item => {
-            // Forzamos que el código sea String para evitar problemas de comparación
             inventoryList.push({
                 "Código Escaneable": String(item.code), 
                 "Nombre Producto": item.name, 
@@ -152,7 +141,6 @@ function setupFormListeners() {
 
 function handleFormSubmit(e) {
     e.preventDefault();
-    // Forzamos que se guarde como String
     const code = String(document.getElementById('prodCode').value);
     const name = document.getElementById('prodName').value;
     const price = document.getElementById('prodPrice').value;
@@ -184,36 +172,32 @@ function updateTable() {
     if (inventoryList.length > 0) {
         if(emptyState) emptyState.style.display = 'none';
         
-        // Mostramos los últimos agregados primero
         [...inventoryList].reverse().forEach((item, index) => {
-            // El índice real en el array original (porque invertimos visualmente)
             const realIndex = inventoryList.length - 1 - index;
             
             const row = `
                 <tr>
-                    <td data-label="Producto" class="fw-bold text-start">
+                    <td data-label="Producto">
                         ${item["Nombre Producto"]}
-                        <div class="small text-muted fw-normal">${item["Código Escaneable"]}</div>
+                        <div>${item["Código Escaneable"]}</div>
                     </td>
                     
                     <td data-label="Precio">
                         <div class="input-group input-group-sm">
-                            <span class="input-group-text border-0 bg-transparent">$</span>
-                            <input type="number" class="form-control fw-bold border-0 bg-light text-end" id="edit-price-${realIndex}" value="${item["Precio"]}">
+                            <span class="input-group-text">$</span>
+                            <input type="number" class="form-control" id="edit-price-${realIndex}" value="${item["Precio"]}">
                         </div>
                     </td>
                     
                     <td data-label="Stock">
-                        <input type="number" class="form-control form-control-sm text-center fw-bold border-0 bg-light" id="edit-stock-${realIndex}" value="${item["Stock"]}" style="width: 80px; margin-left:auto;">
+                        <input type="number" class="form-control form-control-sm text-center" id="edit-stock-${realIndex}" value="${item["Stock"]}">
                     </td>
                     
                     <td data-label="Acciones">
-                        <div class="d-flex gap-2 justify-content-end w-100">
-                            <button class="btn btn-sm btn-info text-white" onclick="viewBarcode(${realIndex})"><i class="fa-solid fa-eye"></i></button>
-                            <button class="btn btn-sm btn-primary" onclick="updateItemInCloud(${realIndex})"><i class="fa-solid fa-floppy-disk"></i></button>
-                            <button class="btn btn-sm btn-outline-danger" onclick="deleteItemInCloud(${realIndex})"><i class="fa-solid fa-trash"></i></button>
-                            <button class="btn btn-sm btn-outline-dark" onclick="printSingleLabel('${item["Código Escaneable"]}', '${item["Nombre Producto"]}', '${item["Descripción"]}', '${item["Unidades"]}', '${item["Tipo Código"]}')"><i class="fa-solid fa-print"></i></button>
-                        </div>
+                        <button class="btn btn-sm btn-info text-white" onclick="viewBarcode(${realIndex})"><i class="fa-solid fa-eye"></i></button>
+                        <button class="btn btn-sm btn-primary" onclick="updateItemInCloud(${realIndex})"><i class="fa-solid fa-floppy-disk"></i></button>
+                        <button class="btn btn-sm btn-outline-danger" onclick="deleteItemInCloud(${realIndex})"><i class="fa-solid fa-trash"></i></button>
+                        <button class="btn btn-sm btn-outline-dark" onclick="printSingleLabel('${item["Código Escaneable"]}', '${item["Nombre Producto"]}', '${item["Descripción"]}', '${item["Unidades"]}', '${item["Tipo Código"]}')"><i class="fa-solid fa-print"></i></button>
                     </td>
                 </tr>
             `;
@@ -230,13 +214,13 @@ function toggleCamera() {
     if (html5QrCode && html5QrCode.isScanning) {
         html5QrCode.stop().then(() => {
             readerDiv.style.display = "none";
-            btn.innerHTML = '<i class="fa-solid fa-camera"></i> Usar Cámara';
+            btn.innerHTML = '<i class="fa-solid fa-camera"></i>';
             btn.classList.remove('btn-danger'); btn.classList.add('btn-primary');
         });
         return;
     }
     readerDiv.style.display = "block";
-    btn.innerHTML = '<i class="fa-solid fa-stop"></i> Detener';
+    btn.innerHTML = '<i class="fa-solid fa-stop"></i>';
     btn.classList.remove('btn-primary'); btn.classList.add('btn-danger');
     html5QrCode = new Html5Qrcode("reader");
     html5QrCode.start({ facingMode: "environment" }, { fps: 10, qrbox: { width: 250, height: 150 } }, onScanSuccess);
@@ -245,7 +229,7 @@ function toggleCamera() {
 function onScanSuccess(decodedText) {
     html5QrCode.stop().then(() => {
         document.getElementById('reader').style.display = "none";
-        document.getElementById('btnScanCamera').innerHTML = '<i class="fa-solid fa-camera"></i> Usar Cámara';
+        document.getElementById('btnScanCamera').innerHTML = '<i class="fa-solid fa-camera"></i>';
         document.getElementById('btnScanCamera').classList.remove('btn-danger');
         document.getElementById('btnScanCamera').classList.add('btn-primary');
     });
