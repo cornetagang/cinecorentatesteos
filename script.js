@@ -1,8 +1,9 @@
 let inventoryList = [];
 let html5QrCode;
+let lastChecksum = "";
 
 // ⚠️ PEGA TU URL DE APPS SCRIPT AQUÍ
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxScIysMr19DIfCm2bZc1MozfZTVVz18OGAGxDjAQOtRymJ54hPuFZkNZ9ZEtlLuU1y/exec";
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwrvQ09PpaQHw3psmr0pAVd08IdIQqgq6XxVTIledEcQHS3_KK9B_YZ120J18ugPyD7/exec";
 
 document.addEventListener('DOMContentLoaded', () => {
     generateRandomCode();
@@ -273,19 +274,36 @@ function playSound(type) {
     new Audio(audioSrc).play().catch(e => {});
 }
 
-function loadFromCloud() {
-    fetch(GOOGLE_SCRIPT_URL).then(r => r.json()).then(data => {
-        inventoryList = [];
-        data.forEach(item => {
-            inventoryList.push({
-                "Código Escaneable": String(item.code), "Nombre Producto": item.name, "Precio": item.price,
-                "Stock": item.stock, "Descripción": item.desc, "Unidades": item.units, "Tipo Código": item.type
-            });
+function loadFromCloud(silent = false) {
+    fetch(GOOGLE_SCRIPT_URL + "?t=" + Date.now())
+        .then(r => r.json())
+        .then(res => {
+            // Guardar checksum
+            lastChecksum = res.checksum;
+
+            inventoryList = res.rows.map(item => ({
+                "Código Escaneable": String(item.code),
+                "Nombre Producto": item.name,
+                "Precio": item.price,
+                "Stock": item.stock,
+                "Descripción": item.desc,
+                "Unidades": item.units,
+                "Tipo Código": item.type
+            }));
+
+            updateTable();
+
+            if (!silent) {
+                Swal.fire({
+                    toast: true,
+                    icon: "success",
+                    title: "Inventario cargado",
+                    position: "top-end",
+                    timer: 1500,
+                    showConfirmButton: false
+                });
+            }
         });
-        updateTable();
-        const Toast = Swal.mixin({ toast: true, position: 'top-end', showConfirmButton: false, timer: 3000 });
-        Toast.fire({ icon: 'success', title: 'Inventario Cargado' });
-    });
 }
 
 function setupFormListeners() {
@@ -400,62 +418,19 @@ function downloadExcel() {
 setInterval(syncDataBackground, 5000);
 
 function syncDataBackground() {
-    // Solo sincronizamos si NO estamos escribiendo en el buscador o editando un campo
-    // para evitar que se te borre lo que escribes.
     if (document.activeElement.tagName === "INPUT") return;
 
-    fetch(GOOGLE_SCRIPT_URL)
-    .then(r => r.json())
-    .then(newData => {
-        // Recorremos los datos nuevos que vienen de la nube
-        newData.forEach(cloudItem => {
-            // Buscamos este producto en nuestra lista local
-            const localItemIndex = inventoryList.findIndex(i => String(i["Código Escaneable"]) === String(cloudItem.code));
-            
-            if (localItemIndex !== -1) {
-                const localItem = inventoryList[localItemIndex];
-                
-                // Verificamos si el STOCK cambió en la nube
-                if (String(localItem["Stock"]) !== String(cloudItem.stock)) {
-                    console.log(`Cambio detectado en ${localItem["Nombre Producto"]}: ${localItem["Stock"]} -> ${cloudItem.stock}`);
-                    
-                    // 1. Actualizar Memoria
-                    localItem["Stock"] = cloudItem.stock;
-                    
-                    // 2. Actualizar la Cajita de la Tabla (Sin recargar toda la página)
-                    // Nota: Usamos el índice visual invertido
-                    const visualIndex = inventoryList.length - 1 - localItemIndex;
-                    const inputStock = document.getElementById(`edit-stock-${visualIndex}`);
-                    if (inputStock) {
-                        inputStock.value = cloudItem.stock;
-                        // Efecto visual suave (Flash amarillo)
-                        inputStock.style.backgroundColor = "#fff3cd";
-                        setTimeout(() => inputStock.style.backgroundColor = "#f8f9fa", 1000);
-                    }
-
-                    // 3. Actualizar el Verificador (Tarjeta Negra) si está mostrando este producto
-                    const resName = document.getElementById('resName');
-                    if (resName && resName.innerText === localItem["Nombre Producto"]) {
-                        document.getElementById('resStock').innerText = cloudItem.stock;
-                    }
-                }
-
-                // Verificamos si el PRECIO cambió
-                if (String(localItem["Precio"]) !== String(cloudItem.price)) {
-                    localItem["Precio"] = cloudItem.price;
-                    const visualIndex = inventoryList.length - 1 - localItemIndex;
-                    const inputPrice = document.getElementById(`edit-price-${visualIndex}`);
-                    if (inputPrice) inputPrice.value = cloudItem.price;
-                }
+    fetch(GOOGLE_SCRIPT_URL + "?t=" + Date.now())
+        .then(r => r.json())
+        .then(res => {
+            if (res.checksum !== lastChecksum) {
+                lastChecksum = res.checksum;
+                loadFromCloud(true);
             }
-        });
-        // Opcional: Si hay productos nuevos (el largo de la lista cambió), recargamos todo
-        if (newData.length !== inventoryList.length) {
-            loadFromCloud(); // Recarga completa segura
-        }
-    })
-    .catch(e => console.error("Sincronización silenciosa falló (es normal si hay mala red)", e));
+        })
+        .catch(e => {});
 }
+
 
 // --- CARGA INICIAL DE DATOS (Acepta modo silencioso) ---
 function loadFromCloud(silent = false) {
@@ -491,3 +466,18 @@ function loadFromCloud(silent = false) {
         }
     });
 }
+
+// ===============
+//   ABLY CLIENT
+// ===============
+
+const ably = new Ably.Realtime("r7nNxA.ExVsSw:Sob1CfbkbBuAuQNbGtzs47YlAHhvG2dTU7azbr4KeNQ");
+
+const channel = ably.channels.get("tienda-inventario");
+
+channel.subscribe("inventory_update", (msg) => {
+    console.log("EVENTO EN TIEMPO REAL:", msg.data);
+
+    // Llamamos a tu función de carga
+    loadFromCloud(true); // <-- Refresca silenciosamente
+});
