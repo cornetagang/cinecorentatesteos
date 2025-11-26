@@ -13,6 +13,7 @@
 <div class="container py-3">
     
     <div id="section-scan">
+        
         <div class="card bg-dark text-white shadow-lg mb-4">
             <div class="card-body p-3 text-center">
                 <h6 class="text-warning mb-2"><i class="fa-solid fa-barcode"></i> VERIFICADOR</h6>
@@ -39,37 +40,46 @@
             <h5 class="mb-3 text-primary"><i class="fa-solid fa-plus-circle"></i> Nuevo / Editar</h5>
             <form id="productForm">
                 <div class="mb-2">
-                    <input type="text" class="form-control" id="prodName" placeholder="Nombre Producto" required>
+                    <label class="form-label small text-muted mb-1">Nombre Producto</label>
+                    <input type="text" class="form-control" id="prodName" placeholder="Ej: Tornillos" required>
                 </div>
+                
                 <div class="row g-2 mb-2">
                     <div class="col-6">
-                        <div class="input-group">
-                            <span class="input-group-text">$</span>
-                            <input type="number" class="form-control" id="prodPrice" placeholder="Precio" required>
+                        <label class="form-label small text-muted mb-1">Precio</label>
+                        <div class="position-relative">
+                            <span class="currency-symbol">$</span>
+                            <input type="number" class="form-control currency-input" id="prodPrice" placeholder="0" required>
                         </div>
                     </div>
                     <div class="col-6">
-                        <input type="number" class="form-control" id="prodStock" placeholder="Stock" required>
+                        <label class="form-label small text-muted mb-1">Stock</label>
+                        <input type="number" class="form-control" id="prodStock" placeholder="0" required>
                     </div>
                 </div>
+
                 <div class="row g-2 mb-2">
                     <div class="col-8">
-                        <input type="text" class="form-control" id="prodDesc" placeholder="Medidas">
+                        <label class="form-label small text-muted mb-1">Medidas</label>
+                        <input type="text" class="form-control" id="prodDesc" placeholder="Ej: 3/8 x 5">
                     </div>
                     <div class="col-4">
-                        <input type="text" class="form-control text-center" id="prodUnits" placeholder="Unid.">
+                        <label class="form-label small text-muted mb-1">Unid.</label>
+                        <input type="text" class="form-control text-center" id="prodUnits" placeholder="Ej: 6">
                     </div>
                 </div>
                 
                 <div class="collapse" id="advancedOptions">
                     <div class="row g-2 mb-2">
                         <div class="col-6">
+                            <label class="form-label small text-muted mb-1">Tipo</label>
                             <select class="form-select form-select-sm" id="codeType">
                                 <option value="EAN13">EAN-13</option>
                                 <option value="CODE128">CODE-128</option>
                             </select>
                         </div>
                         <div class="col-6">
+                            <label class="form-label small text-muted mb-1">Generar</label>
                             <div class="d-grid"><button type="button" class="btn btn-secondary btn-sm" id="btnRandom">Random</button></div>
                         </div>
                     </div>
@@ -98,15 +108,30 @@
     </div>
 
     <div id="section-inventory" style="display: none;">
-        <div class="d-flex justify-content-between align-items-center mb-3 px-1">
+        
+        <div class="d-flex justify-content-between align-items-center mb-3 gap-2">
             <h4 class="mb-0">📦 Inventario</h4>
-            <button id="btnDownload" class="btn btn-success btn-sm"><i class="fa-solid fa-file-excel"></i> Excel</button>
+            <div class="d-flex gap-2">
+                <button class="btn btn-outline-dark btn-sm" onclick="selectAllRows()">
+                    <i class="fa-solid fa-check-double"></i> <span class="d-none d-sm-inline">Todo</span>
+                </button>
+                <button class="btn btn-dark btn-sm" onclick="printSelectedLabels()">
+                    <i class="fa-solid fa-print"></i> <span class="d-none d-sm-inline">Imprimir Selecc.</span>
+                </button>
+                <button id="btnDownload" class="btn btn-success btn-sm"><i class="fa-solid fa-file-excel"></i></button>
+            </div>
         </div>
         
         <div class="table-responsive">
             <table class="table">
                 <thead class="table-light">
-                    <tr><th>Producto</th><th>Precio</th><th>Stock</th><th>Acción</th></tr>
+                    <tr>
+                        <th style="width: 40px;">#</th>
+                        <th>Producto</th>
+                        <th>Precio</th>
+                        <th>Stock</th>
+                        <th>Acción</th>
+                    </tr>
                 </thead>
                 <tbody id="inventoryTableBody">
                     </tbody>
@@ -166,17 +191,17 @@
         document.getElementById('section-scan').style.display = 'none';
         document.getElementById('section-inventory').style.display = 'none';
         
-        // Resetear estilo botones
+        // Resetear botones
         const btns = document.querySelectorAll('.nav-btn');
         btns.forEach(b => { 
             b.classList.remove('text-primary', 'fw-bold'); 
             b.classList.add('text-secondary'); 
         });
 
-        // Mostrar sección deseada
+        // Mostrar seleccionado
         document.getElementById('section-' + section).style.display = 'block';
         
-        // Activar botón actual (Ponerlo azul)
+        // Activar botón actual
         const activeBtn = event.currentTarget;
         activeBtn.classList.remove('text-secondary');
         activeBtn.classList.add('text-primary', 'fw-bold');
