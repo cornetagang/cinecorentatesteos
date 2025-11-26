@@ -22,13 +22,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 200); 
     });
 
-    // Mantener el foco
-    document.addEventListener('click', function(e) {
-        if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT' && !e.target.closest('.table-responsive')) {
-            scannerInput.focus();
-        }
-    });
-
     document.getElementById('btnScanCamera').addEventListener('click', toggleCamera);
     setupFormListeners();
 });
