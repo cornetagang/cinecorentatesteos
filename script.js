@@ -91,11 +91,11 @@ function updateTable() {
     }
 }
 
-// --- FUNCIÓN DE VENTA RÁPIDA ---
+// --- FUNCIÓN REGISTRAR VENTA (CORREGIDA PARA ACTUALIZAR VISUALMENTE) ---
 window.sellItemInCloud = function(index) {
     const item = inventoryList[index];
     
-    // Pop-up preguntando cantidad
+    // Configuración del Pop-up
     Swal.fire({
         title: `Vender: ${item["Nombre Producto"]}`,
         text: `Stock actual: ${item["Stock"]}`,
@@ -103,19 +103,20 @@ window.sellItemInCloud = function(index) {
         inputLabel: 'Cantidad a vender',
         inputAttributes: {
             min: 1,
-            max: item["Stock"], // No dejar vender más de lo que hay
+            max: item["Stock"], 
             step: 1
         },
         inputValue: 1,
         showCancelButton: true,
         confirmButtonText: 'Confirmar Venta',
-        confirmButtonColor: '#198754', // Verde éxito
+        confirmButtonColor: '#198754',
         showLoaderOnConfirm: true,
         preConfirm: (qty) => {
             if (!qty || qty < 1) {
                 Swal.showValidationMessage('Ingresa una cantidad válida');
                 return false;
             }
+            // Validación opcional: impedir vender más de lo que hay
             if (parseInt(qty) > parseInt(item["Stock"])) {
                 Swal.showValidationMessage(`¡Solo tienes ${item["Stock"]} en stock!`);
                 return false;
@@ -126,7 +127,6 @@ window.sellItemInCloud = function(index) {
         if (result.isConfirmed) {
             const qtyToSell = result.value;
             
-            // Preparamos datos para Google
             const dataToSend = {
                 action: "sell",
                 code: item["Código Escaneable"],
@@ -135,7 +135,7 @@ window.sellItemInCloud = function(index) {
                 price: item["Precio"]
             };
 
-            // Enviamos a la nube
+            // Enviamos a Google
             fetch(GOOGLE_SCRIPT_URL, {
                 method: "POST",
                 mode: "no-cors",
@@ -143,25 +143,42 @@ window.sellItemInCloud = function(index) {
                 body: JSON.stringify(dataToSend)
             })
             .then(() => {
-                // Actualizar visualmente (Restar stock local)
+                // --- AQUÍ ESTÁ EL ARREGLO VISUAL ---
+                
+                // 1. Calculamos el nuevo stock
                 const newStock = parseInt(item["Stock"]) - parseInt(qtyToSell);
+                
+                // 2. Actualizamos la memoria local
                 inventoryList[index]["Stock"] = newStock;
                 
-                // Si el verificador está abierto y es este producto, actualizarlo también
-                const resPrice = document.getElementById('resPrice');
-                if(resPrice && resPrice.innerText.includes(item["Precio"])) {
+                // 3. Actualizamos el INPUT de la tabla específicamente (para verlo al instante)
+                const tableInput = document.getElementById(`edit-stock-${index}`);
+                if(tableInput) {
+                    tableInput.value = newStock;
+                    // Un pequeño efecto visual (flash verde) para indicar cambio
+                    tableInput.style.backgroundColor = "#d4edda";
+                    setTimeout(() => tableInput.style.backgroundColor = "#f8f9fa", 500);
+                }
+
+                // 4. Actualizamos el VERIFICADOR (Tarjeta Negra) si es el producto que estamos viendo
+                const resName = document.getElementById('resName').innerText;
+                // Comparamos nombres para asegurarnos que es el mismo
+                if (resName === item["Nombre Producto"]) {
                     document.getElementById('resStock').innerText = newStock;
                 }
 
-                updateTable(); // Redibujar tabla
+                // 5. Recargamos toda la tabla por si acaso (seguridad)
+                // updateTable(); // Puedes dejar esto comentado si el paso 3 funciona bien, para que sea más fluido.
                 
-                // Cálculo del total
+                // Aviso de éxito
                 const totalVenta = qtyToSell * parseInt(item["Precio"]);
                 
                 Swal.fire({
                     icon: 'success',
                     title: '¡Venta Registrada!',
-                    html: `Se descontaron <b>${qtyToSell}</b> unidades.<br>Total cobrado: <b class="text-success fs-4">$${totalVenta}</b>`
+                    html: `Se descontaron <b>${qtyToSell}</b> unidades.<br>Stock restante: <b>${newStock}</b><br>Total: <b class="text-success fs-4">$${totalVenta}</b>`,
+                    timer: 2000,
+                    showConfirmButton: false
                 });
             })
             .catch(error => {
