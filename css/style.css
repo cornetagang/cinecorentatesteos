@@ -45,64 +45,162 @@ body {
     transform: scale(0.95);
 }
 
-/* --- MODO MÓVIL (DISEÑO COMPACTO Y LIMPIO) --- */
+/* --- ESTILOS EXCLUSIVOS PARA PC (ORDENAR TABLA) --- */
+@media (min-width: 769px) {
+    
+    /* 1. Estructura fija de la tabla */
+    .table {
+        table-layout: fixed;
+        border-collapse: separate; 
+        border-spacing: 0;
+        border: 1px solid #dee2e6;
+        border-radius: 10px;
+        overflow: hidden;
+    }
+
+    /* CELDAS Y CABECERAS */
+    .table th, .table td {
+        border-right: 1px solid #dee2e6;
+        vertical-align: middle !important;
+        padding: 12px 15px;
+    }
+    .table th:last-child, .table td:last-child { border-right: none; }
+
+    /* --- ANCHOS Y ALINEACIONES ESPECÍFICAS --- */
+
+    /* # Checkbox */
+    .table th:nth-child(1), .table td:nth-child(1) { 
+        width: 5%; 
+        text-align: center; 
+    }
+
+    /* Producto */
+    .table th:nth-child(2), .table td:nth-child(2) { 
+        width: 35%; 
+    }
+
+    /* PRECIO (Alineado a la Izquierda) */
+    .table th:nth-child(3), .table td:nth-child(3) { 
+        width: 20%; 
+    }
+    .table td:nth-child(3) input {
+        text-align: left !important; 
+        padding-left: 10px;
+    }
+
+    /* STOCK (Centrado FORZADO) */
+    .table th:nth-child(4), .table td:nth-child(4) { 
+        width: 15%; 
+        text-align: center; 
+    }
+    /* Aquí está el truco para centrar la caja: */
+    .table td:nth-child(4) input {
+        text-align: center !important; /* Centra el número dentro de la caja */
+        margin: 0 auto !important;     /* Centra la caja dentro de la columna */
+        display: block !important;     /* Asegura que respete los márgenes */
+    }
+
+    /* Acción */
+    .table th:nth-child(5), .table td:nth-child(5) { 
+        width: 25%; 
+        text-align: center; 
+    }
+    
+    /* Centrar los botones de acción */
+    .table td:nth-child(5) .d-flex {
+        justify-content: center !important;
+    }
+
+    /* 2. Estilos visuales generales */
+    .input-group-text {
+        background-color: #e9ecef;
+        border: 1px solid #ced4da;
+        font-weight: bold;
+    }
+    .table input.form-control {
+        background-color: #fff;
+        border: 1px solid #ced4da;
+        box-shadow: inset 0 1px 2px rgba(0,0,0,0.075);
+        font-weight: bold; 
+    }
+
+    .table thead th {
+        background-color: #f8f9fa;
+        color: #495057;
+        text-transform: uppercase;
+        font-size: 0.85rem;
+        letter-spacing: 0.5px;
+        border-bottom: 2px solid #dee2e6;
+        text-align: center; 
+    }
+    /* Títulos a la izquierda solo para Producto y Precio */
+    .table thead th:nth-child(2),
+    .table thead th:nth-child(3) { text-align: left; padding-left: 15px; }
+}
+
+/* --- MODO MÓVIL (ARREGLADO: PRECIO IZQ, STOCK LLENO) --- */
 @media (max-width: 768px) {
     
-    /* 1. Ocultar encabezados de la tabla */
+    /* 1. Resetear tabla */
     .table thead { display: none; } 
     
-    /* 2. Contenedor de la Tarjeta */
     .table tr {
         display: block;
         background: white;
-        border-radius: 12px; /* Bordes redondeados suaves */
+        border-radius: 12px;
         box-shadow: 0 2px 8px rgba(0,0,0,0.08);
         margin-bottom: 15px;
         overflow: hidden;
         border: 1px solid #f0f0f0;
+        position: relative; /* Necesario para el checkbox absoluto */
     }
     
     .table td {
         display: block;
         width: 100%;
         border: none;
-        padding: 10px 15px;
+        padding: 5px 15px; /* Reduje padding vertical para que sea más compacto */
     }
 
-    /* 3. CABECERA: NOMBRE DEL PRODUCTO */
+    /* 2. CHECKBOX (Flotante izquierda) */
+    .table td:first-child {
+        position: absolute;
+        left: 10px;
+        top: 15px;
+        width: auto;
+        padding: 0;
+        z-index: 10;
+    }
+
+    /* 3. CABECERA (Producto) */
     .table td[data-label="Producto"] {
-        background-color: #fff;
-        padding-bottom: 5px;
+        padding: 15px 15px 5px 50px; /* 50px izquierda para no tapar checkbox */
         border-bottom: 1px solid #f8f9fa;
     }
-    .table td[data-label="Producto"]::before { display: none; } /* Ocultar etiqueta */
+    .table td[data-label="Producto"]::before { display: none; }
     
-    /* Texto del nombre más grande */
     .table td[data-label="Producto"] {
         font-size: 1.1rem;
         font-weight: 800;
         color: #333;
     }
-    /* Código pequeño debajo del nombre */
     .table td[data-label="Producto"] div {
         font-size: 0.85rem;
         color: #999;
         font-family: monospace;
-        margin-top: 2px;
     }
 
-    /* 4. EL CAMBIO CLAVE: PRECIO Y STOCK LADO A LADO (50% c/u) */
+    /* 4. PRECIO Y STOCK (La corrección clave) */
     .table td[data-label="Precio"], 
     .table td[data-label="Stock"] {
-        display: inline-block; /* Para que se pongan al lado */
+        display: inline-block;
         width: 50%;
-        float: left; /* Forzar alineación izquierda */
+        float: left;
         box-sizing: border-box;
-        padding: 10px 15px;
-        margin: 0;
+        padding: 10px 15px 15px 15px;
     }
 
-    /* Etiquetas (PRECIO / STOCK) pequeñas arriba */
+    /* Etiquetas (PRECIO / STOCK) */
     .table td[data-label="Precio"]::before,
     .table td[data-label="Stock"]::before {
         content: attr(data-label);
@@ -112,40 +210,47 @@ body {
         color: #adb5bd;
         margin-bottom: 4px;
         text-transform: uppercase;
-        letter-spacing: 0.5px;
     }
 
-    /* Estilo Input Invisible (Parece texto pero es editable) */
-    .table td input {
-        background-color: #f8f9fa !important; /* Fondo gris muy claro */
+    /* --- ARREGLO DEL PRECIO --- */
+    /* Forzar que el input del precio se pegue a la izquierda junto al $ */
+    .table td[data-label="Precio"] input {
+        text-align: left !important; 
+        padding-left: 5px !important;
+        font-weight: bold !important;
+        background-color: #f8f9fa !important;
         border: 1px solid transparent !important;
         border-radius: 6px !important;
-        font-weight: 600 !important;
-        color: #2c3e50 !important;
-        padding: 5px !important;
-        height: auto !important;
         font-size: 1rem !important;
     }
-    .table td input:focus {
-        background-color: #fff !important;
-        border: 1px solid #b2bec3 !important;
-        box-shadow: none !important;
-    }
-
-    /* Ajuste para el signo $ del precio */
+    /* Quitar borde al signo $ */
     .input-group-text {
         background: transparent;
         border: none;
-        color: #2c3e50;
-        font-weight: bold;
         padding-right: 2px;
+        font-weight: bold;
+        color: #333;
     }
 
-    /* 5. PIE DE TARJETA: BOTONES */
+    /* --- ARREGLO DEL STOCK --- */
+    /* Forzar que el stock ocupe todo el ancho de su columna (50%) y se centre */
+    .table td[data-label="Stock"] input {
+        width: 100% !important;      /* Ignora el width: 80px del JS */
+        margin: 0 !important;        /* Ignora el margin-left: auto del JS */
+        text-align: center !important;
+        font-weight: bold !important;
+        background-color: #f8f9fa !important;
+        border: 1px solid transparent !important;
+        border-radius: 6px !important;
+        padding: 6px !important;     /* Un poco más de aire */
+        font-size: 1rem !important;
+    }
+
+    /* 5. BOTONES (Abajo) */
     .table td:last-child {
-        clear: both; /* Limpiar los floats de arriba */
+        clear: both;
         width: 100%;
-        background-color: #fafafa; /* Fondo diferente para acciones */
+        background-color: #fafafa;
         border-top: 1px solid #eee;
         padding: 10px 15px;
         display: flex;
@@ -154,13 +259,42 @@ body {
     }
     .table td:last-child::before { display: none; }
 
-    /* Botones estirados y fáciles de tocar */
     .table td:last-child .btn {
         flex: 1;
         border-radius: 8px;
-        padding: 8px 0;
     }
     
-    /* Ajustes tipográficos generales */
     #scannerInput { font-size: 1.3rem !important; }
+}
+
+/* --- ESTILO PRECIO INTEGRADO ($ DENTRO) --- */
+.currency-symbol {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%); /* Centrado vertical perfecto */
+    color: #6c757d; /* Gris suave */
+    font-weight: bold;
+    font-size: 1.1rem;
+    pointer-events: none; /* Para que el click pase a través del signo */
+    z-index: 10;
+}
+
+.currency-input {
+    padding-left: 28px !important; /* Espacio para que el número no tape el $ */
+    font-weight: 600;
+    color: #2c3e50;
+}
+
+/* Un toque extra para que los inputs se vean más limpios en el formulario */
+#productForm .form-control {
+    border-radius: 8px;
+    border: 1px solid #ced4da;
+    padding-top: 10px;
+    padding-bottom: 10px;
+}
+
+#productForm .form-control:focus {
+    border-color: #4f46e5; /* Azul moderno al escribir */
+    box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
 }
