@@ -9,40 +9,172 @@ document.addEventListener('DOMContentLoaded', () => {
     loadFromCloud();
 
     const scannerInput = document.getElementById('scannerInput');
-    
-    // Lógica del escáner (espera a que termine de escribir)
     let timeout = null;
     scannerInput.addEventListener('input', function() {
         clearTimeout(timeout);
         timeout = setTimeout(() => {
             const codigoBuscado = this.value.trim();
-            if(codigoBuscado.length > 0) {
-                searchAndDisplay(codigoBuscado);
-            }
+            if(codigoBuscado.length > 0) searchAndDisplay(codigoBuscado);
         }, 200); 
     });
-
-    // --- 🛑 AQUÍ ESTABA EL CÓDIGO MOLESTO, YA LO QUITÉ ---
 
     document.getElementById('btnScanCamera').addEventListener('click', toggleCamera);
     setupFormListeners();
 });
 
-// --- NUEVA FUNCIÓN: CALCULAR DÍGITO VERIFICADOR EAN13 ---
+// --- FUNCIÓN SELECCIONAR TODO ---
+window.selectAllRows = function() {
+    const checkboxes = document.querySelectorAll('.row-checkbox');
+    // Si hay alguno desmarcado, los marcamos todos. Si están todos marcados, los desmarcamos.
+    const allChecked = Array.from(checkboxes).every(cb => cb.checked);
+    checkboxes.forEach(cb => cb.checked = !allChecked);
+};
+
+// --- FUNCIÓN IMPRIMIR SELECCIONADOS (LA MILLONARIA) ---
+window.printSelectedLabels = function() {
+    const checkboxes = document.querySelectorAll('.row-checkbox:checked');
+    
+    if (checkboxes.length === 0) {
+        Swal.fire('Nada seleccionado', 'Marca al menos un producto para imprimir', 'warning');
+        return;
+    }
+
+    const printWindow = window.open('', '', 'width=800,height=600');
+    
+    let htmlContent = `
+        <html><head><title>Imprimir Lote</title>
+        <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            /* Grid para las etiquetas: 2 por fila en papel carta */
+            .labels-grid { 
+                display: grid; 
+                grid-template-columns: 1fr 1fr; 
+                gap: 20px; 
+            }
+            .label-container { 
+                border: 1px dashed #ccc; 
+                padding: 10px; 
+                text-align: center; 
+                page-break-inside: avoid; /* Evita que se corten al imprimir */
+                height: 220px;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: center;
+            }
+            .product-name { font-size: 20px; font-weight: bold; margin-bottom: 5px; text-transform: lowercase; line-height: 1.1; max-height: 50px; overflow: hidden;}
+            .product-info { font-size: 16px; font-weight: bold; margin-bottom: 5px; }
+            svg { max-width: 95%; height: 80px; }
+        </style>
+        </head><body>
+        <div class="labels-grid">`;
+
+    // Generar el HTML para cada etiqueta seleccionada
+    const itemsToPrint = []; // Guardamos datos para generar barcode después
+    
+    checkboxes.forEach((cb, index) => {
+        const realIndex = cb.getAttribute('data-index');
+        const item = inventoryList[realIndex];
+        const unitsText = item["Unidades"] ? `(${item["Unidades"]} unid.)` : "";
+        
+        htmlContent += `
+            <div class="label-container">
+                <div class="product-name">${item["Nombre Producto"]}</div>
+                <div class="product-info">${item["Descripción"]} ${unitsText}</div>
+                <svg id="barcode_${index}"></svg>
+            </div>`;
+            
+        itemsToPrint.push({
+            id: `barcode_${index}`,
+            code: item["Código Escaneable"],
+            type: item["Tipo Código"] || "EAN13"
+        });
+    });
+
+    htmlContent += `</div>
+        <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"><\/script>
+        <script>
+            window.onload = function() {
+                const items = ${JSON.stringify(itemsToPrint)};
+                items.forEach(item => {
+                    try {
+                        JsBarcode("#" + item.id, item.code, {
+                            format: item.type, width: 2, height: 60, displayValue: true, fontSize: 16, fontOptions: "bold", margin: 0
+                        });
+                    } catch(e) { console.error(e); }
+                });
+                setTimeout(() => { window.print(); window.close(); }, 1000);
+            }
+        <\/script>
+        </body></html>`;
+
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+};
+
+// --- ACTUALIZAR TABLA (AHORA CON CHECKBOXES) ---
+function updateTable() {
+    const tbody = document.getElementById('inventoryTableBody');
+    const emptyState = document.getElementById('emptyState');
+    tbody.innerHTML = "";
+    
+    if (inventoryList.length > 0) {
+        if(emptyState) emptyState.style.display = 'none';
+        
+        [...inventoryList].reverse().forEach((item, index) => {
+            const realIndex = inventoryList.length - 1 - index;
+            
+            const row = `
+                <tr>
+                    <td class="align-middle text-center" style="width: 40px;">
+                        <input type="checkbox" class="form-check-input row-checkbox fs-4" data-index="${realIndex}">
+                    </td>
+
+                    <td data-label="Producto" class="fw-bold text-start">
+                        ${item["Nombre Producto"]}
+                        <div class="small text-muted fw-normal">${item["Código Escaneable"]}</div>
+                    </td>
+                    
+                    <td data-label="Precio">
+                        <div class="input-group input-group-sm">
+                            <span class="input-group-text border-0 bg-transparent">$</span>
+                            <input type="number" class="form-control fw-bold border-0 bg-light text-end" id="edit-price-${realIndex}" value="${item["Precio"]}">
+                        </div>
+                    </td>
+                    
+                    <td data-label="Stock">
+                        <input type="number" class="form-control form-control-sm text-center fw-bold border-0 bg-light" id="edit-stock-${realIndex}" value="${item["Stock"]}" style="width: 80px; margin-left:auto;">
+                    </td>
+                    
+                    <td data-label="Acciones">
+                        <div class="d-flex gap-2 justify-content-end w-100">
+                            <button class="btn btn-sm btn-info text-white" onclick="viewBarcode(${realIndex})"><i class="fa-solid fa-eye"></i></button>
+                            <button class="btn btn-sm btn-primary" onclick="updateItemInCloud(${realIndex})"><i class="fa-solid fa-floppy-disk"></i></button>
+                            <button class="btn btn-sm btn-outline-danger" onclick="deleteItemInCloud(${realIndex})"><i class="fa-solid fa-trash"></i></button>
+                        </div>
+                    </td>
+                </tr>
+            `;
+            tbody.innerHTML += row;
+        });
+    } else {
+        if(emptyState) emptyState.style.display = 'block';
+    }
+}
+
+// --- EL RESTO DEL CÓDIGO (NO CAMBIA MUCHO) ---
 function calculateEAN13Checksum(code) {
     if (code.length !== 12) return "";
     let sum = 0;
     for (let i = 0; i < 12; i++) {
         let digit = parseInt(code[i]);
-        if (i % 2 === 0) sum += digit * 1;
-        else sum += digit * 3;
+        if (i % 2 === 0) sum += digit * 1; else sum += digit * 3;
     }
     let remainder = sum % 10;
     let checkDigit = (10 - remainder) % 10;
     return code + checkDigit;
 }
 
-// --- GENERADOR ---
 function generateRandomCode() {
     const type = document.getElementById('codeType').value;
     let code = "";
@@ -56,16 +188,9 @@ function generateRandomCode() {
     renderBarcode(code);
 }
 
-// --- EL RESTO DEL CÓDIGO ---
 function renderBarcode(value) {
     if(!value) return;
-    try { 
-        JsBarcode("#barcode", value, { 
-            format: document.getElementById('codeType').value, 
-            lineColor: "#000", width: 2, height: 40, displayValue: true, fontSize: 14, margin: 5,
-            flat: true 
-        }); 
-    } catch (e) {}
+    try { JsBarcode("#barcode", value, { format: document.getElementById('codeType').value, lineColor: "#000", width: 2, height: 40, displayValue: true, fontSize: 14, margin: 5, flat: true }); } catch (e) {}
 }
 
 function searchAndDisplay(code) {
@@ -92,7 +217,6 @@ function searchAndDisplay(code) {
         resultBox.style.display = 'block';
         playSound('error');
     }
-    // Limpiar input después de un momento
     setTimeout(() => { document.getElementById('scannerInput').value = ''; }, 3000);
 }
 
@@ -109,13 +233,8 @@ function loadFromCloud() {
         inventoryList = [];
         data.forEach(item => {
             inventoryList.push({
-                "Código Escaneable": String(item.code), 
-                "Nombre Producto": item.name, 
-                "Precio": item.price,
-                "Stock": item.stock, 
-                "Descripción": item.desc, 
-                "Unidades": item.units, 
-                "Tipo Código": item.type
+                "Código Escaneable": String(item.code), "Nombre Producto": item.name, "Precio": item.price,
+                "Stock": item.stock, "Descripción": item.desc, "Unidades": item.units, "Tipo Código": item.type
             });
         });
         updateTable();
@@ -158,54 +277,8 @@ function handleFormSubmit(e) {
         updateTable();
         Swal.fire({ icon: 'success', title: 'Guardado', timer: 1000, showConfirmButton: false });
         e.target.reset(); generateRandomCode();
-        document.getElementById('preview-name').innerText = "Nombre";
-        document.getElementById('preview-desc').innerText = "Medidas";
-        document.getElementById('preview-units').innerText = "";
+        document.getElementById('preview-name').innerText = "Nombre"; document.getElementById('preview-desc').innerText = "Medidas"; document.getElementById('preview-units').innerText = "";
     });
-}
-
-function updateTable() {
-    const tbody = document.getElementById('inventoryTableBody');
-    const emptyState = document.getElementById('emptyState');
-    tbody.innerHTML = "";
-    
-    if (inventoryList.length > 0) {
-        if(emptyState) emptyState.style.display = 'none';
-        
-        [...inventoryList].reverse().forEach((item, index) => {
-            const realIndex = inventoryList.length - 1 - index;
-            
-            const row = `
-                <tr>
-                    <td data-label="Producto">
-                        ${item["Nombre Producto"]}
-                        <div>${item["Código Escaneable"]}</div>
-                    </td>
-                    
-                    <td data-label="Precio">
-                        <div class="input-group input-group-sm">
-                            <span class="input-group-text">$</span>
-                            <input type="number" class="form-control" id="edit-price-${realIndex}" value="${item["Precio"]}">
-                        </div>
-                    </td>
-                    
-                    <td data-label="Stock">
-                        <input type="number" class="form-control form-control-sm text-center" id="edit-stock-${realIndex}" value="${item["Stock"]}">
-                    </td>
-                    
-                    <td data-label="Acciones">
-                        <button class="btn btn-sm btn-info text-white" onclick="viewBarcode(${realIndex})"><i class="fa-solid fa-eye"></i></button>
-                        <button class="btn btn-sm btn-primary" onclick="updateItemInCloud(${realIndex})"><i class="fa-solid fa-floppy-disk"></i></button>
-                        <button class="btn btn-sm btn-outline-danger" onclick="deleteItemInCloud(${realIndex})"><i class="fa-solid fa-trash"></i></button>
-                        <button class="btn btn-sm btn-outline-dark" onclick="printSingleLabel('${item["Código Escaneable"]}', '${item["Nombre Producto"]}', '${item["Descripción"]}', '${item["Unidades"]}', '${item["Tipo Código"]}')"><i class="fa-solid fa-print"></i></button>
-                    </td>
-                </tr>
-            `;
-            tbody.innerHTML += row;
-        });
-    } else {
-        if(emptyState) emptyState.style.display = 'block';
-    }
 }
 
 function toggleCamera() {
@@ -265,13 +338,6 @@ window.viewBarcode = function(index) {
     document.getElementById('modalProdPrice').innerText = "$" + item["Precio"];
     try { JsBarcode("#modalBarcodeSvg", item["Código Escaneable"], { format: item["Tipo Código"], lineColor: "#000", width: 3, height: 80, displayValue: true, fontSize: 18 }); } catch (e) {}
     new bootstrap.Modal(document.getElementById('viewBarcodeModal')).show();
-};
-
-window.printSingleLabel = function(code, name, desc, units, type) {
-    const unitsText = units ? `(${units} unid.)` : ""; 
-    const w = window.open('', '', 'width=500,height=400');
-    w.document.write(`<html><head><style>body{font-family:Arial;display:flex;justify-content:center;padding-top:20px}.c{width:300px;text-align:center}.n{font-size:24px;font-weight:bold;margin-bottom:5px;text-transform:lowercase}.i{font-size:18px;font-weight:bold;margin-bottom:10px}svg{width:100%}</style></head><body><div class="c"><div class="n">${name}</div><div class="i">${desc} ${unitsText}</div><svg id="b"></svg></div><script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"><\/script><script>JsBarcode("#b","${code}",{format:"${type||"EAN13"}",width:2.5,height:70,displayValue:true,fontSize:18,fontOptions:"bold",margin:0});window.onload=function(){setTimeout(function(){window.print();window.close()},500)}<\/script></body></html>`);
-    w.document.close();
 };
 
 function downloadExcel() {
