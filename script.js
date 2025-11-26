@@ -185,21 +185,50 @@ function handleFormSubmit(e) {
 
 function updateTable() {
     const tbody = document.getElementById('inventoryTableBody');
+    const emptyState = document.getElementById('emptyState');
     tbody.innerHTML = "";
-    inventoryList.forEach((item, index) => {
-        const row = `<tr>
-            <td class="fw-bold text-start ps-3">${item["Nombre Producto"]}</td>
-            <td><div class="input-group input-group-sm"><span class="input-group-text">$</span><input type="number" class="form-control fw-bold" id="edit-price-${index}" value="${item["Precio"]}"></div></td>
-            <td><input type="number" class="form-control form-control-sm text-center fw-bold" id="edit-stock-${index}" value="${item["Stock"]}" style="width: 70px; margin:auto;"></td>
-            <td class="text-nowrap">
-                <button class="btn btn-sm btn-info text-white" onclick="viewBarcode(${index})"><i class="fa-solid fa-eye"></i></button>
-                <button class="btn btn-sm btn-primary" onclick="updateItemInCloud(${index})"><i class="fa-solid fa-floppy-disk"></i></button>
-                <button class="btn btn-sm btn-outline-danger" onclick="deleteItemInCloud(${index})"><i class="fa-solid fa-trash"></i></button>
-                <button class="btn btn-sm btn-outline-dark" onclick="printSingleLabel('${item["Código Escaneable"]}', '${item["Nombre Producto"]}', '${item["Descripción"]}', '${item["Unidades"]}', '${item["Tipo Código"]}')"><i class="fa-solid fa-print"></i></button>
-            </td>
-        </tr>`;
-        tbody.innerHTML += row;
-    });
+    
+    if (inventoryList.length > 0) {
+        if(emptyState) emptyState.style.display = 'none';
+        
+        // Mostramos los últimos agregados primero
+        [...inventoryList].reverse().forEach((item, index) => {
+            // El índice real en el array original (porque invertimos visualmente)
+            const realIndex = inventoryList.length - 1 - index;
+            
+            const row = `
+                <tr>
+                    <td data-label="Producto" class="fw-bold text-start">
+                        ${item["Nombre Producto"]}
+                        <div class="small text-muted fw-normal">${item["Código Escaneable"]}</div>
+                    </td>
+                    
+                    <td data-label="Precio">
+                        <div class="input-group input-group-sm">
+                            <span class="input-group-text border-0 bg-transparent">$</span>
+                            <input type="number" class="form-control fw-bold border-0 bg-light text-end" id="edit-price-${realIndex}" value="${item["Precio"]}">
+                        </div>
+                    </td>
+                    
+                    <td data-label="Stock">
+                        <input type="number" class="form-control form-control-sm text-center fw-bold border-0 bg-light" id="edit-stock-${realIndex}" value="${item["Stock"]}" style="width: 80px; margin-left:auto;">
+                    </td>
+                    
+                    <td data-label="Acciones">
+                        <div class="d-flex gap-2 justify-content-end w-100">
+                            <button class="btn btn-sm btn-info text-white" onclick="viewBarcode(${realIndex})"><i class="fa-solid fa-eye"></i></button>
+                            <button class="btn btn-sm btn-primary" onclick="updateItemInCloud(${realIndex})"><i class="fa-solid fa-floppy-disk"></i></button>
+                            <button class="btn btn-sm btn-outline-danger" onclick="deleteItemInCloud(${realIndex})"><i class="fa-solid fa-trash"></i></button>
+                            <button class="btn btn-sm btn-outline-dark" onclick="printSingleLabel('${item["Código Escaneable"]}', '${item["Nombre Producto"]}', '${item["Descripción"]}', '${item["Unidades"]}', '${item["Tipo Código"]}')"><i class="fa-solid fa-print"></i></button>
+                        </div>
+                    </td>
+                </tr>
+            `;
+            tbody.innerHTML += row;
+        });
+    } else {
+        if(emptyState) emptyState.style.display = 'block';
+    }
 }
 
 function toggleCamera() {
