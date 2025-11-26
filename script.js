@@ -426,3 +426,66 @@ function downloadExcel() {
     XLSX.utils.book_append_sheet(wb, ws, "Inventario");
     XLSX.writeFile(wb, "Base_Datos_Tienda.xlsx");
 }
+
+// --- SINCRONIZACIÓN AUTOMÁTICA (TIMEPO REAL) ---
+
+// Iniciamos el "latido" del sistema: Preguntar cada 5 segundos
+setInterval(syncDataBackground, 5000);
+
+function syncDataBackground() {
+    // Solo sincronizamos si NO estamos escribiendo en el buscador o editando un campo
+    // para evitar que se te borre lo que escribes.
+    if (document.activeElement.tagName === "INPUT") return;
+
+    fetch(GOOGLE_SCRIPT_URL)
+    .then(r => r.json())
+    .then(newData => {
+        // Recorremos los datos nuevos que vienen de la nube
+        newData.forEach(cloudItem => {
+            // Buscamos este producto en nuestra lista local
+            const localItemIndex = inventoryList.findIndex(i => String(i["Código Escaneable"]) === String(cloudItem.code));
+            
+            if (localItemIndex !== -1) {
+                const localItem = inventoryList[localItemIndex];
+                
+                // Verificamos si el STOCK cambió en la nube
+                if (String(localItem["Stock"]) !== String(cloudItem.stock)) {
+                    console.log(`Cambio detectado en ${localItem["Nombre Producto"]}: ${localItem["Stock"]} -> ${cloudItem.stock}`);
+                    
+                    // 1. Actualizar Memoria
+                    localItem["Stock"] = cloudItem.stock;
+                    
+                    // 2. Actualizar la Cajita de la Tabla (Sin recargar toda la página)
+                    // Nota: Usamos el índice visual invertido
+                    const visualIndex = inventoryList.length - 1 - localItemIndex;
+                    const inputStock = document.getElementById(`edit-stock-${visualIndex}`);
+                    if (inputStock) {
+                        inputStock.value = cloudItem.stock;
+                        // Efecto visual suave (Flash amarillo)
+                        inputStock.style.backgroundColor = "#fff3cd";
+                        setTimeout(() => inputStock.style.backgroundColor = "#f8f9fa", 1000);
+                    }
+
+                    // 3. Actualizar el Verificador (Tarjeta Negra) si está mostrando este producto
+                    const resName = document.getElementById('resName');
+                    if (resName && resName.innerText === localItem["Nombre Producto"]) {
+                        document.getElementById('resStock').innerText = cloudItem.stock;
+                    }
+                }
+
+                // Verificamos si el PRECIO cambió
+                if (String(localItem["Precio"]) !== String(cloudItem.price)) {
+                    localItem["Precio"] = cloudItem.price;
+                    const visualIndex = inventoryList.length - 1 - localItemIndex;
+                    const inputPrice = document.getElementById(`edit-price-${visualIndex}`);
+                    if (inputPrice) inputPrice.value = cloudItem.price;
+                }
+            }
+        });
+        // Opcional: Si hay productos nuevos (el largo de la lista cambió), recargamos todo
+        if (newData.length !== inventoryList.length) {
+            loadFromCloud(); // Recarga completa segura
+        }
+    })
+    .catch(e => console.error("Sincronización silenciosa falló (es normal si hay mala red)", e));
+}
