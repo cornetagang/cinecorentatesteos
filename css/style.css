@@ -1,0 +1,37 @@
+body { 
+    background-color: #f0f2f5; 
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+}
+
+.card { 
+    border: none; 
+    border-radius: 15px; 
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1); 
+}
+
+/* Estilo para el contenedor de la vista previa de la etiqueta */
+.barcode-preview { 
+    background: white; 
+    border: 1px solid #e0e0e0; /* Borde sólido sutil */
+    border-radius: 8px; 
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    min-height: 150px; /* Altura mínima para que se vea bien */
+    box-shadow: inset 0 0 10px rgba(0,0,0,0.02); /* Sombra interna muy sutil */
+}
+
+/* El contenedor interno que simula la etiqueta */
+#label-preview-container {
+    width: 100%;
+    max-width: 280px; /* Ancho máximo similar a una etiqueta real */
+    padding: 5px;
+}
+
+.table-container { 
+    background: white; 
+    border-radius: 15px; 
+    padding: 20px; 
+    box-shadow: 0 4px 6px rgba(0,0,0,0.05); 
+}
