@@ -91,42 +91,30 @@ function updateTable() {
     }
 }
 
-// --- FUNCIÓN REGISTRAR VENTA (CORREGIDA PARA ACTUALIZAR VISUALMENTE) ---
+// --- FUNCIÓN REGISTRAR VENTA (EDICIÓN QUIRÚRGICA) ---
 window.sellItemInCloud = function(index) {
     const item = inventoryList[index];
     
-    // Configuración del Pop-up
     Swal.fire({
         title: `Vender: ${item["Nombre Producto"]}`,
         text: `Stock actual: ${item["Stock"]}`,
         input: 'number',
         inputLabel: 'Cantidad a vender',
-        inputAttributes: {
-            min: 1,
-            max: item["Stock"], 
-            step: 1
-        },
+        inputAttributes: { min: 1, max: item["Stock"], step: 1 },
         inputValue: 1,
         showCancelButton: true,
         confirmButtonText: 'Confirmar Venta',
         confirmButtonColor: '#198754',
         showLoaderOnConfirm: true,
         preConfirm: (qty) => {
-            if (!qty || qty < 1) {
-                Swal.showValidationMessage('Ingresa una cantidad válida');
-                return false;
-            }
-            // Validación opcional: impedir vender más de lo que hay
-            if (parseInt(qty) > parseInt(item["Stock"])) {
-                Swal.showValidationMessage(`¡Solo tienes ${item["Stock"]} en stock!`);
-                return false;
-            }
+            if (!qty || qty < 1) { Swal.showValidationMessage('Cantidad inválida'); return false; }
+            // Validación opcional: Quitar si quieres permitir stock negativo
+            if (parseInt(qty) > parseInt(item["Stock"])) { Swal.showValidationMessage(`Stock insuficiente (${item["Stock"]})`); return false; }
             return qty;
         }
     }).then((result) => {
         if (result.isConfirmed) {
             const qtyToSell = result.value;
-            
             const dataToSend = {
                 action: "sell",
                 code: item["Código Escaneable"],
@@ -135,54 +123,49 @@ window.sellItemInCloud = function(index) {
                 price: item["Precio"]
             };
 
-            // Enviamos a Google
             fetch(GOOGLE_SCRIPT_URL, {
-                method: "POST",
-                mode: "no-cors",
+                method: "POST", mode: "no-cors",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(dataToSend)
             })
             .then(() => {
-                // --- AQUÍ ESTÁ EL ARREGLO VISUAL ---
+                // 1. CÁLCULO MATEMÁTICO
+                const oldStock = parseInt(item["Stock"]);
+                const newStock = oldStock - parseInt(qtyToSell);
                 
-                // 1. Calculamos el nuevo stock
-                const newStock = parseInt(item["Stock"]) - parseInt(qtyToSell);
-                
-                // 2. Actualizamos la memoria local
+                // 2. ACTUALIZAR MEMORIA (Para que no se pierda si filtras después)
                 inventoryList[index]["Stock"] = newStock;
-                
-                // 3. Actualizamos el INPUT de la tabla específicamente (para verlo al instante)
-                const tableInput = document.getElementById(`edit-stock-${index}`);
-                if(tableInput) {
-                    tableInput.value = newStock;
-                    // Un pequeño efecto visual (flash verde) para indicar cambio
-                    tableInput.style.backgroundColor = "#d4edda";
-                    setTimeout(() => tableInput.style.backgroundColor = "#f8f9fa", 500);
+
+                // 3. --- CIRUGÍA DIRECTA AL DOM (AQUÍ ESTÁ EL ARREGLO) ---
+                // Buscamos la cajita específica en la pantalla y le cambiamos el valor
+                const inputStockVisual = document.getElementById(`edit-stock-${index}`);
+                if (inputStockVisual) {
+                    inputStockVisual.value = newStock;
+                    // Efecto visual (flash verde) para confirmar
+                    inputStockVisual.style.transition = "background-color 0.5s";
+                    inputStockVisual.style.backgroundColor = "#d1e7dd"; 
+                    setTimeout(() => inputStockVisual.style.backgroundColor = "#f8f9fa", 500);
                 }
 
-                // 4. Actualizamos el VERIFICADOR (Tarjeta Negra) si es el producto que estamos viendo
-                const resName = document.getElementById('resName').innerText;
-                // Comparamos nombres para asegurarnos que es el mismo
-                if (resName === item["Nombre Producto"]) {
+                // 4. ACTUALIZAR VERIFICADOR (Tarjeta Negra)
+                // Si justo estabas viendo ese producto arriba, lo actualizamos también
+                const resName = document.getElementById('resName');
+                if (resName && resName.innerText.trim() === item["Nombre Producto"].trim()) {
                     document.getElementById('resStock').innerText = newStock;
                 }
 
-                // 5. Recargamos toda la tabla por si acaso (seguridad)
-                // updateTable(); // Puedes dejar esto comentado si el paso 3 funciona bien, para que sea más fluido.
-                
-                // Aviso de éxito
-                const totalVenta = qtyToSell * parseInt(item["Precio"]);
-                
+                // 5. Mensaje de Éxito
+                const total = qtyToSell * parseInt(item["Precio"]);
                 Swal.fire({
                     icon: 'success',
-                    title: '¡Venta Registrada!',
-                    html: `Se descontaron <b>${qtyToSell}</b> unidades.<br>Stock restante: <b>${newStock}</b><br>Total: <b class="text-success fs-4">$${totalVenta}</b>`,
+                    title: 'Venta OK',
+                    html: `Vendidos: <b>${qtyToSell}</b><br>Nuevo Stock: <b>${newStock}</b><br>Total: <b class="text-success fs-4">$${total}</b>`,
                     timer: 2000,
                     showConfirmButton: false
                 });
             })
             .catch(error => {
-                Swal.fire('Error', 'No se pudo conectar con el servidor', 'error');
+                Swal.fire('Error', 'No se pudo conectar', 'error');
             });
         }
     });
