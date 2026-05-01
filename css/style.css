@@ -9877,6 +9877,7 @@ button.modal-review-count:hover {
         overflow-y: auto !important;
         overflow-x: hidden !important;
         padding: 0 !important;
+        padding-bottom: env(safe-area-inset-bottom, 0px) !important;
     }
 
     #series-player-modal.player-layout-view .player-layout-container {
@@ -9885,7 +9886,7 @@ button.modal-review-count:hover {
         max-width: 100% !important;
         height: auto !important;
         min-height: 100svh;
-        padding: 10px 12px 12px 12px !important;
+        padding: 10px 12px 4px 12px !important;
         gap: 12px !important;
         border-radius: 0 !important;
         margin-top: 0 !important;
@@ -9922,7 +9923,8 @@ button.modal-review-count:hover {
         background: #000 !important;
     }
 
-    /* iframe expandido al 250% + escalado a 0.4 */
+    /* Negative Scale Hack con zoom (preserva hitboxes de clic)
+       zoom: 0.4 hace que Drive vea 250% pero los botones responden bien */
     #series-player-modal .player-container .screen iframe,
     .player-container .screen iframe,
     .movie-player-container .screen iframe,
@@ -9930,11 +9932,11 @@ button.modal-review-count:hover {
         position: absolute !important;
         top: 0 !important;
         left: 0 !important;
-        width: 250% !important;        /* Drive ve 250% → activa UI desktop */
-        height: 250% !important;       /* Alto proporcional */
+        width: 250% !important;
+        height: 250% !important;
         border: none !important;
-        transform: scale(0.4) !important;    /* 1 / 2.5 = 0.4 */
-        transform-origin: top left !important;
+        zoom: 0.4;                           /* reescala visual + hitboxes */
+        transform: none !important;          /* zoom reemplaza transform */
     }
 
     /* Título de la serie: compacto */
@@ -10070,7 +10072,7 @@ button.modal-review-count:hover {
         margin-bottom: 2px;
     }
 
-    /* Landscape: Negative Scale Hack también para la UI desktop */
+    /* Landscape: Negative Scale Hack con zoom */
     #series-player-modal .player-container .screen {
         position: relative !important;
         width: 100% !important;
@@ -10087,8 +10089,8 @@ button.modal-review-count:hover {
         width: 250% !important;
         height: 250% !important;
         border: none !important;
-        transform: scale(0.4) !important;
-        transform-origin: top left !important;
+        zoom: 0.4;
+        transform: none !important;
     }
 
     #series-player-modal .pagination-controls {
