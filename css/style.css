@@ -204,7 +204,84 @@ body.modal-open { overflow: hidden; }
 }
 
 .hero-content { z-index: 2; transition: opacity 0.5s ease-in-out; max-width: 45%; }
-.hero-content h1 { font-family: 'Bebas Neue', sans-serif; font-size: clamp(2.5rem, 4vw, 3.5rem); margin: 0 0 20px 0; text-shadow: 0 4px 10px black; }
+.hero-content h1, .hero-title-text { font-family: 'Bebas Neue', sans-serif; font-size: clamp(2.5rem, 4vw, 3.5rem); margin: 0 0 20px 0; text-shadow: 0 4px 10px black; }
+
+/* Contenedor: placeholder fijo en el layout, NUNCA se mueve */
+.hero-logo-container { height: 90px; display: flex; align-items: flex-end; margin-bottom: 16px; position: relative; overflow: visible; }
+.details-logo-container { height: 70px; display: flex; align-items: flex-end; position: relative; overflow: visible; }
+
+/* El img es quien se transforma — el layout no se toca */
+.hero-logo-img { height: 90px; width: calc(90px * 800 / 310); max-width: 100%; object-fit: contain; filter: drop-shadow(0 3px 12px rgba(0,0,0,1)); }
+.details-logo-img { height: 70px; width: calc(70px * 800 / 310); max-width: 100%; object-fit: contain; filter: drop-shadow(0 2px 8px rgba(0,0,0,1)); }
+
+/* Img en modo edición */
+.details-logo-img.logo-editing { cursor: grab; outline: 1px dashed rgba(229,9,20,0.7); outline-offset: 4px; }
+
+/* Botón lápiz */
+.hero-logo-container,
+.details-logo-container { position: relative; overflow: visible; }
+
+/* En el hero: fluye en la fila de botones */
+.hero-buttons .logo-edit-toggle {
+    position: static;
+    width: 42px; height: 42px; border-radius: 50%;
+    background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.2);
+    color: rgba(255,255,255,0.6); font-size: 14px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.18s; flex-shrink: 0;
+}
+.hero-buttons .logo-edit-toggle:hover,
+.hero-buttons .logo-edit-toggle.lep-active { background: #e50914; color: white; border-color: #e50914; }
+
+/* En el modal: sobre el logo */
+.details-logo-container .logo-edit-toggle {
+    position: absolute; top: 4px; right: 4px;
+    width: 26px; height: 26px; border-radius: 50%;
+    background: rgba(10,10,10,0.82); border: 1px solid rgba(255,255,255,0.18);
+    color: rgba(255,255,255,0.55); font-size: 10px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    z-index: 50; transition: all 0.18s; opacity: 0.4;
+}
+.details-logo-container:hover .logo-edit-toggle { opacity: 0.8; }
+.details-logo-container .logo-edit-toggle:hover,
+.details-logo-container .logo-edit-toggle.lep-active { opacity: 1; background: #e50914; color: white; border-color: #e50914; transform: scale(1.12); }
+
+/* Lápiz editor cuando está en la fila de botones del modal */
+#details-buttons .logo-edit-toggle {
+    position: static;
+    width: 44px; height: 44px; border-radius: 50%;
+    background: rgba(109,109,110,0.7); border: 1px solid rgba(255,255,255,0.2);
+    color: #fff; font-size: 14px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; transition: all 0.2s; opacity: 1;
+}
+#details-buttons .logo-edit-toggle:hover { background: rgba(255,255,255,0.15); }
+#details-buttons .logo-edit-toggle.lep-active { background: #e50914; border-color: #e50914; color: white; }
+
+/* Panel de edición — fijo en esquina inferior derecha, no tapa el logo */
+.logo-editor-panel { position: fixed; bottom: 24px; right: 24px; background: rgba(15,15,15,0.98); border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; padding: 12px; z-index: 9998; display: none; flex-direction: column; gap: 10px; min-width: 200px; box-shadow: 0 10px 40px rgba(0,0,0,0.8); }
+.logo-editor-panel.lep-visible { display: flex; }
+@media (max-width: 768px) { .logo-editor-panel { bottom: 70px; right: 8px; left: 8px; min-width: unset; } }
+
+.lep-header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.08); margin-bottom: 2px; gap: 8px; }
+.lep-slot-label { font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 0.8px; }
+.lep-close-btn { background: rgba(255,255,255,0.08); border: none; color: rgba(255,255,255,0.6); width: 26px; height: 26px; border-radius: 50%; cursor: pointer; font-size: 13px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: all 0.15s; }
+.lep-close-btn:hover { background: rgba(255,255,255,0.2); color: white; }
+.lep-grid { display: grid; grid-template-columns: 42px 28px 48px 28px; gap: 6px; align-items: center; }
+.lep-label { font-size: 10px; color: rgba(255,255,255,0.4); text-transform: uppercase; letter-spacing: 0.5px; }
+.lep-value { font-size: 12px; font-weight: 700; color: white; text-align: center; background: rgba(255,255,255,0.08); border-radius: 4px; padding: 3px 4px; font-variant-numeric: tabular-nums; }
+.lep-btn { width: 28px; height: 28px; border-radius: 6px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.12); color: white; font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.15s; line-height: 1; }
+.lep-btn:hover { background: #e50914; border-color: #e50914; }
+.lep-btn:active { transform: scale(0.88); }
+
+.lep-actions { display: flex; gap: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.08); }
+.lep-reset-btn, .lep-save-btn { flex: 1; padding: 7px 0; border-radius: 7px; border: none; font-size: 12px; font-weight: 700; cursor: pointer; transition: all 0.2s; }
+.lep-reset-btn { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.6); }
+.lep-reset-btn:hover { background: rgba(255,255,255,0.15); color: white; }
+.lep-save-btn { background: #e50914; color: white; }
+.lep-save-btn:hover:not(:disabled) { background: #b0070f; }
+.lep-save-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.lep-save-btn.lep-saved { background: #27ae60; }
 .hero-content p { font-size: 1.1rem; line-height: 1.6; max-width: 600px; text-shadow: 0 2px 5px black; }
 .hero-buttons { display: flex; gap: 15px; margin-top: 20px; }
 .hero-content.hero-fading { opacity: 0; }
@@ -1824,6 +1901,9 @@ body.modal-open { overflow: hidden; }
 .btn-watchlist:hover { background: #fff; color: #000; transform: scale(1.1); }
 .btn-watchlist.in-list { background: var(--primary-red); border-color: var(--secondary-red); color: var(--text-on-accent, white); }
 .hero-buttons .btn-watchlist { position: static; width: 44px; height: 44px; background: rgba(109, 109, 110, 0.7); border: 1px solid rgba(255,255,255,0.2); }
+.hero-buttons .btn-roulette-eye { position: static; width: 44px; height: 44px; border-radius: 50%; background: rgba(109, 109, 110, 0.7); border: 1px solid rgba(255,255,255,0.2); color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px; opacity: 1; transition: all 0.2s ease; }
+.hero-buttons .btn-roulette-eye:hover { background: rgba(255,255,255,0.18); }
+.hero-buttons .btn-roulette-eye.is-watched { background: rgba(255,68,88,0.2); border-color: rgba(255,68,88,0.5); color: #ff4458; }
 #details-buttons .btn-watchlist { position: static; width: 44px; height: 44px; flex-grow: 0; flex-shrink: 0;background: rgba(109, 109, 110, 0.7); border: 1px solid rgba(255,255,255,0.2); }
 
 /* ================================== */
@@ -3136,7 +3216,11 @@ body.modal-open { overflow: hidden; }
     .hero-section { height: 75vh; align-items: flex-end; padding: 0 15px; }
     .hero-section::after { background: linear-gradient(to top, rgba(20,20,20,0.95) 15%, rgba(20,20,20,0.3) 45%, rgba(20,20,20,0) 70%); }
     .hero-content { width: 100%; flex-direction: column; align-items: center; text-align: center; padding-bottom: 3vh; max-width: none; }
-    .hero-content h1 { font-size: clamp(2rem, 10vw, 2.8rem); }
+    .hero-content h1, .hero-title-text { font-size: clamp(2rem, 10vw, 2.8rem); }
+    .hero-logo-container { height: 65px; }
+    .hero-logo-img { height: 65px; width: calc(65px * 800 / 310); }
+    .details-logo-container { height: 55px; }
+    .details-logo-img { height: 55px; width: calc(55px * 800 / 310); }
     
     .hero-content p { display: none; }
     .hero-buttons { justify-content: center; }
