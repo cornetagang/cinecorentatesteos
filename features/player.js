@@ -64,6 +64,22 @@ function getLangTracks(data) {
 }
 
 
+// ===========================================================
+// 🎬 HELPER: CONSTRUIR URL DE EMBED SEGÚN PROVEEDOR
+// Detecta automáticamente Google Drive vs Streamtape por el formato del ID.
+// - Google Drive: empieza con "1" y tiene 25+ caracteres (ej: 1cfLvKRV-hI3LimRY97ptxp3...)
+// - Streamtape:   ID corto alfanumérico (ej: mvYbMvV3bXcb864)
+// ===========================================================
+function getEmbedUrl(videoId) {
+    if (!videoId || !videoId.trim()) return '';
+    const id = videoId.trim();
+    const isGoogleDrive = id.startsWith('1') && id.length >= 25;
+    if (isGoogleDrive) {
+        return `https://drive.google.com/file/d/${id}/preview?rm=minimal`;
+    }
+    return `https://streamtape.com/e/${id}/`;
+}
+
 function buildLangButtonsHTML(tracks, activeLang, cssClass) {
     if (tracks.length <= 1) return '';
     return `<div class="movie-lang-selection">
@@ -757,7 +773,7 @@ function openEpisode(seriesId, season, newEpisodeIndex) {
     else if (lang === 'jp' && (episode.videoId_jp || episode.videoId_alt)) videoId = episode.videoId_jp || episode.videoId_alt;
     else videoId = episode.videoId;
 
-    if (iframe) iframe.src = videoId ? `https://drive.google.com/file/d/${videoId}/preview?rm=minimal` : '';
+    if (iframe) iframe.src = getEmbedUrl(videoId);
     
     const episodeNumber = episode.episodeNumber || newEpisodeIndex + 1;
     const titleEl = shared.DOM.seriesPlayerModal.querySelector(`#cinema-title-${seriesId}`);
@@ -996,7 +1012,7 @@ function loadMovieInPlayer(videoId, movieId, movieData) {
     if (!iframe) return;
 
     // Cargar video (el timer ya fue iniciado desde el botón "Ver ahora" en detalles)
-    iframe.src = `https://drive.google.com/file/d/${videoId}/preview?rm=minimal`;
+    iframe.src = getEmbedUrl(videoId);
 }
 
 // Helper para configurar controles adicionales (Mi Lista + Reseñas)
@@ -1119,13 +1135,7 @@ function playEpisode(seriesId, seasonKey, episodeIndex) {
     // 4. Cargar el iframe del video
     const iframe = document.getElementById('series-iframe');
     if (iframe) {
-        // Usar la URL directa o buscar en servidor si es necesario
-        const rawUrl = episode.videoUrl || episode.url || '';
-        // Si es un link de Google Drive sin el parámetro rm=minimal, añadirlo
-        const fixedUrl = rawUrl.includes('drive.google.com') && !rawUrl.includes('rm=minimal')
-            ? rawUrl + (rawUrl.includes('?') ? '&rm=minimal' : '?rm=minimal')
-            : rawUrl;
-        iframe.src = fixedUrl;
+        iframe.src = getEmbedUrl(rawUrl);
     }
 
     // 5. Marcar visualmente el episodio activo en la lista
