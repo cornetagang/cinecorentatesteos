@@ -2381,7 +2381,7 @@ function setupHero() {
     clearInterval(appState.ui.heroInterval);
     if (!DOM.heroSection) return;
     
-    DOM.heroSection.innerHTML = `<div class="hero-content"><h1 id="hero-title"></h1><p id="hero-synopsis"></p><div class="hero-buttons"></div></div><div class="guirnalda-container"></div>`;
+    DOM.heroSection.innerHTML = `<div class="hero-content"><div id="hero-title-container"></div><p id="hero-synopsis"></p><div class="hero-buttons"></div></div><div class="guirnalda-container"></div>`;
     
     // --- FUNCIÓN DE PUNTAJE (Novedad mata Ranking) ---
     const getHeroScore = (id, item, type) => {
@@ -2450,7 +2450,9 @@ function startHeroInterval() {
     if (!appState.ui.heroItems || appState.ui.heroItems.length === 0) return;
     
     appState.ui.heroInterval = setInterval(() => {
+        if (window._heroEditPaused) return; // Pausado mientras se edita el logo
         currentHeroIndex = (currentHeroIndex + 1) % appState.ui.heroItems.length;
+        appState.ui.currentHeroIndex = currentHeroIndex;
         changeHeroMovie(appState.ui.heroItems[currentHeroIndex]);
     }, 8000); // 8 segundos por turno
 }
@@ -2481,7 +2483,20 @@ function changeHeroMovie(itemObj) {
         
         DOM.heroSection.style.backgroundImage = `url(${imageUrl})`;
         
-        heroContent.querySelector('#hero-title').textContent = data.title;
+        const heroTitleContainer = heroContent.querySelector('#hero-title-container');
+        if (data.logoUrl) {
+            heroTitleContainer.innerHTML = `<div class="hero-logo-container"><img src="${data.logoUrl}" alt="${data.title}" class="hero-logo-img"></div>`;
+            const heroLogoContainer = heroTitleContainer.querySelector('.hero-logo-container');
+            const heroSlot = getLogoSlot('hero');
+            loadLogoSettings(id, heroLogoContainer, () => {
+                const user = auth.currentUser;
+                if (user && user.email === 'baquezadat@gmail.com') {
+                    initLogoEditor(id, heroLogoContainer, heroSlot);
+                }
+            }, heroSlot);
+        } else {
+            heroTitleContainer.innerHTML = `<h1 class="hero-title-text">${data.title}</h1>`;
+        }
         heroContent.querySelector('#hero-synopsis').textContent = data.synopsis;
 
         // --- ZONA DE BOTONES INTELIGENTE ---
@@ -2935,7 +2950,20 @@ async function openDetailsModal(id, type, triggerElement = null) {
         // 2. RENDERIZADO BÁSICO
         const isSeries = (type === 'series' || !!appState.content.series[id] || data.type === 'series' || data.type === 'serie');
         
-        document.getElementById('details-title').textContent = data.title || '';
+        const detailsTitleEl = document.getElementById('details-title');
+        // logoSettingsPromise se resuelve cuando Firebase devuelve el transform
+        // guardado y lo aplica, ANTES de que el modal sea visible.
+        let logoSettingsPromise = Promise.resolve();
+        if (data.logoUrl) {
+            detailsTitleEl.innerHTML = `<div class="details-logo-container"><img src="${data.logoUrl}" alt="${data.title || ''}" class="details-logo-img"></div>`;
+            const logoContainer = detailsTitleEl.querySelector('.details-logo-container');
+            const modalSlot = getLogoSlot('modal');
+            logoSettingsPromise = new Promise(resolve => {
+                loadLogoSettings(id, logoContainer, resolve, modalSlot);
+            });
+        } else {
+            detailsTitleEl.textContent = data.title || '';
+        }
         
         // --- LÓGICA SINOPSIS MIXTA ---
         let fullSynopsis = data.synopsis || 'Sin descripción.';
@@ -3060,13 +3088,13 @@ async function openDetailsModal(id, type, triggerElement = null) {
         }
 
         // 4. FONDO (BANNER)
+        // La URL se guarda para precargarla ANTES de mostrar el modal,
+        // evitando el flash/shift visual que ocurre cuando el modal
+        // se abre sin que el banner haya terminado de descargarse.
+        const _bannerUrl = (data.banner && data.banner.length > 5) ? data.banner : null;
         if (panel) {
-            if (data.banner && data.banner.length > 5) {
-                panel.style.backgroundImage = `url(${data.banner})`;
-            } else {
-                panel.style.backgroundImage = 'none';
-                panel.style.backgroundColor = '#1a1a1a';
-            }
+            panel.style.backgroundImage = 'none';
+            panel.style.backgroundColor = '#1a1a1a';
         }
 
         // 5. CONFIGURACIÓN DE BOTONES
@@ -3308,10 +3336,42 @@ async function openDetailsModal(id, type, triggerElement = null) {
                 };
                 detailsButtons.appendChild(eyeBtn);
             }
+
+            // --- BOTÓN ADMIN: LÁPIZ EDITOR DE LOGO ---
+            // Se agrega aquí (síncrono) para que siempre aparezca si el
+            // usuario es admin, independientemente de si hay logoUrl o no.
+            const adminUser = auth.currentUser;
+            if (adminUser && adminUser.email === 'baquezadat@gmail.com') {
+                const logoContainer = document.getElementById('details-title')
+                    ?.querySelector('.details-logo-container');
+                if (logoContainer && !logoContainer.dataset.editorActive) {
+                    initLogoEditor(id, logoContainer, getLogoSlot('modal'));
+                }
+            }
         } // Fin if (detailsButtons)
 
-        modal.classList.add('show');
-        document.body.classList.add('modal-open');
+        // Mostrar el modal SOLO cuando AMBAS cosas están listas:
+        // 1) El banner ya cargó (sin flash de fondo negro)
+        // 2) Firebase ya aplicó el transform del logo (sin salto de tamaño)
+        const _showModal = () => {
+            if (panel && _bannerUrl) {
+                panel.style.backgroundImage = `url(${_bannerUrl})`;
+            }
+            modal.classList.add('show');
+            document.body.classList.add('modal-open');
+        };
+
+        const bannerPromise = _bannerUrl
+            ? new Promise(resolve => {
+                const preload = new Image();
+                const timeout = setTimeout(resolve, 1500); // fallback máximo 1.5s
+                preload.onload  = () => { clearTimeout(timeout); resolve(); };
+                preload.onerror = () => { clearTimeout(timeout); resolve(); };
+                preload.src = _bannerUrl;
+            })
+            : Promise.resolve();
+
+        Promise.all([bannerPromise, logoSettingsPromise]).then(_showModal);
 
     } catch (e) {
         // Usamos el logger o un console.error simple
@@ -5140,3 +5200,274 @@ observer.observe(document.body, {
     childList: true,
     subtree: true
 });
+
+// ===========================================================
+// LOGO SETTINGS — CARGA Y EDITOR ADMIN
+// ===========================================================
+// Flag global para pausar el carrusel hero mientras se edita
+window._heroEditPaused = false;
+
+// Flag global para pausar el carrusel hero mientras se edita el logo
+window._heroEditPaused = false;
+
+window._heroEditPaused = false;
+
+// Devuelve el slot completo según contexto y dispositivo
+function getLogoSlot(base) {
+    const device = window.innerWidth <= 768 ? 'mobile' : 'desktop';
+    return base + '-' + device;
+}
+
+function loadLogoSettings(id, container, callback, slot = 'modal-desktop') {
+    const slotRef  = db.ref('logoSettings/' + id + '/' + slot);
+    const legacyRef = db.ref('logoSettings/' + id);
+
+    slotRef.once('value').then(snap => {
+        const s = snap.val();
+        if (s && (s.x !== undefined || s.scale !== undefined)) {
+            // Dato nuevo encontrado — usar directamente
+            applyLogoTransform(container, s);
+            if (callback) callback();
+        } else {
+            // Sin dato nuevo: intentar migrar desde la ruta legacy
+            legacyRef.once('value').then(legacySnap => {
+                const legacy = legacySnap.val();
+                // legacy puede ser {x,y,scale} (viejo plano) o ya tener sub-claves
+                if (legacy && legacy.x !== undefined) {
+                    // Es dato plano viejo → migrarlo a TODOS los slots
+                    const slots = ['hero-desktop', 'hero-mobile', 'modal-desktop', 'modal-mobile'];
+                    const updates = {};
+                    slots.forEach(k => { updates[k] = legacy; });
+                    db.ref('logoSettings/' + id).update(updates).catch(() => {});
+                    applyLogoTransform(container, legacy);
+                }
+                if (callback) callback();
+            }).catch(() => { if (callback) callback(); });
+        }
+    }).catch(() => { if (callback) callback(); });
+}
+
+// Transform va en el IMG, no en el container → el layout no se mueve
+function applyLogoTransform(container, s) {
+    const { x = 0, y = 0, scale = 1, zIndex = 0 } = s;
+    const img = container.querySelector('.details-logo-img, .hero-logo-img');
+    if (img) {
+        img.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+        img.style.transformOrigin = 'left bottom';
+    }
+    // Aplicar z-index al container para que afecte el orden de apilamiento con hermanos
+    container.style.position = 'relative';
+    container.style.zIndex = zIndex !== 0 ? zIndex : '';
+}
+
+function initLogoEditor(id, container, slot = 'modal') {
+    if (container.dataset.editorActive) return;
+    container.dataset.editorActive = 'true';
+
+    let state = { x: 0, y: 0, scale: 1, zIndex: 0 };
+    const img = container.querySelector('.details-logo-img, .hero-logo-img');
+
+    // Leer estado actual del img
+    const readState = () => {
+        try {
+            const t = img.style.transform || '';
+            const tMatch = t.match(/translate\(([^,]+)px,\s*([^)]+)px\)/);
+            const sMatch = t.match(/scale\(([^)]+)\)/);
+            if (tMatch) { state.x = parseFloat(tMatch[1]); state.y = parseFloat(tMatch[2]); }
+            if (sMatch) state.scale = parseFloat(sMatch[1]);
+            state.zIndex = parseInt(container.style.zIndex) || 0;
+        } catch(e) {}
+    };
+    readState();
+
+    // Botón lápiz — en la fila de botones del hero (solo admin lo ve)
+    const editToggle = document.createElement('button');
+    editToggle.className = 'logo-edit-toggle';
+    editToggle.title = 'Editar logo';
+    editToggle.innerHTML = '<i class="fas fa-pen"></i>';
+
+    // Si es el hero, insertar en la fila de botones; si es modal, en la fila de botones
+    const heroButtons = document.querySelector('.hero-buttons');
+    const detailsButtonsRow = document.getElementById('details-buttons');
+    if (slot && slot.includes('hero') && heroButtons) {
+        heroButtons.appendChild(editToggle);
+    } else if (detailsButtonsRow) {
+        detailsButtonsRow.appendChild(editToggle);
+    } else {
+        container.appendChild(editToggle);
+    }
+
+    // Panel — fixed encima del botón lápiz
+    const panel = document.createElement('div');
+    panel.className = 'logo-editor-panel';
+    panel.innerHTML = `
+        <div class="lep-header">
+            <span class="lep-slot-label">${slot.includes('hero') ? '🖼' : '🎬'} ${slot.includes('hero') ? 'Hero' : 'Modal'} · ${slot.includes('mobile') ? '📱 Móvil' : '🖥 PC'}</span>
+            <button class="lep-close-btn" title="Cerrar editor">✕</button>
+        </div>
+        <div class="lep-grid">
+            <span class="lep-label">Escala</span>
+            <button class="lep-btn" data-action="scale-down">−</button>
+            <span class="lep-value" id="lep-scale">${state.scale.toFixed(2)}</span>
+            <button class="lep-btn" data-action="scale-up">+</button>
+
+            <span class="lep-label">X</span>
+            <button class="lep-btn" data-action="x-left">←</button>
+            <span class="lep-value" id="lep-x">${Math.round(state.x)}</span>
+            <button class="lep-btn" data-action="x-right">→</button>
+
+            <span class="lep-label">Y</span>
+            <button class="lep-btn" data-action="y-up">↑</button>
+            <span class="lep-value" id="lep-y">${Math.round(state.y)}</span>
+            <button class="lep-btn" data-action="y-down">↓</button>
+
+            <span class="lep-label">Capa</span>
+            <button class="lep-btn" data-action="z-down">−</button>
+            <span class="lep-value" id="lep-z">${state.zIndex}</span>
+            <button class="lep-btn" data-action="z-up">+</button>
+        </div>
+        <div class="lep-actions">
+            <button class="lep-reset-btn">↺ Reset</button>
+            <button class="lep-save-btn">Guardar</button>
+        </div>
+    `;
+    document.body.appendChild(panel);
+
+    const updateDisplay = () => {
+        panel.querySelector('#lep-scale').textContent = state.scale.toFixed(2);
+        panel.querySelector('#lep-x').textContent = Math.round(state.x);
+        panel.querySelector('#lep-z').textContent = state.zIndex;
+        panel.querySelector('#lep-y').textContent = Math.round(state.y);
+        applyLogoTransform(container, state);
+    };
+
+    // Toggle
+    let editMode = false;
+    editToggle.addEventListener('click', e => {
+        e.stopPropagation();
+        editMode = !editMode;
+        readState();
+        panel.classList.toggle('lep-visible', editMode);
+        img.classList.toggle('logo-editing', editMode);
+        editToggle.classList.toggle('lep-active', editMode);
+        editToggle.innerHTML = editMode ? '✕' : '<i class="fas fa-pen"></i>';
+        updateDisplay();
+
+        // Pausar/reanudar carrusel hero
+        if (slot.includes('hero')) {
+            window._heroEditPaused = editMode;
+            if (!editMode) {
+                // Reanudar: re-iniciar el intervalo
+                clearInterval(appState.ui.heroInterval);
+                appState.ui.heroInterval = setInterval(() => {
+                    if (window._heroEditPaused) return;
+                    const items = appState.ui.heroItems;
+                    if (!items || items.length === 0) return;
+                    appState.ui.currentHeroIndex = ((appState.ui.currentHeroIndex || 0) + 1) % items.length;
+                    changeHeroMovie(items[appState.ui.currentHeroIndex]);
+                }, 8000);
+            }
+        }
+    });
+
+    // Botones +/−
+    const STEP = 5;
+    panel.addEventListener('click', e => {
+        e.stopPropagation();
+        const action = e.target.closest('[data-action]')?.dataset.action;
+        if (!action) return;
+        if (action === 'scale-up')   state.scale = Math.min(4, +(state.scale + 0.05).toFixed(2));
+        if (action === 'scale-down') state.scale = Math.max(0.1, +(state.scale - 0.05).toFixed(2));
+        if (action === 'x-right') state.x += STEP;
+        if (action === 'x-left')  state.x -= STEP;
+        if (action === 'y-down')  state.y += STEP;
+        if (action === 'y-up')    state.y -= STEP;
+        if (action === 'z-up')    state.zIndex = Math.min(5, state.zIndex + 1);
+        if (action === 'z-down')  state.zIndex = Math.max(-5, state.zIndex - 1);
+        updateDisplay();
+    });
+
+    // Drag sobre el img
+    let isDragging = false, dragSX, dragSY, dragOX, dragOY;
+    img.addEventListener('mousedown', e => {
+        if (!editMode) return;
+        isDragging = true;
+        dragSX = e.clientX; dragSY = e.clientY;
+        dragOX = state.x;   dragOY = state.y;
+        img.style.cursor = 'grabbing';
+        e.preventDefault();
+    });
+    document.addEventListener('mousemove', e => {
+        if (!isDragging) return;
+        state.x = dragOX + (e.clientX - dragSX);
+        state.y = dragOY + (e.clientY - dragSY);
+        updateDisplay();
+    });
+    document.addEventListener('mouseup', () => {
+        if (isDragging) { isDragging = false; img.style.cursor = editMode ? 'grab' : ''; }
+    });
+
+    // Reset
+    panel.querySelector('.lep-reset-btn').addEventListener('click', e => {
+        e.stopPropagation();
+        state = { x: 0, y: 0, scale: 1, zIndex: 0 };
+        updateDisplay();
+    });
+
+    // Botón X del header — cierra el editor igual que hacer clic en el lápiz
+    panel.querySelector('.lep-close-btn').addEventListener('click', e => {
+        e.stopPropagation();
+        editToggle.click();
+    });
+
+    // Guardar
+    const saveBtn = panel.querySelector('.lep-save-btn');
+    saveBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        saveBtn.disabled = true;
+        saveBtn.textContent = '...';
+        db.ref('logoSettings/' + id + '/' + slot).set(state).then(() => {
+            saveBtn.textContent = '✓ Guardado';
+            saveBtn.classList.add('lep-saved');
+            setTimeout(() => {
+                saveBtn.textContent = 'Guardar';
+                saveBtn.classList.remove('lep-saved');
+                saveBtn.disabled = false;
+            }, 2000);
+        }).catch(() => {
+            saveBtn.textContent = 'Error';
+            saveBtn.disabled = false;
+        });
+    });
+
+    // Limpiar botón y panel cuando el modal/hero se cierre
+    const cleanup = () => {
+        editToggle.remove();
+        panel.remove();
+        container.style.zIndex = '';
+        container.style.position = '';
+        window._heroEditPaused = false;
+        delete container.dataset.editorActive;
+    };
+
+    // Observar cierre: modal (.modal pierde 'show') o hero (container sale del DOM)
+    const modalEl = container.closest('.modal');
+    if (modalEl) {
+        const modalObserver = new MutationObserver(() => {
+            if (!modalEl.classList.contains('show')) {
+                cleanup();
+                modalObserver.disconnect();
+            }
+        });
+        modalObserver.observe(modalEl, { attributes: true, attributeFilter: ['class'] });
+    } else {
+        // Hero: observar si el img cambia (hero rota a otro contenido)
+        const heroObserver = new MutationObserver(() => {
+            if (!document.body.contains(container) || !container.querySelector('.hero-logo-img')) {
+                cleanup();
+                heroObserver.disconnect();
+            }
+        });
+        heroObserver.observe(document.body, { childList: true, subtree: true });
+    }
+}
