@@ -1,0 +1,2304 @@
+/* =============================================================
+   TELEFONO.CSS — Estilos responsive (Teléfonos / Tablets)
+   Incluye: @media (max-width: ...) y (orientation: landscape)
+   Modificar aquí NO afecta desktop.
+   ============================================================= */
+
+@media (max-width: 768px) {
+    .logo-editor-panel {
+        bottom: 70px;
+        right: 8px;
+        left: 8px;
+        min-width: unset;
+    }
+}
+
+@media (max-width: 768px) {
+    #confirmation-modal {
+        z-index: 99999 !important;
+        pointer-events: auto !important;
+
+        /* ✅ Forzar en móvil */
+    }
+
+    .confirmation-modal-content {
+        width: 85%;
+        padding: 25px 20px;
+        z-index: 100000 !important;
+        pointer-events: auto !important;
+
+        /* ✅ Forzar en móvil */
+    }
+
+    .confirmation-modal-content h2 {
+        font-size: 1.8rem;
+    }
+
+    .confirmation-buttons {
+        flex-direction: row;
+        gap: 15px;
+        pointer-events: auto !important;
+
+        /* ✅ Forzar en móvil */
+    }
+
+    .confirmation-buttons button {
+        flex: 1;
+        padding: 12px 16px;
+        font-size: 0.95rem;
+        pointer-events: auto !important;
+
+        /* ✅ CRÍTICO en móvil */
+        touch-action: manipulation;
+
+        /* ✅ Mejor respuesta táctil */
+        -webkit-tap-highlight-color: transparent;
+
+        /* ✅ Quitar highlight azul */
+    }
+
+    /* ✅ CRÍTICO: Desactivar el bottom-nav cuando el modal está abierto */
+    body.modal-open .bottom-nav {
+        z-index: 9998 !important;
+        pointer-events: none !important;
+    }
+}
+
+@media (max-width: 768px) {
+    .profile-hub-menu-item {
+        padding: 16px 18px;
+        margin-bottom: 10px;
+
+        /* ✅ Menos espacio en pantallas pequeñas */
+        font-size: 1rem;
+    }
+
+    .profile-hub-menu-item i {
+        font-size: 1.2rem;
+    }
+
+    #profile-hub-container h4 {
+        margin: 20px 0 12px 5px;
+    }
+}
+
+@media (max-width: 400px) {
+    #login-btn-hub,
+    
+    #register-btn-hub {
+        padding: 14px 16px;
+        font-size: 1rem;
+    }
+
+    #hub-guest-content h3 {
+        font-size: 1.3rem;
+    }
+}
+
+@media (max-width: 768px) {
+    #continue-watching-carousel .movie-card {
+        width: 240px;
+        height: 135px;
+
+        /* Mantener 16:9 */
+        aspect-ratio: 16 / 9;
+    }
+
+    .cw-series-title {
+        font-size: 12px;
+    }
+
+    .cw-episode-number {
+        font-size: 10px;
+    }
+
+    .cw-episode-title {
+        font-size: 10px;
+    }
+
+    #continue-watching-carousel .movie-card::before {
+        font-size: 40px;
+    }
+
+    /* 🔥 NUEVO: Mostrar overlay siempre en tablets (sin hover) */
+    .continue-watching-overlay {
+        opacity: 1 !important;
+    }
+
+    /* Botón de borrar visible siempre en tablets */
+    .btn-remove-continue-watching {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+@media (max-width: 480px) {
+    #continue-watching-carousel .movie-card {
+        width: 200px;
+        height: 112.5px;
+
+        /* Mantener 16:9 */
+        aspect-ratio: 16 / 9;
+    }
+
+    .continue-watching-overlay {
+        padding: 10px;
+        opacity: 1 !important;
+
+        /* 🔥 Visible siempre en móvil */
+    }
+
+    .cw-series-title {
+        font-size: 11px;
+    }
+
+    .cw-episode-number {
+        font-size: 9px;
+    }
+
+    .cw-episode-title {
+        font-size: 9px;
+    }
+
+    #continue-watching-carousel .movie-card::before {
+        font-size: 32px;
+    }
+
+    /* Botón de borrar visible siempre en móviles */
+    .btn-remove-continue-watching {
+        opacity: 1;
+        transform: scale(1);
+        width: 28px;
+        height: 28px;
+        font-size: 12px;
+    }
+}
+
+@media (max-width: 992px) {
+    .bottom-nav {
+        display: flex !important;
+
+        /* Aquí sí la mostramos */
+        /* Resto de propiedades para que se vea bien */
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 60px;
+        background-color: rgba(15, 15, 15, 0.9);
+        backdrop-filter: blur(15px);
+        -webkit-backdrop-filter: blur(15px);
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+        z-index: 1050;
+        justify-content: space-evenly;
+        align-items: center;
+        padding-bottom: env(safe-area-inset-bottom);
+    }
+}
+
+@media (min-width: 993px) and (max-width: 1399px) {
+    .details-panel {
+        max-width: 900px;
+        height: 80vh;
+    }
+
+    /* === AÑADE ESTO === */
+    /* Achicamos los botones para que quepan en 900px */
+    #details-buttons .btn-play,
+    
+    #details-buttons .btn-info,
+    
+    #details-buttons .btn-random {
+        padding: 12px 12px;
+
+        /* Menos padding horizontal */
+        font-size: 0.95rem;
+
+        /* Texto un poco más pequeño */
+        gap: 4px;
+
+        /* Menos espacio entre icono y texto */
+    }
+}
+
+@media (min-width: 769px) and (max-width: 1024px) {
+    .seasons-grid,
+    #season-grid {
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)) !important;
+        max-width: 100% !important;
+        gap: 15px;
+    }
+
+    .season-poster-card {
+        width: 100%;
+        height: auto;
+        aspect-ratio: 2/3;
+    }
+
+    /* Resetear margins personalizados en tablet */
+    .seasons-grid[data-season-count="7"] .season-poster-card:nth-child(5),
+    
+  .seasons-grid[data-season-count="9"] .season-poster-card:nth-child(6),
+    
+  #season-grid[data-season-count="7"] .season-poster-card:nth-child(5),
+    
+  #season-grid[data-season-count="9"] .season-poster-card:nth-child(6) {
+        margin-left: 0 !important;
+    }
+}
+
+@media (max-width: 992px) {
+    .page-wrapper {
+        padding-bottom: 65px;
+    }
+
+    .bottom-nav {
+        display: flex;
+    }
+
+    body.modal-open {
+        position: fixed;
+        width: 100%;
+    }
+
+    .main-header {
+        padding: 10px 15px;
+    }
+
+    .main-nav {
+        display: none;
+    }
+
+    #auth-buttons,
+    #user-profile-container {
+        display: none;
+    }
+
+    .logo img {
+        height: 22px;
+    }
+
+    .header-right {
+        gap: 8px;
+    }
+
+    #search-input {
+        width: 40px;
+        height: 40px;
+        padding: 0;
+        border-radius: 20px;
+        cursor: pointer;
+        text-indent: -9999px;
+    }
+
+    #search-input:focus {
+        width: 150px;
+        cursor: text;
+        padding: 6px 12px 6px 40px;
+        text-indent: 0;
+    }
+
+    .search-icon {
+        left: 12px;
+    }
+
+    .hero-section {
+        height: 75vh;
+        align-items: flex-end;
+        padding: 0 15px;
+    }
+
+    .hero-section::after {
+        background: linear-gradient(to top, rgba(20,20,20,0.95) 15%, rgba(20,20,20,0.3) 45%, rgba(20,20,20,0) 70%);
+    }
+
+    .hero-content {
+        width: 100%;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        padding-bottom: 3vh;
+        max-width: none;
+    }
+
+    .hero-content h1,
+    .hero-title-text {
+        font-size: clamp(2rem, 10vw, 2.8rem);
+    }
+
+    .hero-logo-container {
+        height: 65px;
+    }
+
+    .hero-logo-img {
+        height: 65px;
+        width: calc(65px * 800 / 310);
+    }
+
+    .details-logo-container {
+        height: 55px;
+    }
+
+    .details-logo-img {
+        height: 55px;
+        width: calc(55px * 800 / 310);
+    }
+
+    .hero-content p {
+        display: none;
+    }
+
+    .hero-buttons {
+        justify-content: center;
+    }
+
+    .hero-buttons .btn,
+    .hero-buttons .btn-info {
+        padding: 10px 18px;
+        font-size: 1rem;
+    }
+
+    .carousel-card {
+        width: 120px;
+    }
+
+    #full-grid-container .grid,
+    #history-container .grid,
+    #my-list-container .grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 15px;
+        padding: 20px 15px;
+    }
+
+    /* Última tarjeta sola ocupa ambas columnas */
+    #full-grid-container .grid .movie-card:last-child:nth-child(odd),
+    
+    #history-container .grid .movie-card:last-child:nth-child(odd),
+    
+    #my-list-container .grid .movie-card:last-child:nth-child(odd) {
+        grid-column: 1 / -1;
+        max-width: 50%;
+        margin: 0 auto;
+    }
+
+    .details-panel {
+        height: auto;
+        max-height: 90vh;
+        width: 95%;
+        max-width: 400px;
+        display: flex;
+        align-items: flex-start;
+    }
+
+    .details-content {
+        padding: 20px;
+        flex-direction: column;
+        align-items: center;
+        gap: 15px;
+        overflow-y: auto;
+        height: 100%;
+        max-height: 85vh;
+    }
+
+    .details-poster {
+        width: 60%;
+        max-width: 200px;
+        margin-top: 25px;
+    }
+
+    .details-poster img {
+        margin-top: 0;
+    }
+
+    .details-info {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        width: 100%;
+    }
+
+    .details-info h2 {
+        font-size: clamp(1.5rem, 6vw, 2rem);
+    }
+
+    .details-meta {
+        justify-content: center;
+    }
+
+    #details-synopsis {
+        font-size: 0.95rem;
+    }
+
+    #details-buttons {
+        justify-content: center;
+        width: 100%;
+    }
+
+    /* Aspect ratio 16:9 estándar — sin espacio extra (era para UI de Google Drive) */
+    #series-player-page .player-container .screen,
+    
+    .player-container .screen,
+    
+    .movie-player-container .screen,
+    
+    #cinema .screen {
+        padding-top: 56.25% !important;
+    }
+
+    .filter-controls {
+        display: grid !important;
+
+        /* Forzamos GRID */
+        grid-template-columns: 1fr 1fr;
+
+        /* Dos columnas iguales */
+        gap: 10px !important;
+
+        /* Espacio pequeño entre botones */
+        padding: 0 15px 15px 15px;
+        width: 100%;
+        box-sizing: border-box;
+
+        /* Reseteamos estilos viejos de flex */
+        flex-direction: unset !important;
+        align-items: unset !important;
+    }
+
+    /* 2. LOS BOTONES DE FILTRO (Género, Idioma, etc) */
+    .filter-controls select,
+    
+    .custom-dropdown,
+    
+    .dropdown-trigger {
+        width: 100% !important;
+        min-width: 0 !important;
+        margin: 0 !important;
+    }
+
+    /* El botón Trigger un poco más compacto */
+    .dropdown-trigger {
+        padding: 10px 15px;
+        height: 45px;
+
+        /* Altura fija uniforme */
+        font-size: 0.9rem;
+    }
+
+    /* 3. BOTÓN "VOLVER A UNIVERSOS" (OCUPA TODO EL ANCHO) */
+    .back-saga-btn {
+        grid-column: 1 / -1;
+
+        /* Ocupa las 2 columnas */
+        width: 100%;
+        justify-content: center;
+        margin-right: 0;
+        margin-bottom: 5px;
+    }
+
+    /* 4. BOTONES DE ORDEN DE MARVEL (OCUPAN TODO EL ANCHO) */
+    #ucm-sort-buttons {
+        grid-column: 1 / -1;
+
+        /* Ocupa las 2 columnas */
+        display: flex;
+
+        /* Internamente sigue siendo flex */
+        justify-content: space-between;
+        width: 100%;
+        gap: 10px;
+    }
+
+    .sort-btn {
+        flex: 1;
+
+        /* Mitad y mitad */
+        text-align: center;
+        justify-content: center;
+    }
+
+    #profile-container,
+    
+    #settings-container {
+        position: relative !important;
+
+        /* Necesario para que el z-index funcione */
+        z-index: 100 !important;
+
+        /* Asegura que flote sobre el fondo */
+        min-height: 50vh;
+
+        /* Evita que colapse si tarda en cargar */
+        width: 100%;
+        margin-top: 20px;
+    }
+
+    .profile-header-wrapper {
+        padding: 20px 15px;
+        margin: 0;
+        border-radius: 0;
+    }
+
+    .profile-main-info {
+        flex-direction: column;
+        text-align: center;
+        gap: 15px;
+    }
+
+    .profile-avatar-placeholder {
+        font-size: 60px;
+        width: 80px;
+        height: 80px;
+    }
+
+    .profile-text-info h3 {
+        font-size: 1.5rem;
+    }
+
+    .profile-tab-content {
+        padding: 20px 15px;
+    }
+
+    .stats-container {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 15px;
+    }
+
+    .stat-card {
+        padding: 15px;
+    }
+
+    .stat-card i {
+        font-size: 2rem;
+    }
+
+    .stat-value {
+        font-size: 1.5rem;
+    }
+
+    .genre-label {
+        flex-basis: 80px;
+        font-size: 0.8rem;
+    }
+
+    #settings-container {
+        max-width: 100%;
+        margin: 0;
+    }
+
+    #settings-container .content-header {
+        padding: 0 15px;
+        margin-bottom: 30px;
+    }
+
+    #settings-container .main-title {
+        font-size: 2.5rem;
+    }
+
+    #settings-container .section-description {
+        font-size: 1rem;
+    }
+
+    .settings-form-wrapper {
+        padding: 25px 20px;
+        border-radius: 0;
+    }
+
+    .input-with-button {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .btn-primary {
+        width: 100%;
+    }
+
+    #series-player-page.season-grid-view {
+        overflow: hidden;
+    }
+
+    #series-player-page .season-grid-container {
+        overflow-y: auto;
+        max-height: 80vh;
+        width: 90vw;
+        padding: 20px 15px;
+        scrollbar-width: none;
+    }
+
+    #series-player-page .season-grid-container::-webkit-scrollbar {
+        display: none;
+    }
+
+    #series-player-page .season-grid {
+        display: grid;
+
+        /* Cambiamos flex por grid */
+        grid-template-columns: repeat(2, 1fr);
+
+        /* Forzamos 2 columnas iguales */
+        gap: 15px;
+        justify-content: center;
+    }
+
+    #series-player-page .season-poster-card {
+        aspect-ratio: 2/3;
+        width: 100% !important;
+
+        /* Ahora sí funciona perfecto, llena su mitad */
+        height: auto !important;
+        position: relative;
+        cursor: pointer;
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.35);
+        transition: transform 0.28s ease, box-shadow 0.28s ease;
+        background: #111;
+    }
+
+    #history-container,
+    #my-list-container {
+        padding-top: 30px;
+    }
+}
+
+@media (max-width: 768px) {
+    .cinema-controls {
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .lang-controls-movie {
+        width: 100%;
+        justify-content: center;
+        margin-left: 0;
+    }
+
+    .lang-btn-movie {
+        flex: 1;
+        padding: 12px;
+    }
+}
+
+@media (max-width: 768px) {
+    .seasons-grid,
+    #season-grid {
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)) !important;
+        max-width: 100% !important;
+        padding: 0 10px;
+        gap: 15px;
+    }
+
+    .season-poster-card {
+        width: 100%;
+        height: auto;
+        aspect-ratio: 2/3;
+    }
+
+    /* Resetear margins personalizados en móvil */
+    .seasons-grid[data-season-count="7"] .season-poster-card:nth-child(5),
+    
+  .seasons-grid[data-season-count="9"] .season-poster-card:nth-child(6),
+    
+  #season-grid[data-season-count="7"] .season-poster-card:nth-child(5),
+    
+  #season-grid[data-season-count="9"] .season-poster-card:nth-child(6) {
+        margin-left: 0 !important;
+    }
+}
+
+@media (max-width: 480px) {
+    .seasons-grid,
+    #season-grid {
+        grid-template-columns: repeat(2, 1fr) !important;
+        gap: 10px;
+    }
+}
+
+@media (max-width: 1400px) and (min-width: 768px) {
+    #cinema .cinema-wrapper {
+        width: 60vw;
+        padding: 20px;
+    }
+
+    #cinema #cinema-title {
+        font-size: 1.6rem;
+    }
+
+    #cinema .cinema-controls {
+        gap: 10px;
+    }
+}
+
+@media (max-width: 767px) {
+    #cinema .cinema-wrapper {
+        width: 95vw;
+
+        /* Usa el 95% del ancho de la pantalla */
+        height: auto;
+
+        /* La altura se ajusta sola al contenido */
+        border-radius: 12px;
+
+        /* Vuelve a ponerle las esquinas redondeadas */
+        padding: 20px;
+
+        /* Un poco más de espacio interno */
+        box-shadow: 0 5px 25px rgba(0,0,0,0.5);
+
+        /* Le devolvemos la sombra */
+    }
+
+    #cinema .screen {
+        width: 100%;
+        position: relative;
+        padding-top: 56.25%;
+        height: 0;
+        border-radius: 0;
+        box-shadow: none;
+    }
+
+    #cinema .screen iframe {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        border: none;
+    }
+
+    #cinema .cinema-info {
+        margin-top: 10px;
+    }
+
+    #cinema #cinema-title {
+        font-size: 1.3rem;
+    }
+
+    #cinema .cinema-controls {
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    #cinema .cinema-controls .btn {
+        width: 100%;
+        font-size: 1rem;
+        padding: 10px;
+    }
+}
+
+@media (max-width: 992px) {
+    .main-header .header-right #user-profile-container,
+    
+    .main-header .header-right #auth-buttons {
+        display: none !important;
+    }
+}
+
+@media (max-width: 992px) {
+    .mobile-roulette-btn {
+        display: flex;
+
+        /* <--- AQUÍ SE ACTIVA PARA MÓVIL */
+        align-items: center;
+        justify-content: center;
+        width: 38px;
+        height: 38px;
+        margin-right: 5px;
+        border-radius: 50%;
+        transition: transform 0.3s ease, opacity 0.3s ease;
+        flex-shrink: 0;
+        cursor: pointer;
+    }
+
+    .mobile-roulette-btn img {
+        width: 45px;
+        height: 45px;
+        object-fit: contain;
+        opacity: 0.8;
+        transition: all 0.3s ease;
+    }
+
+    /* Efectos al tocar */
+    .mobile-roulette-btn:active {
+        transform: scale(0.9);
+        background-color: rgba(255, 255, 255, 0.15);
+    }
+
+    .mobile-roulette-btn:active img {
+        opacity: 1;
+        transform: rotate(180deg);
+    }
+}
+
+@media (max-width: 992px) {
+    #details-buttons {
+        flex-wrap: wrap;
+
+        /* Permite que los botones se coloquen en varias líneas */
+        gap: 12px;
+    }
+
+    #details-buttons .btn-play {
+        flex-basis: 100%;
+
+        /* Ocupa todo el ancho */
+        order: 1;
+
+        /* Lo posiciona primero */
+        flex-grow: 1;
+
+        /* Añadido para que ocupe todo */
+    }
+
+    #details-buttons .btn-random {
+        flex-grow: 1;
+
+        /* Crecerán para rellenar el espacio */
+        order: 2;
+
+        /* Irán en la segunda fila */
+    }
+
+    #details-buttons .btn-info {
+        flex-grow: 1;
+
+        /* Crecerán para rellenar el espacio */
+        order: 3;
+
+        /* Irán en la segunda fila */
+    }
+
+    #details-buttons .btn-watchlist {
+        flex-shrink: 0;
+
+        /* Evita que el botón '+' se encoja */
+        order: 4;
+
+        /* Va al final */
+    }
+}
+
+@media (max-width: 768px) {
+    #details-buttons {
+        flex-wrap: wrap;
+        gap: 10px;
+
+        /* Gap uniforme en todos los botones */
+    }
+
+    /* En móvil, el botón de Play ocupa todo el ancho */
+    #details-buttons .btn-play {
+        flex: 1 1 100%;
+        order: 1;
+    }
+
+    /* Los otros botones comparten la fila de abajo */
+    #details-buttons .btn-info,
+    
+    #details-buttons .btn-random {
+        flex: 1;
+        order: 2;
+    }
+
+    /* El botón de reseñar va junto al botón de Mi Lista */
+    #details-buttons .btn-review.btn-icon-only {
+        order: 3;
+        flex: 0 0 48px;
+        width: 48px;
+        height: 48px;
+    }
+
+    /* El botón de "visto" va junto a los íconos */
+    #details-buttons .btn-roulette-eye {
+        order: 3;
+        flex: 0 0 48px;
+        width: 48px;
+        height: 48px;
+    }
+
+    /* El botón de lista se queda al final, mismo tamaño */
+    #details-buttons .btn-watchlist {
+        order: 4;
+        flex: 0 0 48px;
+        width: 48px;
+        height: 48px;
+    }
+}
+
+@media (max-width: 768px) {
+    #ucm-sort-buttons {
+        width: 100%;
+        justify-content: space-between;
+    }
+
+    .sort-btn {
+        flex: 1;
+
+        /* Que ocupen mitad y mitad */
+        text-align: center;
+    }
+}
+
+@media (max-width: 768px) {
+    .filter-controls {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+
+        /* Dos columnas iguales */
+        gap: 10px;
+
+        /* Menos separación entre botones */
+        align-items: start;
+        padding: 0 15px 15px 15px;
+
+        /* Padding ajustado */
+    }
+
+    /* Los dropdowns ocupan el 100% de su celda en la grilla */
+    .filter-controls select,
+    
+    .custom-dropdown,
+    
+    .dropdown-trigger {
+        width: 100%;
+        min-width: 0;
+
+        /* Evita que se deformen */
+    }
+
+    /* El botón "Trigger" más compacto en altura */
+    .dropdown-trigger {
+        padding: 10px 15px;
+
+        /* Menos relleno */
+        font-size: 0.85rem;
+
+        /* Letra un pelín más chica para que quepa */
+        height: 42px;
+
+        /* Altura fija uniforme */
+    }
+
+    /* Excepción 1: Botón "Volver a Universos" ocupa todo el ancho */
+    .back-saga-btn {
+        grid-column: 1 / -1;
+
+        /* Ocupa las 2 columnas */
+        width: 100%;
+        justify-content: center;
+        margin-right: 0;
+        margin-bottom: 5px;
+    }
+
+    /* Excepción 2: Botones de orden UCM (Salida/Crono) ocupan todo el ancho */
+    #ucm-sort-buttons {
+        grid-column: 1 / -1;
+
+        /* Ocupa las 2 columnas */
+        justify-content: space-between;
+        width: 100%;
+        gap: 10px;
+    }
+
+    .sort-btn {
+        flex: 1;
+        text-align: center;
+        padding: 10px;
+
+        /* Botones táctiles cómodos */
+    }
+}
+
+@media (max-width: 768px) {
+    .saga-card {
+        width: 100%;
+        height: 160px;
+    }
+}
+
+@media (max-width: 768px) {
+    .back-saga-btn {
+        width: 100%;
+        justify-content: center;
+        margin-right: 0;
+        margin-bottom: 10px;
+
+        /* Espacio antes de los filtros */
+    }
+}
+
+@media (max-width: 768px) {
+    /* 1. Forzar que la cuadrícula de reseñas sea de 1 sola columna */
+    .reviews-list {
+        padding: 0 12px;
+    }
+
+    /* Grid: poster+header en fila 1, texto/footer/comentarios full width debajo */
+    .review-card {
+        display: grid;
+        grid-template-columns: 56px 1fr;
+        grid-template-areas: "poster header"
+            "text   text"
+            "footer footer"
+            "comments comments";
+        column-gap: 12px;
+        row-gap: 8px;
+        padding: 18px 14px;
+    }
+
+    .rc-poster-col {
+        grid-area: poster;
+        align-self: start;
+    }
+
+    .rc-poster {
+        width: 56px;
+        height: 82px;
+    }
+
+    /* Disolver rc-main para que sus hijos participen directo en el grid */
+    .rc-main {
+        display: contents;
+    }
+
+    .rc-header {
+        grid-area: header;
+        align-self: center;
+        margin: 0;
+    }
+
+    .rc-movie-title {
+        font-size: 1.1rem;
+        margin-bottom: 4px;
+    }
+
+    .rc-text {
+        grid-area: text;
+        font-size: 0.88rem;
+        line-height: 1.6;
+        margin: 0;
+    }
+
+    .rc-read-more {
+        grid-column: 1 / -1;
+    }
+
+    .rc-footer {
+        grid-area: footer;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+        margin: 0;
+    }
+
+    .rc-footer-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+    }
+
+    .rc-comments-area {
+        grid-area: comments;
+    }
+
+    .rc-author {
+        flex-wrap: nowrap;
+        gap: 6px;
+        align-items: center;
+        min-width: 0;
+        flex: 1;
+    }
+
+    .rc-author-photo {
+        width: 22px;
+        height: 22px;
+    }
+
+    .rc-author-icon {
+        font-size: 0.95rem;
+        flex-shrink: 0;
+    }
+
+    .rc-author-name {
+        font-size: 0.82rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 140px;
+    }
+
+    .rc-date {
+        font-size: 0.7rem;
+        white-space: nowrap;
+        flex-shrink: 0;
+    }
+
+    .rc-comment-toggle {
+        font-size: 0.78rem;
+        padding: 4px 10px;
+        white-space: nowrap;
+    }
+
+    .rc-like-btn {
+        font-size: 0.8rem;
+        padding: 3px 6px;
+    }
+
+    .read-more-trigger {
+        display: block;
+        margin-top: 4px;
+        font-size: 0.88rem;
+        padding: 4px 0;
+    }
+
+    #read-review-header {
+        height: 200px !important;
+
+        /* Más compacto en móvil */
+    }
+
+    #read-review-header > div:last-child {
+        flex-direction: column !important;
+        align-items: flex-start !important;
+        gap: 10px !important;
+    }
+
+    #read-review-poster {
+        width: 80px !important;
+        height: 120px !important;
+    }
+
+    #read-review-movie-title {
+        font-size: 1.8rem !important;
+    }
+}
+
+@media (max-width: 992px) {
+    #history-container .content-header,
+    
+    #my-list-container .content-header {
+        /* En móvil tu grilla usa 15px, así que igualamos aquí */
+        padding: 20px 15px 10px 15px;
+        justify-content: center;
+
+        /* Centramos el título en móvil */
+    }
+
+    #history-container h2,
+    
+    #my-list-container h2 {
+        font-size: 2.5rem;
+
+        /* Un poco más chico en móvil */
+        text-align: center;
+    }
+}
+
+@media (max-width: 1024px) {
+    #series-player-page.player-layout-view .player-layout-container.movie-mode {
+        flex-direction: column;
+        width: 92%;
+        height: auto;
+        max-height: 85vh;
+        background-color: var(--panel-dark);
+        border-radius: 16px;
+        overflow-y: auto;
+        padding: 15px;
+        gap: 15px;
+    }
+
+    .movie-mode .movie-player-container {
+        width: 100%;
+        flex: none;
+    }
+
+    .movie-mode .movie-info-sidebar {
+        width: 100%;
+        border: none;
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+        padding: 18px;
+        height: auto;
+        overflow: visible;
+    }
+
+    .sidebar-poster-container {
+        margin-bottom: 10px;
+    }
+
+    .sidebar-poster-img {
+        max-width: 140px;
+
+        /* Tamaño para tablet */
+    }
+
+    .movie-info-sidebar .player-title {
+        text-align: left;
+        font-size: 1.6rem;
+        margin-top: 5px;
+    }
+
+    .movie-metadata {
+        justify-content: flex-start;
+    }
+
+    .close-btn {
+        z-index: 2005;
+    }
+}
+
+@media (max-width: 768px) {
+    /* 1. El contenedor principal ocupa toda la pantalla real */
+    /* Título alineado con el close-btn en movie-mode móvil */
+    #series-player-page.player-layout-view .player-layout-container.movie-mode .movie-player-title {
+        font-size: 1.3rem;
+        line-height: 1.2;
+        text-align: center;
+        min-height: 44px;
+
+        /* misma altura que el close-btn (44px) */
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0 56px 0 16px;
+
+        /* espacio a la derecha para no quedar bajo el botón */
+        flex-shrink: 0;
+    }
+
+    #series-player-page.player-layout-view .player-layout-container.movie-mode {
+        width: 100vw;
+        height: 100vh;
+
+        /* Fallback */
+        height: 100dvh;
+
+        /* Altura dinámica real (evita problemas con barra de URL) */
+        max-height: none;
+        border-radius: 0;
+        display: flex;
+        flex-direction: column;
+
+        /* Apilamos Video arriba, Info abajo */
+        overflow: hidden;
+
+        /* Evitamos doble scroll en el body */
+        padding: 0;
+        margin: 0;
+    }
+
+    /* 2. El video ocupa solo su proporción natural (16:9) y se queda fijo arriba */
+    .movie-mode .movie-player-container {
+        flex: 0 0 auto;
+
+        /* No estirar ni encoger */
+        width: 100%;
+        height: auto;
+        min-height: auto;
+
+        /* Quitamos alturas forzadas */
+        background: black;
+        z-index: 10;
+    }
+
+    /* 3. La barra de info ocupa TODO el espacio restante y tiene el SCROLL */
+    .movie-mode .movie-info-sidebar-inner {
+        padding-bottom: 80px;
+
+        /* espacio para el nav del celular */
+    }
+
+    .movie-mode .movie-info-sidebar {
+        flex: 1;
+
+        /* Ocupa todo el espacio que sobra abajo del video */
+        width: 100%;
+        height: auto;
+        max-height: none;
+
+        /* Quitamos límites */
+        padding: 20px 20px 100px 20px;
+
+        /* 🔥 100px de padding abajo para levantar el botón */
+        overflow-y: auto;
+
+        /* EL SCROLL ESTÁ AQUÍ */
+        -webkit-overflow-scrolling: touch;
+
+        /* Scroll suave en iPhone */
+        display: flex;
+        flex-direction: column;
+        gap: 15px;
+        border: none;
+    }
+
+    /* 4. La sinopsis ya no tiene scroll interno, fluye con la página */
+    .movie-synopsis-container {
+        flex: 0 0 auto;
+
+        /* Deja de calcular altura automática */
+        overflow: visible;
+        min-height: auto;
+        height: auto;
+    }
+
+    .movie-synopsis-container p {
+        font-size: 0.95rem;
+
+        /* Letra legible */
+        white-space: normal;
+
+        /* Asegura que el texto baje */
+    }
+
+    /* 5. Ajustes cosméticos para móvil */
+    .sidebar-poster-container {
+        display: none;
+
+        /* Ocultamos el póster pequeño en móvil para ganar espacio */
+    }
+
+    .movie-info-sidebar .player-title {
+        font-size: 1.5rem;
+        margin-bottom: 5px;
+        text-align: center;
+    }
+
+    /* Botones grandes y fáciles de tocar */
+    .btn-review-sidebar {
+        padding: 15px;
+        margin-top: 10px;
+        font-size: 1rem;
+        flex-shrink: 0;
+
+        /* Evita que se aplaste */
+    }
+}
+
+@media (max-width: 1024px) {
+    .movie-player-layout-container {
+        flex-direction: column;
+        height: auto;
+        width: 100%;
+        padding: 15px;
+        gap: 20px;
+    }
+
+    .movie-player-container,
+    
+    .movie-info-sidebar {
+        min-width: 100%;
+        width: 100%;
+    }
+
+    .movie-info-sidebar {
+        padding: 20px;
+        max-height: none;
+    }
+
+    .movie-poster-container {
+        max-width: 300px;
+        margin: 0 auto;
+    }
+
+    .movie-player-title {
+        font-size: 1.8rem;
+    }
+}
+
+@media (max-width: 768px) {
+    #cinema {
+        align-items: flex-start;
+        overflow-y: auto;
+    }
+
+    .movie-player-layout-container {
+        padding: 10px;
+        gap: 15px;
+    }
+
+    .movie-info-sidebar {
+        padding: 15px;
+    }
+
+    .movie-poster-container {
+        max-width: 250px;
+    }
+
+    .movie-player-title {
+        font-size: 1.5rem;
+    }
+
+    .movie-meta-info {
+        font-size: 0.8rem;
+    }
+
+    .lang-select-btn {
+        padding: 14px 20px;
+        font-size: 1rem;
+    }
+
+    #cinema .cinema-controls {
+        gap: 8px;
+    }
+
+    #cinema .cinema-controls .btn-watchlist,
+    
+    #cinema .cinema-controls .btn-review {
+        padding: 12px 16px;
+        font-size: 0.95rem;
+    }
+}
+
+@media (max-width: 600px) {
+    #content-reviews-modal .content-reviews-modal-inner {
+        width: 95%;
+        max-height: 95vh;
+    }
+
+    .crm-title {
+        font-size: 1.6rem;
+    }
+
+    .crm-poster {
+        width: 65px;
+        height: 97px;
+    }
+}
+
+@media (max-width: 860px) {
+    .reviews-page-header {
+        padding: 24px 16px 16px;
+    }
+
+    .reviews-two-col {
+        flex-direction: column;
+        gap: 20px;
+        padding: 0 16px 60px;
+        width: 100%;
+        box-sizing: border-box;
+        overflow-x: hidden;
+    }
+
+    .reviews-sidebar {
+        width: 100%;
+        position: static;
+    }
+
+    .reviews-stats-panel {
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 16px;
+    }
+
+    /* Barras en mobile: asegura que se rendericen */
+    .rsp-bars {
+        width: 100%;
+        min-width: 0;
+        flex: 1;
+    }
+
+    .rsp-bar-track {
+        min-width: 60px;
+    }
+
+    .rsp-big-num {
+        font-size: 3rem;
+    }
+
+    /* Filtro estrella horizontal en mobile */
+    .rsf-buttons {
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .rsf-btn {
+        flex: 1;
+        min-width: 50px;
+        justify-content: center;
+        padding: 8px 6px;
+    }
+
+    .reviews-list {
+        width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+    }
+
+    .review-card {
+        box-sizing: border-box;
+        width: 100%;
+        width: 100%;
+    }
+
+    .rc-text {
+        font-size: 0.9rem;
+    }
+}
+
+@media (max-width: 768px) {
+}
+
+@media (max-width: 600px) {
+    /* Stack container en móvil: parte inferior sobre el bottom-nav */
+}
+
+@media (max-width: 1024px) {
+    .universes-rest-grid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+
+    .universe-card--featured {
+        min-height: 240px;
+    }
+}
+
+@media (max-width: 768px) {
+    .universes-layout {
+        padding: 16px 4vw 40px;
+        gap: 14px;
+    }
+
+    .universes-featured {
+        grid-template-columns: 1fr;
+    }
+
+    .universe-card--featured {
+        min-height: 180px;
+    }
+
+    .universes-rest-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
+    }
+
+    .universe-card--compact {
+        height: 130px;
+    }
+
+    .universe-card:hover {
+        transform: none;
+    }
+
+    /* Flechas laterales → debajo del grid en móvil */
+    .universes-rest-row {
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .universes-rest-row .universes-rest-grid {
+        width: 100%;
+    }
+
+    /* Barra de controles: flecha izq · dots · flecha der en fila */
+    .universes-rest-row .univ-side-btn {
+        display: none;
+
+        /* ocultamos las flechas del row */
+    }
+
+    /* Reemplazamos con una barra completa debajo */
+    .univ-dots-bar {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0;
+        padding: 4px 0 8px;
+    }
+
+    /* Insertamos las flechas dentro de la barra de dots via CSS trick:
+       usamos pseudo-elementos no, mejor: en móvil mostramos un nav-bar propio */
+    .univ-mobile-nav {
+        display: flex !important;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+        padding: 6px 0 10px;
+        width: 100%;
+    }
+
+    .univ-mobile-nav .univ-side-btn {
+        display: flex !important;
+        width: 44px;
+        height: 44px;
+        font-size: 1rem;
+        flex-shrink: 0;
+    }
+}
+
+@media (min-width: 1024px) and (max-width: 1400px) {
+    .main-header {
+        padding: 12px 20px;
+    }
+
+    .header-left {
+        gap: 18px;
+    }
+
+    .header-right {
+        gap: 18px;
+    }
+
+    /* Nav links: solo un toque menos */
+    .main-nav ul {
+        gap: 4px;
+    }
+
+    .main-nav a {
+        font-size: 0.9rem;
+        padding: 7px 11px;
+    }
+
+    /* Search levemente más pequeño */
+    #search-input {
+        width: 175px;
+    }
+
+    #search-input:focus {
+        width: 220px;
+    }
+
+    /* Botón usuario levemente más compacto */
+    .user-greeting-btn {
+        font-size: 0.88rem;
+        padding: 8px 16px;
+    }
+}
+
+@media (orientation: landscape) and (max-height: 600px) {
+
+    /* ── MODO A: Película/Especial — layout lado a lado (sin cambios) ── */
+    #series-player-page.player-layout-view .player-layout-container {
+        flex-direction: row !important;
+        height: 100svh;
+        width: 100vw;
+        max-width: 100vw;
+        padding: 8px 10px;
+        gap: 10px;
+        margin-top: 0;
+        border-radius: 0;
+        overflow: hidden;
+    }
+
+    /* ── MODO B Edge-to-Edge — landscape compacto ── */
+
+    /* Eliminar badge de duración heredado en thumbnails de episodios */
+    #series-player-page .ep-thumb::before,
+    #series-player-page .ep-thumb::after {
+        content: none !important;
+        display: none !important;
+    }
+
+    /* Ocultar la barra de nav para ganar espacio vertical */
+    #series-player-page.player-layout-view .player-mobile-nav {
+        display: none;
+    }
+
+    /* Título e info más compactos */
+    #series-player-page.player-layout-view .video-details {
+        padding: 5px 12px;
+    }
+
+    #series-player-page.player-layout-view .video-title {
+        font-size: 0.95rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    #series-player-page.player-layout-view #subTitle {
+        font-size: 10px;
+        margin-bottom: 2px;
+    }
+
+    /* Ocultar "... ver más" en landscape (no hay espacio) */
+    #series-player-page.player-layout-view .toggle-text {
+        display: none;
+    }
+
+    /* Tarjeta de episodio más compacta */
+    #series-player-page.player-layout-view .episode-card {
+        margin-bottom: 10px;
+        gap: 8px;
+    }
+
+    #series-player-page.player-layout-view .ep-thumb {
+        width: 88px;
+        height: 50px;
+    }
+
+    #series-player-page.player-layout-view .ep-title {
+        font-size: 0.78rem;
+    }
+
+    #series-player-page.player-layout-view .episode-description {
+        display: none;
+    }
+
+    /* Controles de temporada/idioma más compactos */
+    #series-player-page.player-layout-view .controls-row {
+        margin: 6px 0 10px 0;
+    }
+
+    #series-player-page.player-layout-view .vab-lang-btn {
+        padding: 4px 10px;
+        font-size: 0.68rem;
+    }
+
+    /* Botones nav Anterior/Siguiente más compactos */
+    #series-player-page.player-layout-view .nav-buttons-row button {
+        padding: 8px;
+        font-size: 0.82rem;
+    }
+}
+
+@media (max-width: 600px) {
+    .reports-admin-filters {
+        flex-wrap: wrap;
+    }
+
+    .reports-filter-btn {
+        padding: 7px 13px;
+        font-size: 0.78rem;
+    }
+
+    .report-issue-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .report-modal-inner {
+        padding: 22px 18px;
+        border-radius: 16px;
+    }
+
+    .report-card-content-title {
+        max-width: 180px;
+    }
+}
+
+@media (max-width: 768px) {
+    .btn-report-series {
+        width: 34px;
+        height: 34px;
+        font-size: 12px;
+    }
+}
+
+@media (max-width: 860px) {
+    .reviews-pagination {
+        padding: 0 16px 36px;
+    }
+}
+
+@media (max-width: 500px) {
+    .rp-btn {
+        min-width: 36px;
+        height: 36px;
+        padding: 0 10px;
+        font-size: 0.8rem;
+        border-radius: 8px;
+    }
+
+    .rp-pages {
+        margin: 0 4px;
+    }
+}
+
+@media (max-width: 700px) {
+    .reviews-tabs-bar {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+    }
+
+    .rv-user-search-input {
+        width: 140px;
+    }
+}
+
+@media (max-width: 768px) {
+    .crm-comment-input-row {
+        gap: 6px;
+    }
+
+    .crm-comment-input-avatar {
+        display: none;
+
+        /* Ocultar avatar en móvil para ganar espacio */
+    }
+
+    .crm-comment-input-wrap {
+        border-radius: 22px;
+        padding: 10px 14px;
+        gap: 6px;
+    }
+
+    .crm-comment-input {
+        font-size: 0.92rem;
+        min-height: 22px;
+    }
+
+    .crm-img-btn,
+    
+    .crm-gif-btn {
+        width: 32px;
+        height: 32px;
+        font-size: 0.75rem;
+        flex-shrink: 0;
+    }
+
+    .crm-comment-send {
+        width: 32px;
+        height: 32px;
+        font-size: 0.85rem;
+        flex-shrink: 0;
+    }
+
+    /* GIF picker: ocupa todo el ancho disponible en móvil */
+    .crm-gif-picker {
+        width: calc(100vw - 40px);
+        right: auto;
+        left: 50%;
+        transform: translateX(-50%);
+        bottom: calc(100% + 8px);
+    }
+
+    .crm-gif-results {
+        grid-template-columns: repeat(3, 1fr);
+        max-height: 260px;
+    }
+}
+
+@media (max-width: 768px) {
+    .upm-content {
+        max-width: 100%;
+        border-radius: 16px 16px 0 0;
+        max-height: 92vh;
+    }
+
+    .upm-header-info {
+        padding: 20px 18px 18px;
+        gap: 14px;
+    }
+
+    .upm-avatar,
+    .upm-avatar-placeholder {
+        width: 64px;
+        height: 64px;
+        font-size: 2.2rem;
+    }
+
+    .upm-username {
+        font-size: 1.5rem;
+    }
+
+    .upm-grid {
+        grid-template-columns: repeat(auto-fill, minmax(75px, 1fr));
+        gap: 8px;
+    }
+}
+
+@media (max-width: 500px) {
+    #series-player-page .vab-lang-group { padding: 0 8px; gap: 4px; }
+    #series-player-page .vab-lang-btn { padding: 4px 8px; font-size: 0.65rem; }
+}
+
+/* ==========================================================
+   PLAYER MÓVIL EDGE-TO-EDGE — CINE CORNETA
+   Estilos base (sin media query: el player es siempre fixed
+   full-screen, aplica en todos los tamaños).
+   ========================================================== */
+
+/* --- CONTENEDOR PRINCIPAL --- */
+#series-player-page.player-layout-view {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    display: flex; flex-direction: column; background-color: #0f0f0f;
+    z-index: 2000; padding: 0; margin: 0; width: 100vw; height: 100vh;
+    border-radius: 0; overflow: hidden; align-items: stretch;
+}
+
+/* --- ZONA SUPERIOR FIJA (Nav + Video + Títulos) --- */
+.top-fixed-section {
+    flex-shrink: 0; display: flex; flex-direction: column;
+    background-color: #0f0f0f; z-index: 10; transition: box-shadow 0.3s ease;
+}
+.top-fixed-section.scrolled {
+    box-shadow: 0 4px 15px rgba(0,0,0,0.6);
+    border-bottom: 1px solid #222;
+}
+
+/* Barra de navegación superior */
+.player-mobile-nav {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 15px;
+    padding-top: calc(10px + env(safe-area-inset-top));
+    border-bottom: 2px solid #e50914;
+}
+.player-logo-img { height: 22px; }
+#series-player-page .streaming-back-btn {
+    background: transparent; border: none; color: white;
+    font-size: 0.9rem; font-weight: bold;
+    display: flex; align-items: center; gap: 7px;
+    cursor: pointer; padding: 0;
+}
+
+/* --- BLOQUE DE VIDEO --- */
+.video-wrapper { width: 100%; background: #000; }
+.player-container { display: contents; }
+.player-container .screen {
+    width: 100%; display: block; aspect-ratio: 16/9;
+    position: relative; padding-top: 56.25%; height: 0;
+}
+.player-container .screen iframe {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%; border: none;
+}
+
+/* --- PÍLDORAS DE IDIOMA --- */
+.vab-lang-group { display: flex; gap: 8px; flex-wrap: wrap; }
+.vab-lang-btn {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: #8a8a92; font-size: 0.75rem; font-weight: 700;
+    padding: 6px 14px; border-radius: 20px;
+    cursor: pointer; transition: 0.2s; text-transform: uppercase;
+}
+.vab-lang-btn.active {
+    background: #e50914; color: white; border-color: #e50914;
+}
+
+/* --- BLOQUE DE TÍTULOS --- */
+.video-details { padding: 15px; }
+.title-header {
+    position: relative; cursor: pointer; margin-bottom: 0;
+    user-select: none; -webkit-tap-highlight-color: transparent;
+}
+.video-title {
+    font-size: 1.2rem; font-weight: bold;
+    margin: 0 0 4px 0; color: white; line-height: 1.2;
+}
+#subTitle {
+    color: #e50914; font-size: 12px; font-weight: bold;
+    margin-bottom: 4px; display: block;
+}
+.toggle-text {
+    position: absolute; bottom: 2px; right: 0;
+    font-size: 14px; color: #8a8a92; font-weight: 500;
+    background: linear-gradient(
+        90deg,
+        rgba(15,15,15,0) 0%,
+        rgba(15,15,15,1) 25%,
+        rgba(15,15,15,1) 100%
+    );
+    padding-left: 25px; padding-right: 2px;
+    opacity: 1; transition: opacity 0.25s ease; z-index: 2;
+}
+
+/* --- ZONA INFERIOR DESLIZABLE (Lista de episodios) --- */
+.episodes-section {
+    flex-grow: 1; overflow-y: auto;
+    padding: 0 15px calc(20px + env(safe-area-inset-bottom));
+    -webkit-overflow-scrolling: touch;
+}
+.episodes-section::-webkit-scrollbar { display: none; }
+
+/* Metadatos de la serie */
+.series-meta {
+    font-size: 12px; color: #8a8a92; margin-bottom: 15px;
+    display: flex; flex-wrap: wrap; align-items: center;
+    gap: 6px; line-height: 1.6;
+    border-bottom: 1px solid #222; padding-bottom: 15px;
+}
+.meta-dot { font-size: 10px; color: #555; margin: 0 2px; }
+.meta-highlight { color: #fff; font-weight: bold; }
+
+/* Área expandible de sinopsis */
+.expandable-area {
+    display: none; background-color: #181818;
+    border-radius: 12px; padding: 15px;
+    margin-bottom: 20px; animation: fadeInPlayer 0.3s ease;
+}
+@keyframes fadeInPlayer {
+    from { opacity: 0; transform: translateY(-5px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.desc-text {
+    font-size: 13px; line-height: 1.5; color: white; margin-bottom: 15px;
+}
+
+/* Controles: selector de temporada + idioma */
+.controls-row {
+    display: flex; align-items: center; justify-content: flex-start;
+    gap: 15px; margin: 10px 0 15px 0; flex-wrap: wrap;
+}
+.season-selector {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 16px; font-weight: bold; cursor: pointer;
+    padding: 8px; border-radius: 8px;
+    background-color: transparent; transition: 0.2s;
+    color: white; margin-left: -8px;
+}
+
+/* Navegación Anterior / Siguiente */
+.nav-buttons-row {
+    display: flex; gap: 10px; margin-top: 20px; margin-bottom: 20px;
+}
+.nav-buttons-row button {
+    flex: 1; padding: 12px; border-radius: 8px; border: none;
+    font-weight: bold; font-family: 'Montserrat', sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    gap: 8px; cursor: pointer; transition: 0.2s;
+}
+.nav-buttons-row .btn-prev { background: rgba(255,255,255,0.1); color: white; }
+.nav-buttons-row .btn-next { background: #e50914; color: white; }
+.nav-buttons-row button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* --- TARJETAS DE EPISODIOS --- */
+#series-player-page .episode-card {
+    display: flex; gap: 12px; margin-bottom: 16px;
+    cursor: pointer; align-items: center;
+    padding: 0; background: transparent; border: none;
+}
+#series-player-page .ep-thumb {
+    width: 120px; height: 67px; background-color: #222;
+    border-radius: 8px; flex-shrink: 0;
+    object-fit: cover; transition: border 0.2s;
+}
+#series-player-page .episode-card-info {
+    flex: 1; display: flex; flex-direction: column; justify-content: center;
+}
+#series-player-page .episode-card .ep-title {
+    font-size: 0.85rem; font-weight: bold;
+    margin: 0 0 4px 0; color: white; line-height: 1.3;
+}
+#series-player-page .episode-description {
+    font-size: 0.75rem; color: #8a8a92;
+    display: -webkit-box; -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical; overflow: hidden;
+    line-height: 1.4; max-height: none;
+}
+#series-player-page .episode-card.active { background: transparent; border: none; }
+#series-player-page .episode-card.active .ep-title { color: #e50914; }
+#series-player-page .episode-card.active .ep-thumb {
+    border: 2px solid #e50914; outline: none;
+}
+#series-player-page .episode-card .ep-num { display: none; }
+
+/* --- BOTTOM SHEET MODAL DE TEMPORADAS --- */
+.modal-overlay-sheet {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.8); z-index: 3000;
+    display: flex; flex-direction: column; justify-content: flex-end;
+    opacity: 0; pointer-events: none; transition: opacity 0.3s ease;
+}
+.modal-overlay-sheet.active { opacity: 1; pointer-events: auto; }
+.bottom-sheet {
+    background-color: #181818; border-radius: 20px 20px 0 0;
+    padding: 20px 15px calc(20px + env(safe-area-inset-bottom));
+    max-height: 75vh; display: flex; flex-direction: column;
+    transform: translateY(100%);
+    transition: transform 0.3s cubic-bezier(0.1, 0.9, 0.2, 1);
+    width: 100%; box-sizing: border-box;
+}
+.modal-overlay-sheet.active .bottom-sheet { transform: translateY(0); }
+.sheet-header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 20px; font-size: 18px; font-weight: bold; color: white;
+}
+.close-btn-sheet {
+    background: transparent; border: none; color: white;
+    font-size: 24px; cursor: pointer; padding: 0;
+}
+.season-grid-sheet {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 12px; overflow-y: auto; padding-bottom: 20px;
+}
+.season-grid-sheet::-webkit-scrollbar { display: none; }
+.season-card-sheet {
+    position: relative; border-radius: 8px; overflow: hidden;
+    aspect-ratio: 2/3; cursor: pointer;
+    background-color: #111; border: 2px solid transparent;
+}
+.season-card-sheet img {
+    width: 100%; height: 100%; object-fit: cover; display: block;
+}
+.season-card-sheet .overlay-sheet {
+    position: absolute; inset: 0;
+    background: linear-gradient(to top, rgba(0,0,0,0.9) 0%, transparent 60%);
+    display: flex; align-items: flex-end; justify-content: center;
+    padding: 10px; color: white; font-size: 0.8rem;
+    font-weight: bold; text-align: center;
+}
+.season-card-sheet.active-season { border-color: #e50914; }
+
+/* --- OCULTAR ELEMENTOS LEGACY DEL PLAYER GENÉRICO --- */
+#series-player-page .player-page-wrapper { display: none !important; }
+#series-player-page .player-top-bar     { display: none !important; }
+
+
+/* =========================================================
+   FIX: PÍLDORAS DE IDIOMA EN SERIES (Blindaje de estilos)
+   ========================================================= */
+
+/* Asegurar que la fila mantenga todo alineado */
+#series-player-page .controls-row {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 15px;
+    margin: 10px 0 15px 0;
+    flex-wrap: nowrap;
+    overflow-x: auto; /* Por si hay muchos idiomas, que se deslice */
+}
+#series-player-page .controls-row::-webkit-scrollbar {
+    display: none;
+}
+
+/* Forzar tamaño pequeño y quitar herencias del modal de cine */
+#series-player-page .controls-row .lang-select-btn,
+#series-player-page .vab-lang-btn {
+    padding: 6px 14px !important;
+    min-width: unset !important;
+    background: rgba(255, 255, 255, 0.06) !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    color: #8a8a92 !important;
+    font-size: 0.75rem !important;
+    font-weight: 700 !important;
+    font-family: 'Montserrat', sans-serif !important;
+    border-radius: 20px !important;
+    box-shadow: none !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.5px !important;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transform: none !important;
+}
+
+/* Estilo Activo (Rojo puro, sin checkmark) */
+#series-player-page .controls-row .lang-select-btn.active,
+#series-player-page .vab-lang-btn.active {
+    background: #e50914 !important;
+    border-color: #e50914 !important;
+    color: #ffffff !important;
+}
+
+/* ELIMINAR el checkmark heredado de escritorio.css */
+#series-player-page .controls-row .lang-select-btn::before,
+#series-player-page .controls-row .lang-select-btn::after,
+#series-player-page .controls-row .lang-select-btn.active::after,
+#series-player-page .vab-lang-btn::before,
+#series-player-page .vab-lang-btn::after {
+    content: none !important;
+    display: none !important;
+}
+
+/* =========================================================
+   🔥 FIX DEFINITIVO EDGE-TO-EDGE PARA SERIES (MÓVIL) 🔥
+   ========================================================= */
+
+/* 1. Ocultar la barra inferior de navegación cuando el player esté activo */
+body:has(#series-player-page.active) .bottom-nav {
+    display: none !important;
+}
+
+/* 2. Forzar el contenedor a ocupar el 100% de la pantalla real */
+#series-player-page.player-layout-view {
+    position: fixed !important; 
+    top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
+    display: flex !important; flex-direction: column !important; 
+    background-color: #0f0f0f !important;
+    z-index: 99999 !important; /* Por encima de todo */
+    padding: 0 !important; margin: 0 !important; 
+    width: 100vw !important; height: 100dvh !important;
+    border-radius: 0 !important; align-items: stretch !important;
+}
+
+/* 3. Evitar que la sección de episodios se corte abajo */
+#series-player-page .episodes-section {
+    flex: 1 1 auto !important;
+    overflow-y: auto !important;
+    padding: 0 15px 40px 15px !important; 
+    display: flex !important;
+    flex-direction: column !important;
+}
+
+/* 4. Arreglar Tarjetas de Episodios */
+#series-player-page .episode-card {
+    display: flex !important; gap: 12px !important; margin-bottom: 16px !important;
+    align-items: center !important; padding: 0 !important; 
+    background: transparent !important; border: none !important;
+}
+#series-player-page .episode-card.active {
+    background: transparent !important; border: none !important;
+}
+
+/* Thumbnail */
+#series-player-page .ep-thumb {
+    width: 120px !important; height: 67px !important; 
+    border-radius: 8px !important; object-fit: cover !important; 
+    border: 2px solid transparent !important; 
+}
+#series-player-page .episode-card.active .ep-thumb {
+    border: 2px solid #e50914 !important;
+}
+
+/* Textos de la tarjeta */
+#series-player-page .episode-card-info {
+    display: flex !important; flex-direction: column !important;
+    justify-content: center !important; flex: 1 !important;
+}
+#series-player-page .episode-card .ep-title {
+    font-size: 0.85rem !important; font-weight: bold !important; 
+    color: white !important; margin: 0 0 4px 0 !important;
+}
+#series-player-page .episode-card.active .ep-title {
+    color: #e50914 !important;
+}
+#series-player-page .episode-description {
+    font-size: 0.75rem !important; color: #8a8a92 !important; 
+    display: -webkit-box !important; -webkit-line-clamp: 2 !important; 
+    -webkit-box-orient: vertical !important; overflow: hidden !important; 
+    margin: 0 !important;
+}
+#series-player-page .ep-num { display: none !important; }
+
+/* 5. Asegurar Botones de Navegación Abajo */
+#series-player-page .nav-buttons-row {
+    display: flex !important; gap: 10px !important; 
+    margin-top: auto !important; margin-bottom: 20px !important;
+    flex-shrink: 0 !important; 
+}
+#series-player-page .nav-buttons-row button {
+    flex: 1 !important; padding: 12px !important; 
+    border-radius: 8px !important; border: none !important;
+    font-weight: bold !important; font-family: 'Montserrat', sans-serif !important;
+    display: flex !important; align-items: center !important; 
+    justify-content: center !important; gap: 8px !important; cursor: pointer !important;
+}
+#series-player-page .btn-prev { background: rgba(255,255,255,0.1) !important; color: white !important; }
+#series-player-page .btn-next { background: #e50914 !important; color: white !important; }
+
+/* 6. Píldoras de Idioma (Quitar Checkmark) */
+#series-player-page .lang-selector-group {
+    display: flex !important; gap: 8px !important; flex-wrap: wrap !important;
+}
+#series-player-page .vab-lang-btn, 
+#series-player-page .controls-row .lang-select-btn {
+    padding: 6px 14px !important; min-width: unset !important;
+    background: rgba(255, 255, 255, 0.06) !important; 
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    color: #8a8a92 !important; font-size: 0.75rem !important; 
+    border-radius: 20px !important; text-transform: uppercase !important;
+    display: flex !important; align-items: center !important; justify-content: center !important;
+    box-shadow: none !important; transform: none !important; font-family: 'Montserrat', sans-serif !important; font-weight: 700 !important;
+}
+#series-player-page .vab-lang-btn.active, 
+#series-player-page .controls-row .lang-select-btn.active {
+    background: #e50914 !important; border-color: #e50914 !important; color: #ffffff !important;
+}
+#series-player-page .vab-lang-btn::before, #series-player-page .vab-lang-btn::after,
+#series-player-page .controls-row .lang-select-btn::before, #series-player-page .controls-row .lang-select-btn::after {
+    display: none !important;
+}
