@@ -526,8 +526,21 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
         // --- 🧠 LÓGICA DE IDIOMAS DINÁMICA ---
         const seriesTracks = getLangTracks(firstEpisode);
         const hasLangOptions = seriesTracks.length > 1;
+        
+        // 🔥 NUEVO: RECUPERAR IDIOMA GUARDADO DEL USUARIO
+        let savedLang = null;
+        try {
+            const prefs = JSON.parse(localStorage.getItem('seriesLangPrefs')) || {};
+            savedLang = prefs[seriesId];
+        } catch(e) {}
+
         let initialLang = seriesTracks[0]?.lang || 'en';
         if (!hasLangOptions && seriesTracks[0]?.lang === 'es') initialLang = 'es';
+        
+        // Si existe el idioma que el usuario prefirió en este capítulo, lo forzamos
+        if (savedLang && seriesTracks.some(t => t.lang === savedLang)) {
+            initialLang = savedLang;
+        }
  
         shared.appState.player.state[seriesId] = { 
             season: seasonNum, 
@@ -1139,6 +1152,14 @@ function updateNavButtons(seriesId, season, episodeIndex) {
 
 function changeLanguage(seriesId, lang) {
     shared.appState.player.state[seriesId].lang = lang;
+    
+    // 🔥 NUEVO: GUARDAR LA ELECCIÓN EN LA MEMORIA DEL NAVEGADOR
+    try {
+        let prefs = JSON.parse(localStorage.getItem('seriesLangPrefs')) || {};
+        prefs[seriesId] = lang;
+        localStorage.setItem('seriesLangPrefs', JSON.stringify(prefs));
+    } catch(e) { console.warn("No se pudo guardar el idioma"); }
+
     const { season, episodeIndex } = shared.appState.player.state[seriesId];
     openEpisode(seriesId, season, episodeIndex);
 }
