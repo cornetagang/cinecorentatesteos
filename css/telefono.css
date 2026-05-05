@@ -2302,12 +2302,3 @@ body:has(#series-player-page.active) .bottom-nav {
 #series-player-page .controls-row .lang-select-btn::before, #series-player-page .controls-row .lang-select-btn::after {
     display: none !important;
 }
-
-/* Forzar iframe a comportarse como desktop */
-.screen iframe,
-#series-player-page iframe {
-    width: 1280px !important;          /* Ancho desktop simulado */
-    height: 720px !important;
-    transform: scale(0.3);
-    transform-origin: top left;
-}
