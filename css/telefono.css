@@ -2308,7 +2308,6 @@ body:has(#series-player-page.active) .bottom-nav {
 #series-player-page iframe {
     width: 1280px !important;          /* Ancho desktop simulado */
     height: 720px !important;
-    transform: scale(var(--iframe-scale, 1));
+    transform: scale(0.3);
     transform-origin: top left;
-    border: none;
 }
