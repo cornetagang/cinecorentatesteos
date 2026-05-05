@@ -73,10 +73,20 @@ function getLangTracks(data) {
 function getEmbedUrl(videoId) {
     if (!videoId || !videoId.trim()) return '';
     const id = videoId.trim();
+    
+    // 1. Identificar Google Drive (Empieza por 1 y es largo)
     const isGoogleDrive = id.startsWith('1') && id.length >= 25;
     if (isGoogleDrive) {
         return `https://drive.google.com/file/d/${id}/preview?rm=minimal`;
     }
+    
+    // 2. Identificar OK.ru (Solo números)
+    if (/^\d+$/.test(id)) {
+        // Se añade /videoembed/ y el símbolo $ para interpolar el id correctamente
+        return `https://ok.ru/videoembed/${id}?nochat=1`;
+    }
+    
+    // 3. Por defecto, asumir Streamtape (o cualquier otro sistema de IDs cortos)
     return `https://streamtape.com/e/${id}/`;
 }
 
