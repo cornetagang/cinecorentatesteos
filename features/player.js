@@ -70,13 +70,19 @@ function getLangTracks(data) {
 // - Google Drive: empieza con "1" y tiene 25+ caracteres (ej: 1cfLvKRV-hI3LimRY97ptxp3...)
 // - Streamtape:   ID corto alfanumérico (ej: mvYbMvV3bXcb864)
 // ===========================================================
+const GDRIVE_PROXY = 'https://gdrive-proxy.benja104lokito.workers.dev/'; // ← tu URL del worker
+
 function getEmbedUrl(videoId) {
     if (!videoId || !videoId.trim()) return '';
     const id = videoId.trim();
     const isGoogleDrive = id.startsWith('1') && id.length >= 25;
+
     if (isGoogleDrive) {
-        return `https://drive.google.com/file/d/${id}/preview?rm=minimal`;
+        // Antes: drive.google.com directo → detecta Android → player horrible
+        // Ahora:  pasa por el Worker con UA de Windows → player desktop 🎯
+        return `${GDRIVE_PROXY}?id=${id}`;
     }
+
     return `https://streamtape.com/e/${id}/`;
 }
 
