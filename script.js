@@ -1,6 +1,6 @@
 // ===========================================================
 // CINE CORNETA - SCRIPT PRINCIPAL
-// Versión: 9.6 (29 de Abril 2026)
+// Versión: 9.7 (5 de mayo 2026)
 // ===========================================================
 
 // ===========================================================
@@ -80,7 +80,6 @@ let rouletteModule = null;
 let reviewsModule = null; // 🔥 NUEVO
 let iptvModule = null;
 
-let requestsModule = null;
 let universesModule = null;
 let reportsModule = null;
 
@@ -89,7 +88,7 @@ async function getPlayerModule() {
     const module = await import('./features/player.js?v=8');
     module.initPlayer({
         appState, DOM, ErrorHandler, auth, db,
-        addToHistoryIfLoggedIn, 
+        addToHistoryIfLoggedIn, switchView,
         closeAllModals: () => modalManager.closeAll(), 
         openDetailsModal
     });
@@ -129,15 +128,6 @@ async function getReviewsModule() {
     return module;
 }
 
-async function getRequestsModule() {
-    if (requestsModule) return requestsModule;
-    const module = await import('./features/requests.js?v=8');
-    module.initRequests({
-        appState, DOM, auth, db, ErrorHandler
-    });
-    requestsModule = module;
-    return module;
-}
 
 async function getUniversesModule() {
     if (universesModule) return universesModule;
@@ -222,7 +212,7 @@ const DOM = {
     detailsModal: document.getElementById('details-modal'),
     cinemaModal: document.getElementById('cinema'),
     rouletteModal: document.getElementById('roulette-modal'),
-    seriesPlayerModal: document.getElementById('series-player-modal'),
+    seriesPlayerModal: document.getElementById('series-player-page'),
     authModal: document.getElementById('auth-modal'),
     confirmationModal: document.getElementById('confirmation-modal'),
     searchInput: document.getElementById('search-input'),
@@ -566,9 +556,6 @@ async function fetchInitialDataWithCache() {
         // 🔥 Inicializar módulo de reviews ANTES de setupRatingsListener
         await getReviewsModule();
         
-        // 🔥 Una sola notificación por sesión
-        getRequestsModule().then(m => m.checkSessionNotification());
-        
         await setupAndShow(cachedMetadata?.movies, cachedMetadata?.series);
         refreshDataInBackground(); // Actualiza silenciosamente por si acaso
         
@@ -625,9 +612,6 @@ async function fetchInitialDataWithCache() {
             
             // 🔥 Inicializar módulo de reviews
             await getReviewsModule();
-            
-            // 🔥 Una sola notificación por sesión
-            getRequestsModule().then(m => m.checkSessionNotification());
             
             if (!localStorage.getItem('local_last_update')) {
                 localStorage.setItem('local_last_update', Date.now());
@@ -795,10 +779,10 @@ async function switchView(filter) {
         document.getElementById('profile-hub-container'),
         document.getElementById('sagas-hub-container'),
         document.getElementById('reviews-container'),
-        document.getElementById('requests-container'),
         document.getElementById('reports-container'),
         document.getElementById('live-tv-section'),
-        document.getElementById('iptv-section')
+        document.getElementById('iptv-section'),
+        document.getElementById('series-player-page')
     ];
 
     containers.forEach(el => { 
@@ -879,6 +863,10 @@ async function switchView(filter) {
         if (DOM.sortBy) DOM.sortBy.value = 'recent';
         const sortText = document.getElementById('sort-text');
         if (sortText) sortText.textContent = 'Recientes';
+        const requestFilterEl = document.getElementById('request-filter');
+        const requestTextEl = document.getElementById('request-text');
+        if (requestFilterEl) requestFilterEl.value = 'all';
+        if (requestTextEl) requestTextEl.textContent = 'Pedidos';
         populateFilters(filter); 
         applyAndDisplayFilters(filter);
         return;
@@ -907,24 +895,12 @@ async function switchView(filter) {
         const reviewsContainer = document.getElementById('reviews-container');
         if(reviewsContainer) {
             reviewsContainer.style.display = 'block';
-            // 🔥 Llamar al módulo de reviews
+            reviewsContainer.style.marginTop = '0';
             if (reviewsModule && reviewsModule.renderReviewsGrid) {
                 reviewsModule.renderReviewsGrid();
             }
         }
-        return;
-    }
-
-    // 7b. PEDIDOS
-    if (filter === 'requests') {
-        const reqContainer = document.getElementById('requests-container');
-        if (reqContainer) {
-            reqContainer.style.display = 'block';
-            reqContainer.style.padding = '30px clamp(15px, 4vw, 60px)';
-        }
-        const reqModule = await getRequestsModule();
-        reqModule.renderRequestsSection();
-        window.scrollTo(0, 0);
+        window.scrollTo({ top: 0, behavior: 'instant' });
         return;
     }
 
@@ -973,9 +949,9 @@ async function switchView(filter) {
             'filter-controls',
             'genre-dropdown-visual',
             'lang-dropdown-visual',
-            'request-dropdown-visual',
             'sort-dropdown-visual',
             'letter-dropdown-visual',
+            'request-dropdown-visual',
             'ucm-sort-buttons',
             'back-to-sagas-btn',
             'pagination-controls'
@@ -994,8 +970,8 @@ async function switchView(filter) {
 
 // ==========================================
 // FILTROS EN CASCADA
-// Repopula idioma y pedido según el subconjunto
-// que resulta de aplicar género + idioma activos.
+// Repopula idioma según el subconjunto
+// que resulta de aplicar género activo.
 // ==========================================
 function refreshDependentFilters(type, activeGenre, activeLang) {
     let sourceData;
@@ -1025,7 +1001,7 @@ function refreshDependentFilters(type, activeGenre, activeLang) {
         });
     }
 
-    // Subconjunto también filtrado por idioma (para repopular pedidos)
+    // Subconjunto también filtrado por idioma
     let filteredByLang = filtered;
     if (activeLang && activeLang !== 'all') {
         const lVal = activeLang.toLowerCase().trim();
@@ -1055,24 +1031,6 @@ function refreshDependentFilters(type, activeGenre, activeLang) {
     }
 
     // ── Repopular PEDIDOS (basado en filtro de género + idioma) ──
-    const requestList   = document.getElementById('request-menu-list');
-    const requestSelect = document.getElementById('request-filter');
-    const requestVisual = document.getElementById('request-dropdown-visual');
-    if (requestList && requestSelect) {
-        requestList.innerHTML = '';
-        requestSelect.innerHTML = '<option value="all">Todos</option>';
-        requestList.appendChild(_makeFilterItem('all', 'Todos', 'request'));
-
-        const names = new Set();
-        filteredByLang.forEach(([, item]) => {
-            if (item.pedido && item.pedido.trim()) names.add(item.pedido.trim());
-        });
-        Array.from(names).sort().forEach(name => {
-            requestList.appendChild(_makeFilterItem(name, name, 'request'));
-            requestSelect.innerHTML += `<option value="${name}">${name}</option>`;
-        });
-        if (requestVisual) requestVisual.style.display = names.size === 0 ? 'none' : 'block';
-    }
 }
 
 // Crea un item de dropdown sin necesitar el closure de populateFilters
@@ -1088,12 +1046,8 @@ function _makeFilterItem(value, label, menuType) {
             document.getElementById('lang-text').textContent = label === 'Todos' ? 'Idioma' : label.split(' (')[0];
             DOM.langFilter.value = value;
             document.getElementById('lang-dropdown-visual')?.classList.remove('open');
-        } else if (menuType === 'request') {
-            document.getElementById('request-text').textContent = label === 'Todos' ? 'Pedidos' : label.split(' (')[0];
-            document.getElementById('request-filter').value = value;
-            document.getElementById('request-dropdown-visual')?.classList.remove('open');
+            applyAndDisplayFilters(currentType);
         }
-        applyAndDisplayFilters(currentType);
     };
     return div;
 }
@@ -1118,16 +1072,16 @@ function populateFilters(type) {
     const sortVisual  = document.getElementById('sort-dropdown-visual');
     const langVisual  = document.getElementById('lang-dropdown-visual');
     const letterVisual = document.getElementById('letter-dropdown-visual');
-    const requestVisual = document.getElementById('request-dropdown-visual'); // 🔥 NUEVO
 
     const genreList = document.getElementById('genre-menu-list');
     const langList  = document.getElementById('lang-menu-list');
     const letterList = document.getElementById('letter-menu-list');
-    const requestList = document.getElementById('request-menu-list'); // 🔥 NUEVO
+    const requestList = document.getElementById('request-menu-list');
     
     // Selects ocultos
-    const requestSelect = document.getElementById('request-filter'); // 🔥 NUEVO
     const letterSelect = document.getElementById('letter-filter');
+    const requestSelect = document.getElementById('request-filter');
+    const requestVisual = document.getElementById('request-dropdown-visual');
 
     const controlsContainer = document.getElementById('filter-controls');
     if (controlsContainer) controlsContainer.style.display = 'flex';
@@ -1287,17 +1241,8 @@ function populateFilters(type) {
     if (genreVisual) genreVisual.style.display = (confGenres !== 'no') ? 'block' : 'none';
     if (langVisual) langVisual.style.display = (confLang === 'si') ? 'block' : 'none';
     if (letterVisual) letterVisual.style.display = 'block';
+    if (requestVisual) requestVisual.style.display = (type === 'movie' || type === 'series') ? 'block' : 'none';
     
-    // VISIBILIDAD PEDIDOS (Siempre visible en pelis/series)
-    if (requestVisual) {
-        // Si estamos en 'movie' o 'series' lo mostramos, si es Saga lo ocultamos
-        if (type === 'movie' || type === 'series') {
-            requestVisual.style.display = 'block';
-        } else {
-            requestVisual.style.display = 'none';
-        }
-    }
-
     // Sort Buttons
     const ucmButtons = document.getElementById('ucm-sort-buttons');
     const isDynamicSaga = (type !== 'movie' && type !== 'series');
@@ -1306,16 +1251,16 @@ function populateFilters(type) {
         ucmButtons.style.display = (confSortBtn === 'si') ? 'flex' : 'none';
         if (sortVisual) {
             if (confSortBtn === 'si') {
-            // Tiene botones UCM → ocultar dropdown de orden
-            sortVisual.style.display = 'none';
-        } else if (isDynamicSaga && confSortBtn === 'no') {
-            // Saga dinámica con sort_buttons=no → ocultar también el dropdown
-            sortVisual.style.display = 'none';
-        } else {
-            // Películas / Series normales → mostrar dropdown
-            sortVisual.style.display = 'block';
+                // Tiene botones UCM → ocultar dropdown de orden
+                sortVisual.style.display = 'none';
+            } else if (isDynamicSaga && confSortBtn === 'no') {
+                // Saga dinámica con sort_buttons=no → ocultar también el dropdown
+                sortVisual.style.display = 'none';
+            } else {
+                // Películas / Series normales → mostrar dropdown
+                sortVisual.style.display = 'block';
+            }
         }
-    }
     } else {
         if (sortVisual) {
             sortVisual.style.display = (isDynamicSaga && confSortBtn === 'no') ? 'none' : 'block';
@@ -1518,38 +1463,28 @@ function populateFilters(type) {
         });
     }
 
-    // 🔥 5. FILTRO DE PEDIDOS (NUEVO)
+    // 🔥 5. FILTRO DE PEDIDOS
     if (requestList && requestSelect) {
-        
-        // --- AGREGA ESTA LÍNEA AQUÍ ---
-        document.getElementById('request-text').textContent = "Pedidos"; 
-        // ------------------------------
-
+        document.getElementById('request-text').textContent = 'Pedidos';
         requestList.innerHTML = '';
-        requestSelect.innerHTML = `<option value="all">Todos</option>`;
-        
-        // Opción "Todos"
+        requestSelect.innerHTML = '<option value="all">Todos</option>';
         requestList.appendChild(createItem('all', 'Todos', 'request'));
 
-        // Extraer pedidos con conteo
         const requestCounts = new Map();
         Object.values(sourceData).forEach(item => {
             const p = item.pedido?.trim();
             if (p) requestCounts.set(p, (requestCounts.get(p) || 0) + 1);
         });
 
-        // Crear opciones ordenadas con contador
         [...requestCounts.keys()].sort().forEach(name => {
             const lbl = `${name} (${requestCounts.get(name)})`;
             requestList.appendChild(createItem(name, lbl, 'request'));
             requestSelect.innerHTML += `<option value="${name}">${lbl}</option>`;
         });
 
-        if (requestCounts.size === 0) {
-            requestVisual.style.display = 'none';
-        }
+        if (requestVisual) requestVisual.style.display = requestCounts.size === 0 ? 'none' : 'block';
     }
-    
+
     // Triggers
     const configDropdown = (trigger, visual) => {
         if (!trigger) return;
@@ -1568,11 +1503,11 @@ function populateFilters(type) {
     if(document.getElementById('sort-trigger')) configDropdown(document.getElementById('sort-trigger'), sortVisual);
     if(document.getElementById('lang-trigger')) configDropdown(document.getElementById('lang-trigger'), langVisual); 
     if(document.getElementById('letter-trigger')) configDropdown(document.getElementById('letter-trigger'), letterVisual);
-    if(document.getElementById('request-trigger')) configDropdown(document.getElementById('request-trigger'), requestVisual); // 🔥 NUEVO
+    if(document.getElementById('request-trigger')) configDropdown(document.getElementById('request-trigger'), requestVisual);
 }
 
 // ==========================================
-// FUNCIÓN: APLICAR Y MOSTRAR (CON FILTRO PEDIDOS)
+// FUNCIÓN: APLICAR Y MOSTRAR
 // ==========================================
 async function applyAndDisplayFilters(type) {
     let sourceData;
@@ -1595,7 +1530,6 @@ async function applyAndDisplayFilters(type) {
         (DOM.sortBy.value || 'recent');
         
     const letterFilterVal = document.getElementById('letter-filter')?.value || 'all';
-
     const requestFilterVal = document.getElementById('request-filter')?.value || 'all';
 
     gridEl.innerHTML = `<div style="width:100%;height:60vh;display:flex;justify-content:center;align-items:center;grid-column:1/-1;"><p class="loading-text">Cargando...</p></div>`;
@@ -1652,12 +1586,9 @@ async function applyAndDisplayFilters(type) {
         });
     }
 
-    // 🔥 4. FILTRO POR PEDIDOS (NUEVO)
+    // 4. FILTRO POR PEDIDO
     if (requestFilterVal !== 'all') {
-        content = content.filter(([id, item]) => {
-            // Comparamos el nombre exacto del pedido
-            return String(item.pedido || '').trim() === requestFilterVal;
-        });
+        content = content.filter(([, item]) => (item.pedido || '').trim() === requestFilterVal);
     }
 
     // 🆕 5. FILTRO POR RESEÑA: si se ordena por rating, mostrar solo las que tienen reseña
@@ -1949,9 +1880,6 @@ function setupEventListeners() {
         } else if (dropdown.id === 'sort-dropdown-visual') {
             selectId = 'sort-by';
             triggerTextId = 'sort-text';
-        } else if (dropdown.id === 'request-dropdown-visual') { // 🔥 NUEVO: Pedidos
-            selectId = 'request-filter';
-            triggerTextId = 'request-text';
         }
 
         if (!selectId) return;
@@ -2031,6 +1959,10 @@ function setupEventListeners() {
                 if (!cinemaOpen && !seriesOpen) document.body.classList.remove('modal-open');
                 return;
             }
+
+            // 🔥 EXCEPCIÓN: series-player-page es una página independiente,
+            // no un modal. Nunca debe cerrarse por un click en el fondo.
+            if (e.target.id === 'series-player-page') return;
 
             ModalManager.closeAll();
         }
@@ -2483,12 +2415,17 @@ function changeHeroMovie(itemObj) {
         
         DOM.heroSection.style.backgroundImage = `url(${imageUrl})`;
         
+        // Ocultar el contenido mientras se cargan los settings del logo
+        heroContent.style.opacity = '0';
+        heroContent.style.transition = 'opacity 0.3s ease';
+
         const heroTitleContainer = heroContent.querySelector('#hero-title-container');
         if (data.logoUrl) {
             heroTitleContainer.innerHTML = `<div class="hero-logo-container"><img src="${data.logoUrl}" alt="${data.title}" class="hero-logo-img"></div>`;
             const heroLogoContainer = heroTitleContainer.querySelector('.hero-logo-container');
             const heroSlot = getLogoSlot('hero');
             loadLogoSettings(id, heroLogoContainer, () => {
+                heroContent.style.opacity = '1';
                 const user = auth.currentUser;
                 if (user && user.email === 'baquezadat@gmail.com') {
                     initLogoEditor(id, heroLogoContainer, heroSlot);
@@ -2496,6 +2433,7 @@ function changeHeroMovie(itemObj) {
             }, heroSlot);
         } else {
             heroTitleContainer.innerHTML = `<h1 class="hero-title-text">${data.title}</h1>`;
+            heroContent.style.opacity = '1';
         }
         heroContent.querySelector('#hero-synopsis').textContent = data.synopsis;
 
@@ -2875,6 +2813,17 @@ function createContinueWatchingCard(itemData) {
 // 5. MODALES (GENERAL, DETALLES)
 // ===========================================================
 function closeAllModals() {
+    // 🔥 FIX: Si la página del player de series está activa, cerrarla correctamente
+    // antes de limpiar los modales (para que switchView restaure las secciones)
+    const seriesPage = document.getElementById('series-player-page');
+    if (seriesPage && seriesPage.classList.contains('active')) {
+        seriesPage.classList.remove('active', 'season-grid-view', 'player-layout-view');
+        seriesPage.style.display = 'none';
+        if (appState?.player) appState.player.activeSeriesId = null;
+        // Restaurar la vista principal
+        if (typeof switchView === 'function') switchView(appState?.currentFilter || 'all');
+    }
+
     // 1. Cerrar todos los modales visualmente
     document.querySelectorAll('.modal.show').forEach(modal => {
         modal.classList.remove('show');
@@ -3029,14 +2978,6 @@ async function openDetailsModal(id, type, triggerElement = null) {
             const isVetada = !isSeries && data.estado && data.estado.toLowerCase() === 'vetada';
             const isProximamente = !isSeries && data.estado && data.estado.toLowerCase() !== 'vetada' && data.estado.toLowerCase() !== 'mantenimiento' && data.estado.trim() !== '';
             if (isSeries || isVetada || isProximamente) {
-                // B. PEDIDO
-                if (data.pedido) {
-                    const requestPill = document.createElement('span');
-                    requestPill.className = 'meta-pill request-pill'; 
-                    requestPill.innerHTML = `<i class="fas fa-user-circle" style="margin-right:5px; color:#ffd700;"></i> ${data.pedido}`;
-                    detailsMeta.appendChild(requestPill);
-                }
-
                 // C. AÑO
                 if (data.year) {
                     const yearPill = document.createElement('span');
@@ -3635,10 +3576,6 @@ function updateUIAfterAuthStateChange(user) {
         setupRealtimeHistoryListener(user);
         getProfileModule();
 
-        // Solo aviso de pendientes para admin (el banner de sesión ya salió al cargar)
-        getRequestsModule().then(m => {
-            setTimeout(() => m.checkPendingNotifications(), 500);
-        });
 
         // Mostrar link de Reportes en dropdown solo para admin
         const ADMIN_EMAIL_REPORTS = 'baquezadat@gmail.com';
@@ -4731,7 +4668,7 @@ window.adminLocalRefresh = async () => {
 
 // Limpia el caché preservando datos de usuario importantes
 function safeClearStorage() {
-    const preserve = ['silencedRequests', 'notifViewCounts', 'annViewCounts'];
+    const preserve = [];
     const saved = {};
     preserve.forEach(k => { try { saved[k] = localStorage.getItem(k); } catch {} });
     localStorage.clear();
@@ -4838,7 +4775,7 @@ window.ErrorHandler = ErrorHandler;
 window.ContentManager = ContentManager;
 window.cacheManager = cacheManager;
 
-console.log('✅ Cine Corneta v9.6 cargado correctamente');
+console.log('✅ Cine Corneta v9.7 beta cargado correctamente');
 // ===========================================================
 // COMPATIBILIDAD: Funciones que ahora están en el módulo
 // ===========================================================
