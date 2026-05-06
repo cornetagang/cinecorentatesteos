@@ -1,13 +1,13 @@
 // ===========================================================
-// MÓDULO DEL REPRODUCTOR (V2 - ARTPLAYER + MULTI-SAGA)
+// MÓDULO DEL REPRODUCTOR (V3 - ARTPLAYER + SRT/ASS SPLIT)
 // ===========================================================
 
 import { logError } from '../utils/logger.js'; 
 import { WORKER_URL } from "../core/config.js";
+import ContentManager from '../utils/content-manager.js';
 
 // ─── Constantes para SubtitlesOctopus ────────────────────────
-// ✅ FIX: Cambiado de jsDelivr a unpkg para evitar el error "Corrupted brotli dictionary"
-// jsDelivr sirve el worker con compresión brotli que se corrompe al convertirlo a blob URL
+// ✅ FIX: unpkg evita el error "Corrupted brotli dictionary" de jsDelivr
 const OCTOPUS_WORKER = "https://unpkg.com/libass-wasm@4/dist/js/subtitles-octopus-worker.js";
 const OCTOPUS_WASM   = "https://unpkg.com/libass-wasm@4/dist/js/subtitles-octopus-worker.wasm";
 
@@ -28,7 +28,9 @@ function isDriveId(id) {
 
 function buildWorkerUrl(type, driveId) {
     if (!driveId) return null;
-    return `${WORKER_URL}/${type}/${driveId}`;
+    // ✅ Query params: /?id=<fileId>&type=video|sub
+    // El Worker detecta type=sub para forzar Content-Type: text/plain
+    return `${WORKER_URL}/?id=${driveId}&type=${type}`;
 }
 
 function buildErrorHTML(message = "No se pudo cargar el video.") {
@@ -65,7 +67,15 @@ class CinePlayer {
         this._mountId = 0;
     }
 
-    async load({ videoId, subId, title = "", poster = "" }) {
+    // ===========================================================
+    // 🎯 REGLAS DE SUBTÍTULOS:
+    //   subType === 'srt' → Ruta Liviana: art.subtitle.url nativo
+    //                       Sin WASM. Ideal para móviles. Prioridad.
+    //   subType === 'ass' → Ruta Avanzada: SubtitlesOctopus WASM
+    //                       Solo cuando el contenido lo necesita.
+    //   !subId            → Sin subtítulos, no se intenta nada.
+    // ===========================================================
+    async load({ videoId, subId = null, subType = null, title = "", poster = "" }) {
         destroyPrevious(this.container);
         this.container.innerHTML = "";
 
@@ -81,7 +91,12 @@ class CinePlayer {
         }
 
         const videoUrl = buildWorkerUrl("video", videoId);
-        const subUrl = subId ? buildWorkerUrl("sub", subId) : null;
+        const subUrl   = subId ? buildWorkerUrl("sub", subId) : null;
+
+        // Normalizar subType para comparaciones seguras
+        const resolvedSubType = subUrl
+            ? (ContentManager.getSubtitleConfig({ subId, subType }).subType)
+            : null;
 
         const available = await this._pingWorker(videoUrl);
         if (!available) {
@@ -90,99 +105,146 @@ class CinePlayer {
         }
 
         const artConfig = {
-    container: this.container,
-    url: videoUrl,
-    title,
-    poster,
-    theme: '#e50914', // 🔥 El rojo oficial de Cine Corneta
-    volume: 1,
-    autoplay: false,
-    pip: true,
-    autoSize: true,
-    autoHeight: true,
-    fastForward: true,
-    backdrop: true,
-    lock: true,
-    autoMini: false,
-    miniProgressBar: true,
-    autoOrientation: true,
-    screenshot: false,
-    hotkey: true,
-    mutex: true,
-    fullscreen: true,
-    fullscreenWeb: true,
-    lang: navigator.language.toLocaleLowerCase() || "es",
-    moreVideoAttr: { 
-        crossOrigin: "anonymous", 
-        playsinline: true, 
-        preload: "metadata" 
-    },
+            container: this.container,
+            url: videoUrl,
+            title,
+            poster,
+            theme: '#e50914',
+            volume: 1,
+            autoplay: false,
+            pip: true,
+            autoSize: true,
+            autoHeight: true,
+            fastForward: true,
+            backdrop: true,         // ✅ Activado
+            lock: true,             // ✅ Activado (botón lock en móvil)
+            autoMini: false,
+            miniProgressBar: true,  // ✅ Activado
+            autoOrientation: true,  // ✅ Activado (rotación automática móvil)
+            screenshot: false,
+            hotkey: true,
+            mutex: true,
+            fullscreen: true,
+            fullscreenWeb: true,
+            lang: navigator.language.toLocaleLowerCase() || "es",
+            moreVideoAttr: { 
+                crossOrigin: "anonymous",  // ✅ Seguridad CORS
+                playsinline: true, 
+                preload: "metadata" 
+            },
 
-    // 🛠️ CONFIGURACIÓN DE MENÚS (Evita que se vea mal en móvil)
-    setting: true, 
-    settings: [
-        {
-            width: 200,
-            html: 'Velocidad',
-            tooltip: '1.0x',
-            name: 'playbackRate',
-            icon: '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
-            selector: [
-                { url: '0.5', html: '0.5x' },
-                { url: '0.75', html: '0.75x' },
-                { default: true, url: '1.0', html: 'Normal' },
-                { url: '1.25', html: '1.25x' },
-                { url: '1.5', html: '1.5x' },
-                { url: '2.0', html: '2.0x' },
+            // 🟢 RUTA LIVIANA (SRT): Configuración nativa en artConfig
+            // ArtPlayer maneja el SRT sin WASM, perfecto para móviles
+            ...(resolvedSubType === 'srt' && subUrl ? {
+                subtitle: {
+                    url: subUrl,
+                    type: 'srt',
+                    encoding: 'utf-8',
+                    escape: false,
+                    style: {
+                        color: '#ffffff',
+                        fontSize: '20px',
+                        textShadow: '1px 1px 3px rgba(0,0,0,0.8)',
+                    }
+                }
+            } : {}),
+
+            // 🛠️ PANEL DE AJUSTES — ancho fijo 260px (no flota feo en móvil)
+            setting: true, 
+            settings: [
+                {
+                    width: 260,   // ✅ Fijo en 260px
+                    html: 'Velocidad',
+                    tooltip: '1.0x',
+                    name: 'playbackRate',
+                    icon: '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
+                    selector: [
+                        { url: '0.5',  html: '0.5x' },
+                        { url: '0.75', html: '0.75x' },
+                        { default: true, url: '1.0', html: 'Normal' },
+                        { url: '1.25', html: '1.25x' },
+                        { url: '1.5',  html: '1.5x' },
+                        { url: '2.0',  html: '2.0x' },
+                    ],
+                    onSelect: function (item) {
+                        this.playbackRate = parseFloat(item.url);
+                        return item.html;
+                    },
+                },
+                {
+                    width: 260,   // ✅ Fijo en 260px
+                    html: 'Relación de Aspecto',
+                    name: 'aspectRatio',
+                    selector: [
+                        { default: true, html: 'Default', url: 'default' },
+                        { html: '16:9', url: '16:9' },
+                        { html: '4:3',  url: '4:3'  },
+                    ],
+                    onSelect: function (item) {
+                        this.aspectRatio = item.url;
+                        return item.html;
+                    },
+                },
+
+                // 📝 TAMAÑO DE SUBTÍTULOS — solo activo en ruta SRT (motor nativo)
+                // Para ASS/Octopus el tamaño viene definido en el propio archivo .ass
+                ...(resolvedSubType === 'srt' && subUrl ? [{
+                    width: 260,
+                    html: 'Tamaño Subtítulos',
+                    tooltip: 'Mediano',
+                    name: 'subtitleSize',
+                    icon: '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>',
+                    selector: [
+                        { url: '14px', html: 'Pequeño'  },
+                        { url: '18px', html: 'Mediano', default: true },
+                        { url: '24px', html: 'Grande'  },
+                        { url: '30px', html: 'Extra'   },
+                    ],
+                    onSelect: function (item) {
+                        this.subtitle.style({ fontSize: item.url });
+                        return item.html;
+                    },
+                }] : []),
             ],
-            onSelect: function (item) {
-                this.playbackRate = parseFloat(item.url);
-                return item.html;
-            },
-        },
-        {
-            width: 200,
-            html: 'Relación de Aspecto',
-            name: 'aspectRatio',
-            column: 2, // Lo organiza en dos columnas si hay muchas opciones
-            selector: [
-                { default: true, html: 'Default', url: 'default' },
-                { html: '16:9', url: '16:9' },
-                { html: '4:3', url: '4:3' },
+
+            // 🎨 Menú click derecho personalizado
+            contextmenu: [
+                {
+                    html: 'Cine Corneta Player',
+                    click: function (contextmenu) {
+                        console.info('Reproductor oficial');
+                        contextmenu.show = false;
+                    },
+                }
             ],
-            onSelect: function (item) {
-                this.aspectRatio = item.url;
-                return item.html;
-            },
-        },
-    ],
 
-    // 🎨 Menú click derecho personalizado
-    contextmenu: [
-        {
-            html: 'Cine Corneta Player',
-            click: function (contextmenu) {
-                console.info('Reproductor oficial');
-                contextmenu.show = false;
-            },
-        }
-    ],
-
-    ...this.options,
-};
+            ...this.options,
+        };
 
         const art = new Artplayer(artConfig);
         this.art = art;
         this.container._artInstance = art;
 
+        // ─── Asignación de subtítulos según tipo ─────────────────
         if (subUrl) {
-            art.on("ready", () => this._mountOctopus(art.video, subUrl));
-            art.on("seek", () => { if (this.octopus) this.octopus.setCurrentTime(art.currentTime); });
+            if (resolvedSubType === 'srt') {
+                // 🟢 RUTA LIVIANA: ya configurado en artConfig.subtitle
+                // Solo aseguramos que esté visible una vez listo
+                art.on('ready', () => {
+                    art.subtitle.show = true;
+                });
+            } else {
+                // 🔴 RUTA AVANZADA (ASS): SubtitlesOctopus con WASM
+                art.on("ready", () => this._mountOctopus(art.video, subUrl));
+                art.on("seek",  () => { if (this.octopus) this.octopus.setCurrentTime(art.currentTime); });
+            }
         }
 
         art.on("error", (err) => {
             console.error("[CinePlayer] Error:", err);
-            const msg = err?.message?.includes("403") ? "Acceso denegado." : err?.message?.includes("404") ? "Archivo no encontrado." : "Ocurrió un error al reproducir.";
+            const msg = err?.message?.includes("403") ? "Acceso denegado." 
+                      : err?.message?.includes("404") ? "Archivo no encontrado." 
+                      : "Ocurrió un error al reproducir.";
             this.showError(msg);
         });
 
@@ -197,53 +259,61 @@ class CinePlayer {
         this.container.innerHTML = `<iframe src="${src}" style="width:100%; height:100%; border:none;" allowfullscreen allow="autoplay; fullscreen; encrypted-media; picture-in-picture"></iframe>`;
     }
 
-    // ✅ FIX: _mountOctopus ahora tiene ID de llamada para detectar y cancelar llamadas stale
-    // Esto resuelve el TypeError: Cannot read properties of null (reading 'postMessage')
-    // que ocurría cuando se cambiaba de episodio antes de que el worker terminara de inicializar
+    // ✅ FIX: ID de llamada para cancelar llamadas stale de _mountOctopus
+    // Resuelve el TypeError "Cannot read properties of null (reading 'postMessage')"
+    // que ocurría al cambiar episodio antes de que el worker terminara de inicializar
     async _mountOctopus(videoElement, subUrl) {
-    const myId = ++this._mountId;
+        const myId = ++this._mountId;
 
-    let subBlobUrl = null;
-    try {
-        const subResp = await fetch(subUrl);
-        if (!subResp.ok) throw new Error(`HTTP ${subResp.status}`);
+        const workerBlobUrl = await this._toBlobUrl(OCTOPUS_WORKER, 'application/javascript');
 
-        if (myId !== this._mountId || !this.container) return;
+        if (myId !== this._mountId || !this.container) {
+            if (workerBlobUrl) URL.revokeObjectURL(workerBlobUrl);
+            return;
+        }
 
-        const assContent = await subResp.text();
-        subBlobUrl = URL.createObjectURL(new Blob([assContent], { type: "text/plain" }));
+        if (!workerBlobUrl) {
+            console.warn("[CinePlayer] No se pudo cargar el worker de subtítulos ASS.");
+            return;
+        }
 
-        // ✅ workerUrl directo — sin blob, sin brotli corrupto
-        // ✅ wasmUrl directo — mismo motivo
-        this.octopus = new SubtitlesOctopus({
-            video: videoElement,
-            subUrl: subBlobUrl,
-            workerUrl: OCTOPUS_WORKER,
-            wasmUrl: OCTOPUS_WASM,
-            renderMode: "wasm-blend",
-            // ✅ Fix "width or height is 0": forzar resize tras inicializar
-            onReady: () => {
-                if (subBlobUrl) { URL.revokeObjectURL(subBlobUrl); subBlobUrl = null; }
-                // Dar tiempo al DOM para que el canvas tenga dimensiones reales
-                requestAnimationFrame(() => {
-                    if (this.octopus && typeof this.octopus.resize === 'function') {
-                        this.octopus.resize();
-                    }
-                });
-            },
-        });
-        this.container._octopusInstance = this.octopus;
+        let subBlobUrl = null;
+        let workerBlobToRevoke = workerBlobUrl;
 
-    } catch (err) {
-        console.warn("[CinePlayer] Sin subtítulos:", err);
-        if (subBlobUrl) URL.revokeObjectURL(subBlobUrl);
+        try {
+            const subResp = await fetch(subUrl);
+            if (!subResp.ok) throw new Error(`HTTP ${subResp.status}`);
+
+            if (myId !== this._mountId || !this.container) {
+                URL.revokeObjectURL(workerBlobUrl);
+                return;
+            }
+
+            const assContent = await subResp.text();
+            subBlobUrl = URL.createObjectURL(new Blob([assContent], { type: "text/plain" }));
+
+            this.octopus = new SubtitlesOctopus({
+                video: videoElement,
+                subUrl: subBlobUrl,
+                workerUrl: workerBlobUrl,
+                wasmUrl: OCTOPUS_WASM,
+                renderMode: "wasm-blend",
+                onReady: () => {
+                    if (subBlobUrl)          { URL.revokeObjectURL(subBlobUrl);          subBlobUrl = null; }
+                    if (workerBlobToRevoke)  { URL.revokeObjectURL(workerBlobToRevoke);  workerBlobToRevoke = null; }
+                },
+            });
+            this.container._octopusInstance = this.octopus;
+        } catch (err) {
+            console.warn("[CinePlayer] Error cargando subtítulos ASS:", err);
+            if (subBlobUrl)         URL.revokeObjectURL(subBlobUrl);
+            if (workerBlobToRevoke) URL.revokeObjectURL(workerBlobToRevoke);
+        }
     }
-}
 
     /**
-     * Descarga un script remoto y lo convierte en un blob URL del mismo origen.
-     * Si es el worker de Octopus, parchea las rutas relativas internas (como el
-     * .wasm) con URLs absolutas, ya que desde un blob URL no hay base para resolverlas.
+     * Descarga un script remoto y lo convierte en blob URL del mismo origen.
+     * Parchea rutas relativas internas (.wasm, .js) con URLs absolutas.
      */
     async _toBlobUrl(remoteUrl, mimeType = 'application/javascript') {
         try {
@@ -251,15 +321,11 @@ class CinePlayer {
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             let text = await resp.text();
 
-            // La base del CDN donde viven todos los assets del worker
             const cdnBase = remoteUrl.substring(0, remoteUrl.lastIndexOf('/') + 1);
 
-            // Reemplazar cualquier referencia relativa a archivos .wasm o .js
-            // que el worker intente cargar internamente
             text = text.replace(
-                /(['"`])((?!https?:\/\/|blob:|data:)[^'"`]*\.(?:wasm|js))(['"`])/g,
+                /(['\"`])((?!https?:\/\/|blob:|data:)[^'\"`]*\.(?:wasm|js))(['\"`])/g,
                 (match, q1, relativePath, q2) => {
-                    // Ignorar rutas que parecen variables o plantillas
                     if (relativePath.includes('${') || relativePath.includes('+')) return match;
                     return `${q1}${cdnBase}${relativePath}${q2}`;
                 }
@@ -276,7 +342,6 @@ class CinePlayer {
         try {
             const resp = await fetch(url, { method: "HEAD" });
             if (resp.ok || resp.status === 206) return true;
-            // Algunos workers no admiten HEAD — reintentamos con GET parcial
             if (resp.status === 405 || resp.status === 501) {
                 const r2 = await fetch(url, { headers: { Range: 'bytes=0-0' } });
                 return r2.ok || r2.status === 206 || r2.status === 416;
@@ -290,7 +355,6 @@ class CinePlayer {
     _observeResize() {
         if (this._resizeObserver) this._resizeObserver.disconnect();
         this._resizeObserver = new ResizeObserver(() => { 
-            // 🔥 SOLUCIÓN AL ERROR DEL F12: Validar si existe la función resize()
             if (this.art && typeof this.art.resize === 'function') {
                 this.art.resize(); 
             }
@@ -304,7 +368,7 @@ class CinePlayer {
     }
 
     destroy() {
-        // ✅ FIX: Incrementar _mountId cancela cualquier _mountOctopus que esté en vuelo
+        // ✅ FIX: Incrementar _mountId cancela cualquier _mountOctopus en vuelo
         this._mountId++;
         this._resizeObserver?.disconnect();
         destroyPrevious(this.container);
@@ -317,11 +381,10 @@ class CinePlayer {
 // 🌐 HELPER: OBTENER TRACKS DE AUDIO DISPONIBLES DINÁMICAMENTE
 // ===========================================================
 function getLangTracks(data) {
-    const rawEn = data.videoId_en?.trim() || '';
-    const rawEs = data.videoId_es?.trim() || '';
-    const rawJp = data.videoId_jp?.trim() || data.videoId_alt?.trim() || '';
-    // videoId principal solo se usa si no hay pistas específicas de idioma
-    const rawMain = data.videoId?.trim() || '';
+    const rawEn   = data.videoId_en?.trim()  || '';
+    const rawEs   = data.videoId_es?.trim()  || '';
+    const rawJp   = data.videoId_jp?.trim()  || data.videoId_alt?.trim() || '';
+    const rawMain = data.videoId?.trim()     || '';
 
     const rawLang = (data.language || data.idioma || data.audio || '').trim();
     const langParts = rawLang
@@ -332,10 +395,9 @@ function getLangTracks(data) {
     const SPANISH_LABELS = ['latino', 'español', 'castellano', 'doblado', 'esp'];
     const isSpanish = l => SPANISH_LABELS.some(s => l.toLowerCase().includes(s));
 
-    const spanishLabel = langParts.find(l => isSpanish(l)) || 'Latino';
+    const spanishLabel   = langParts.find(l => isSpanish(l)) || 'Latino';
     const originalLabels = langParts.filter(l => !isSpanish(l));
 
-    // Detectar si el campo principal de idioma es español
     const mainIsSpanish = langParts.length > 0 && langParts.every(l => isSpanish(l));
 
     const tracks = [];
@@ -343,7 +405,6 @@ function getLangTracks(data) {
     if (rawEn) {
         tracks.push({ id: rawEn, lang: 'en', label: originalLabels[0] || 'Original' });
     } else if (rawMain && !mainIsSpanish && !rawEs) {
-        // Solo usamos videoId como "Original" si el idioma indicado no es español
         tracks.push({ id: rawMain, lang: 'en', label: originalLabels[0] || 'Original' });
     }
 
@@ -354,27 +415,12 @@ function getLangTracks(data) {
     if (rawEs) {
         tracks.push({ id: rawEs, lang: 'es', label: spanishLabel });
     } else if (rawMain && mainIsSpanish) {
-        // El videoId principal es español, añadirlo como pista española
         tracks.push({ id: rawMain, lang: 'es', label: spanishLabel });
     }
 
     return tracks;
 }
 
-function getEmbedUrl(videoId) {
-    if (!videoId || !videoId.trim()) return '';
-    const id = videoId.trim();
-    
-    if (isDriveId(id)) {
-        return `https://drive.google.com/file/d/${id}/preview`;
-    }
-    
-    if (/^\d+$/.test(id)) {
-        return `https://ok.ru/videoembed/${id}?nochat=1`;
-    }
-    
-    return `https://streamtape.com/e/${id}/`;
-}
 
 function buildLangButtonsHTML(tracks, activeLang, cssClass) {
     if (tracks.length <= 1) return '';
@@ -392,7 +438,7 @@ function findContentData(id) {
 
     if (content.movies && content.movies[id]) return content.movies[id];
     if (content.series && content.series[id]) return content.series[id];
-    if (content.ucm && content.ucm[id]) return content.ucm[id];
+    if (content.ucm    && content.ucm[id])    return content.ucm[id];
 
     if (content.sagas) {
         for (const sagaKey in content.sagas) {
@@ -471,7 +517,6 @@ export function closeSeriesPlayerModal() {
     page.classList.remove('active', 'season-grid-view', 'player-layout-view');
     page.style.display = 'none';
     
-    // Destruir ArtPlayer
     if (shared.appState.player.activeCineInstance) {
         shared.appState.player.activeCineInstance.destroy();
         shared.appState.player.activeCineInstance = null;
@@ -501,7 +546,7 @@ export async function openSeriesPlayer(seriesId, forceSeasonGrid = false) {
             </div>`;
 
         const seriesEpisodes = shared.appState.content.seriesEpisodes[seriesId] || {};
-        const postersData = shared.appState.content.seasonPosters[seriesId] || {};
+        const postersData    = shared.appState.content.seasonPosters[seriesId]  || {};
         
         const allSeasonsKeys = [...new Set([...Object.keys(seriesEpisodes), ...Object.keys(postersData)])];
 
@@ -617,28 +662,18 @@ function populateSeasonGrid(seriesId) {
 
         const keyLower = String(seasonKey).toLowerCase();
         
-        if (keyLower.includes('pelicula') || keyLower.includes('película') || keyLower === 'pelicula') {
-            return 'Película';
-        }
-        if (keyLower.includes('especial') || keyLower === 'especial') {
-            return 'Especial';
-        }
-        if (keyLower.includes('ova') || keyLower === 'ova') {
-            return 'OVA';
-        }
-        if (keyLower.includes('movie') || keyLower === 'movie') {
-            return 'Película';
-        }
-        if (keyLower.includes('special') || keyLower === 'special') {
-            return 'Especial';
-        }
+        if (keyLower.includes('pelicula') || keyLower.includes('película') || keyLower === 'pelicula') return 'Película';
+        if (keyLower.includes('especial') || keyLower === 'especial') return 'Especial';
+        if (keyLower.includes('ova')      || keyLower === 'ova')      return 'OVA';
+        if (keyLower.includes('movie')    || keyLower === 'movie')    return 'Película';
+        if (keyLower.includes('special')  || keyLower === 'special')  return 'Especial';
         
         return `Temporada ${seasonNum}`;
     }
     
     const episodesData = shared.appState.content.seriesEpisodes[seriesId] || {};
-    const postersData = shared.appState.content.seasonPosters[seriesId] || {};
-    const seriesInfo = findContentData(seriesId); 
+    const postersData  = shared.appState.content.seasonPosters[seriesId]  || {};
+    const seriesInfo   = findContentData(seriesId); 
     
     if (!seriesInfo) {
         console.error("No se encontró info para la serie:", seriesId);
@@ -654,61 +689,49 @@ function populateSeasonGrid(seriesId) {
         allSeasons = shared.appState.content.seasonOrder[seriesId];
     } else {
         const episodeSeasons = Object.keys(episodesData);
-        const posterSeasons = Object.keys(postersData);
+        const posterSeasons  = Object.keys(postersData);
         allSeasons = [...new Set([...episodeSeasons, ...posterSeasons])];
     }
 
-    const seasonsMapped = allSeasons.map((key) => {
-        const num = !isNaN(key) ? Number(key) : 0;
-        return { key, num };
-    });
-
-    const totalSeasons = seasonsMapped.length;
+    const seasonsMapped  = allSeasons.map((key) => ({ key, num: !isNaN(key) ? Number(key) : 0 }));
+    const totalSeasons   = seasonsMapped.length;
 
     let columns = 5; 
-    
-    if (totalSeasons <= 5) {
-        columns = totalSeasons;
-    } else if (totalSeasons === 6) {
-        columns = 3;
-    } else if (totalSeasons === 7 || totalSeasons === 8) {
-        columns = 4;
-    } else {
-        columns = 5;
-    }
+    if      (totalSeasons <= 5)                        columns = totalSeasons;
+    else if (totalSeasons === 6)                       columns = 3;
+    else if (totalSeasons === 7 || totalSeasons === 8) columns = 4;
+    else                                               columns = 5;
 
     container.style.gridTemplateColumns = `repeat(${columns}, 200px)`;
-    container.style.justifyContent = 'center';
-    container.style.maxWidth = `${columns * 200 + (columns - 1) * 20}px`; 
+    container.style.justifyContent      = 'center';
+    container.style.maxWidth            = `${columns * 200 + (columns - 1) * 20}px`; 
 
     seasonsMapped.forEach(({ key: seasonKey, num: seasonNum }) => {
         const rawEpisodes = episodesData[seasonKey];
-        const episodes = rawEpisodes ? (Array.isArray(rawEpisodes) ? rawEpisodes : Object.values(rawEpisodes)) : [];
+        const episodes    = rawEpisodes ? (Array.isArray(rawEpisodes) ? rawEpisodes : Object.values(rawEpisodes)) : [];
         
-        let posterUrl = seriesInfo.poster || '';
-        let seasonStatus = ''; 
-        let seasonStatusRaw = ''; 
+        let posterUrl         = seriesInfo.poster || '';
+        let seasonStatus      = ''; 
+        let seasonStatusRaw   = ''; 
         let seasonCustomLabel = ''; 
 
         const posterEntry = postersData[seasonKey];
         if (posterEntry) {
             if (typeof posterEntry === 'object') {
-                posterUrl = posterEntry.posterUrl || posterEntry.poster || posterUrl;
-                seasonStatusRaw = String(posterEntry.estado || '').trim();
-                seasonStatus = seasonStatusRaw.toLowerCase();
+                posterUrl         = posterEntry.posterUrl || posterEntry.poster || posterUrl;
+                seasonStatusRaw   = String(posterEntry.estado   || '').trim();
+                seasonStatus      = seasonStatusRaw.toLowerCase();
                 seasonCustomLabel = String(posterEntry.etiqueta || '').trim(); 
             } else {
                 posterUrl = posterEntry;
             }
         }
         
-        const totalEpisodes = episodes.length;
-
+        const totalEpisodes   = episodes.length;
         const isManuallyLocked = seasonStatus !== '' && seasonStatus !== 'disponible';
-        const isEmpty = (totalEpisodes === 0);
-        const isLocked = isManuallyLocked || (isEmpty && seasonStatus !== 'disponible');
-
-        const seasonLabel = formatSeasonName(seasonKey, seasonNum, seasonCustomLabel);
+        const isEmpty         = (totalEpisodes === 0);
+        const isLocked        = isManuallyLocked || (isEmpty && seasonStatus !== 'disponible');
+        const seasonLabel     = formatSeasonName(seasonKey, seasonNum, seasonCustomLabel);
 
         const card = document.createElement('div');
         card.className = `season-poster-card ${isLocked ? 'locked' : ''} ${seasonStatus === 'mantenimiento' ? 'en-mantenimiento' : ''}`;
@@ -749,14 +772,14 @@ function populateSeasonGrid(seriesId) {
     });
 }
 
-// 5. REPRODUCTOR DE EPISODIOS (Restaurado con todo el HTML original)
+// 5. REPRODUCTOR DE EPISODIOS
 export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = null) {
     try {
         shared.appState.player.activeSeriesId = seriesId;
-        const savedEpisodeIndex = loadProgress(seriesId, seasonNum);
+        const savedEpisodeIndex  = loadProgress(seriesId, seasonNum);
         const initialEpisodeIndex = startAtIndex !== null ? startAtIndex : savedEpisodeIndex;
         
-        const episodes = shared.appState.content.seriesEpisodes[seriesId]?.[seasonNum] || [];
+        const episodes    = shared.appState.content.seriesEpisodes[seriesId]?.[seasonNum] || [];
         const firstEpisode = episodes[0];
         
         if (!firstEpisode) {
@@ -764,8 +787,8 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
             return;
         }
  
-        const seriesTracks = getLangTracks(firstEpisode);
-        const hasLangOptions = seriesTracks.length > 1;
+        const seriesTracks    = getLangTracks(firstEpisode);
+        const hasLangOptions  = seriesTracks.length > 1;
         
         let savedLang = null;
         try {
@@ -787,21 +810,21 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
         };
  
         const seasonLower = String(seasonNum).toLowerCase();
-        const isSpecialContent = seasonLower.includes('pelicula') || 
-                                 seasonLower.includes('película') || 
-                                 seasonLower.includes('especial') || 
-                                 seasonLower.includes('ova') || 
-                                 seasonLower.includes('movie') || 
+        const isSpecialContent = seasonLower.includes('pelicula')  || 
+                                 seasonLower.includes('película')  || 
+                                 seasonLower.includes('especial')  || 
+                                 seasonLower.includes('ova')       || 
+                                 seasonLower.includes('movie')     || 
                                  seasonLower.includes('special');
         
         const isSingleMovie = isSpecialContent && episodes.length === 1;
  
         const postersData = shared.appState.content.seasonPosters[seriesId]?.[seasonNum] || {};
-        const seriesInfo = findContentData(seriesId) || {};
+        const seriesInfo  = findContentData(seriesId) || {};
  
-        const movieYear = postersData.year || postersData.anio || '';
-        const movieDuration = postersData.duration || postersData.duracion || '';
-        const movieRequester = postersData.pedido || postersData.pedidoPor || '';
+        const movieYear      = postersData.year      || postersData.anio     || '';
+        const movieDuration  = postersData.duration  || postersData.duracion || '';
+        const movieRequester = postersData.pedido    || postersData.pedidoPor || '';
         
         let specificPoster = postersData.poster || postersData.posterUrl;
         if (!specificPoster) specificPoster = seriesInfo.poster; 
@@ -812,14 +835,14 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
             ? firstEpisode.title 
             : seriesInfo.title || firstEpisode.title || 'Sin título';
         
-        const seasonsCount = Object.keys(shared.appState.content.seriesEpisodes[seriesId] || {}).length;
+        const seasonsCount   = Object.keys(shared.appState.content.seriesEpisodes[seriesId] || {}).length;
         const backButtonHTML = seasonsCount > 1 
             ? `<button class="player-back-link back-to-seasons"><i class="fas fa-arrow-left"></i> Temporadas</button>` 
             : '';
  
         shared.DOM.seriesPlayerModal.className = 'series-player-page active player-layout-view';
  
-        const finishTime = movieDuration ? calculateFinishTime(movieDuration) : null;
+        const finishTime  = movieDuration ? calculateFinishTime(movieDuration) : null;
         const endTimeHTML = finishTime
             ? `<span class="meta-tag" style="display:inline-flex;align-items:center;">
                    <i class="fas fa-flag-checkered" style="color:#ff4d4d;"></i>
@@ -844,8 +867,8 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
                             <div class="movie-details-info">
                                 <div class="movie-meta-info">
                                     ${movieRequester ? `<span class="meta-tag request-tag"><i class="fas fa-user-circle"></i> ${movieRequester}</span>` : ''}
-                                    ${movieYear ? `<span class="meta-tag"><i class="fas fa-calendar"></i> ${movieYear}</span>` : ''}
-                                    ${movieDuration ? `<span class="meta-tag"><i class="fas fa-clock"></i> ${movieDuration}</span>` : ''}
+                                    ${movieYear     ? `<span class="meta-tag"><i class="fas fa-calendar"></i> ${movieYear}</span>`     : ''}
+                                    ${movieDuration ? `<span class="meta-tag"><i class="fas fa-clock"></i> ${movieDuration}</span>`    : ''}
                                     ${endTimeHTML}
                                 </div>
                                 <p id="cinema-synopsis-sp" class="movie-synopsis">${movieSynopsis}</p>
@@ -884,8 +907,8 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
                 `;
             }
 
-            const mYear = postersData.year || postersData.anio || seriesInfo.year || seriesInfo.anio || '';
-            const mReq = postersData.pedido || postersData.pedidoPor || seriesInfo.pedido || seriesInfo.requester || '';
+            const mYear = postersData.year  || postersData.anio   || seriesInfo.year  || seriesInfo.anio || '';
+            const mReq  = postersData.pedido || postersData.pedidoPor || seriesInfo.pedido || seriesInfo.requester || '';
             
             const normStr = s => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\s]/g, '');
             const rawAltTitle = seriesInfo.secondTitle || seriesId;
@@ -895,9 +918,9 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
             if (seriesInfo.genres) {
                 genresVal = Array.isArray(seriesInfo.genres) ? seriesInfo.genres.join(', ') : String(seriesInfo.genres).replace(/;/g, ', ');
             }
-            const langVal = seriesInfo.language || seriesInfo.idioma || seriesInfo.audio || '';
+            const langVal  = seriesInfo.language || seriesInfo.idioma || seriesInfo.audio || '';
 
-            const mReqHtml = mReq ? `<span>Pedido por: <span style="color:#fff; font-weight:bold;">${mReq}</span></span><span style="font-size:10px; color:#555; margin:0 4px;">●</span>` : '';
+            const mReqHtml = mReq  ? `<span>Pedido por: <span style="color:#fff; font-weight:bold;">${mReq}</span></span><span style="font-size:10px; color:#555; margin:0 4px;">●</span>` : '';
             const mYearHtml = mYear ? `<span>Estreno: <span style="color:#fff; font-weight:bold;">${mYear}</span></span><span style="font-size:10px; color:#555; margin:0 4px;">●</span>` : '';
             const logoTheme = shared.THEMES?.normal?.logo || 'https://res.cloudinary.com/djhgmmdjx/image/upload/v1759209688/vgJjqSM_oicebo.png';
 
@@ -983,8 +1006,8 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
                     <div class="cc-expand" id="expandableArea">
                         <div style="font-size: 12px; color: #ccc; margin-bottom: 15px; display: flex; flex-direction: column; gap: 6px; background: rgba(255,255,255,0.05); padding: 12px; border-radius: 8px; border-left: 2px solid #e50914;">
                             ${originalTitle ? `<span><i class="fas fa-film" style="color:#8a8a92; width:18px;"></i> ${originalTitle}</span>` : ''}
-                            ${genresVal ? `<span><i class="fas fa-tags" style="color:#8a8a92; width:18px;"></i> ${genresVal}</span>` : ''}
-                            ${langVal ? `<span><i class="fas fa-language" style="color:#8a8a92; width:18px;"></i> ${langVal}</span>` : ''}
+                            ${genresVal     ? `<span><i class="fas fa-tags" style="color:#8a8a92; width:18px;"></i> ${genresVal}</span>`     : ''}
+                            ${langVal       ? `<span><i class="fas fa-language" style="color:#8a8a92; width:18px;"></i> ${langVal}</span>`    : ''}
                         </div>
 
                         <div class="cc-desc" id="episode-desc-${seriesId}"></div>
@@ -1118,19 +1141,19 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
         const langWrapper = shared.DOM.seriesPlayerModal.querySelector('.cc-custom-lang-wrapper');
         if (langWrapper) {
             const trigger = langWrapper.querySelector('.cc-lang-trigger');
-            const menu = langWrapper.querySelector('.cc-lang-menu');
+            const menu    = langWrapper.querySelector('.cc-lang-menu');
             const options = langWrapper.querySelectorAll('.cc-lang-option');
 
             trigger.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const isOpen = menu.style.display === 'block';
-                menu.style.display = isOpen ? 'none' : 'block';
+                menu.style.display   = isOpen ? 'none' : 'block';
                 trigger.style.borderColor = isOpen ? 'rgba(255, 255, 255, 0.15)' : '#e50914';
             });
 
             document.addEventListener('click', () => {
                 if (menu.style.display === 'block') {
-                    menu.style.display = 'none';
+                    menu.style.display        = 'none';
                     trigger.style.borderColor = 'rgba(255, 255, 255, 0.15)';
                 }
             });
@@ -1252,7 +1275,11 @@ export function openEpisode(seriesId, season, newEpisodeIndex) {
     if (!episode) return;
  
     clearTimeout(shared.appState.player.episodeOpenTimer);
-    shared.appState.player.pendingHistorySave = { contentId: seriesId, type: 'series', episodeInfo: { season, index: newEpisodeIndex, title: episode.title || '' } };
+    shared.appState.player.pendingHistorySave = {
+        contentId: seriesId,
+        type: 'series',
+        episodeInfo: { season, index: newEpisodeIndex, title: episode.title || '' }
+    };
  
     shared.DOM.seriesPlayerModal.querySelectorAll('.episode-card.active').forEach(c => c.classList.remove('active'));
     const activeCard = shared.DOM.seriesPlayerModal.querySelector(`#episode-card-${seriesId}-${season}-${newEpisodeIndex}`);
@@ -1265,13 +1292,13 @@ export function openEpisode(seriesId, season, newEpisodeIndex) {
     saveProgress(seriesId);
  
     const container = shared.DOM.seriesPlayerModal.querySelector(`#video-container-${seriesId}`);
-    const lang = shared.appState.player.state[seriesId]?.lang || 'es';
+    const lang      = shared.appState.player.state[seriesId]?.lang || 'es';
  
     let videoId;
-    if (lang === 'en' && episode.videoId_en) videoId = episode.videoId_en;
-    else if (lang === 'es' && episode.videoId_es) videoId = episode.videoId_es;
+    if      (lang === 'en' && episode.videoId_en)                      videoId = episode.videoId_en;
+    else if (lang === 'es' && episode.videoId_es)                      videoId = episode.videoId_es;
     else if (lang === 'jp' && (episode.videoId_jp || episode.videoId_alt)) videoId = episode.videoId_jp || episode.videoId_alt;
-    else videoId = episode.videoId;
+    else                                                                videoId = episode.videoId;
  
     if (container) {
         if (shared.appState.player.activeCineInstance) {
@@ -1279,47 +1306,51 @@ export function openEpisode(seriesId, season, newEpisodeIndex) {
         }
         
         shared.appState.player.activeCineInstance = new CinePlayer(container);
-        
-        const subId = episode.subId || null; 
+
+        // ✅ Extraer subId y subType del episodio usando ContentManager
+        const { subId, subType } = ContentManager.getSubtitleConfig(episode);
         
         shared.appState.player.activeCineInstance.load({
-            videoId: videoId,
-            subId: subId,
-            title: episode.title || `Episodio ${newEpisodeIndex + 1}`,
+            videoId,
+            subId,     // Columna E de la Sheet
+            subType,   // Columna F: 'srt' → liviano | 'ass' → WASM
+            title:  episode.title || `Episodio ${newEpisodeIndex + 1}`,
             poster: episode.thumbnail || episode.thumb || episode.image || ''
         });
     }
  
-    const seasonLower = String(season).toLowerCase();
-    const isSpecialContent = seasonLower.includes('pelicula') || seasonLower.includes('película') || seasonLower.includes('especial') || seasonLower.includes('ova') || seasonLower.includes('movie') || seasonLower.includes('special');
+    const seasonLower      = String(season).toLowerCase();
+    const isSpecialContent = seasonLower.includes('pelicula')  || seasonLower.includes('película') || 
+                             seasonLower.includes('especial')  || seasonLower.includes('ova')      || 
+                             seasonLower.includes('movie')     || seasonLower.includes('special');
  
     const episodeNumber = episode.episodeNumber || newEpisodeIndex + 1;
  
-    const subTitleEl = shared.DOM.seriesPlayerModal.querySelector('#subTitle');
-    const titleEl    = shared.DOM.seriesPlayerModal.querySelector(`#cinema-title-${seriesId}`);
-    const infoDescEl = shared.DOM.seriesPlayerModal.querySelector(`#episode-desc-${seriesId}`);
+    const subTitleEl  = shared.DOM.seriesPlayerModal.querySelector('#subTitle');
+    const titleEl     = shared.DOM.seriesPlayerModal.querySelector(`#cinema-title-${seriesId}`);
+    const infoDescEl  = shared.DOM.seriesPlayerModal.querySelector(`#episode-desc-${seriesId}`);
  
     const episodeTitleText = episode.title || `Episodio ${episodeNumber}`;
     const subTitleText     = isSpecialContent ? 'Especial / Película' : `Temporada ${String(season).replace('T', '')} | Ep ${episodeNumber}`;
  
-    if (subTitleEl)  subTitleEl.textContent = subTitleText;
-    if (titleEl)     titleEl.textContent    = episodeTitleText;
-    if (infoDescEl)  infoDescEl.innerHTML   = `<strong>Sinopsis:</strong><br><br>${episode.description || episode.synopsis || episode.desc || 'No hay descripción disponible para este episodio.'}`;
+    if (subTitleEl) subTitleEl.textContent = subTitleText;
+    if (titleEl)    titleEl.textContent    = episodeTitleText;
+    if (infoDescEl) infoDescEl.innerHTML   = `<strong>Sinopsis:</strong><br><br>${episode.description || episode.synopsis || episode.desc || 'No hay descripción disponible para este episodio.'}`;
  
     const langWrapper = shared.DOM.seriesPlayerModal.querySelector('.cc-custom-lang-wrapper');
     if (langWrapper) {
         const triggerSpan = langWrapper.querySelector('.cc-lang-trigger span');
-        const options = langWrapper.querySelectorAll('.cc-lang-option');
+        const options     = langWrapper.querySelectorAll('.cc-lang-option');
         
         options.forEach(opt => {
             if (opt.dataset.lang === lang) {
                 opt.style.background = '#e50914';
-                opt.style.color = '#fff';
+                opt.style.color      = '#fff';
                 opt.classList.add('active');
                 if (triggerSpan) triggerSpan.textContent = opt.textContent.trim();
             } else {
                 opt.style.background = 'transparent';
-                opt.style.color = '#aaa';
+                opt.style.color      = '#aaa';
                 opt.classList.remove('active');
             }
         });
@@ -1334,7 +1365,7 @@ export function openEpisode(seriesId, season, newEpisodeIndex) {
 function navigateEpisode(seriesId, direction) {
     commitAndClearPendingSave();
     const { season, episodeIndex } = shared.appState.player.state[seriesId];
-    const newIndex = episodeIndex + direction;
+    const newIndex      = episodeIndex + direction;
     const seasonEpisodes = shared.appState.content.seriesEpisodes[seriesId][season];
     if (newIndex >= 0 && newIndex < seasonEpisodes.length) {
         openEpisode(seriesId, season, newIndex);
@@ -1346,8 +1377,8 @@ function updateNavButtons(seriesId, season, episodeIndex) {
     const prevBtn = shared.DOM.seriesPlayerModal.querySelector(`#prev-btn-${seriesId}`);
     const nextBtn = shared.DOM.seriesPlayerModal.querySelector(`#next-btn-${seriesId}`);
     
-    if(prevBtn) prevBtn.disabled = (episodeIndex === 0);
-    if(nextBtn) nextBtn.disabled = (episodeIndex === totalEpisodes - 1);
+    if (prevBtn) prevBtn.disabled = (episodeIndex === 0);
+    if (nextBtn) nextBtn.disabled = (episodeIndex === totalEpisodes - 1);
 }
 
 function changeLanguage(seriesId, lang) {
@@ -1398,8 +1429,8 @@ function loadMovieInPlayer(videoId, movieId, movieData) {
     let container = screenDiv.querySelector('.artplayer-container');
     if (!container) {
         container = document.createElement('div');
-        container.className = 'artplayer-container';
-        container.style.width = '100%';
+        container.className   = 'artplayer-container';
+        container.style.width  = '100%';
         container.style.height = '100%';
         container.style.background = '#000';
         screenDiv.appendChild(container);
@@ -1410,10 +1441,15 @@ function loadMovieInPlayer(videoId, movieId, movieData) {
     }
     
     shared.appState.player.activeCineInstance = new CinePlayer(container);
+
+    // ✅ Extraer subId y subType de la película usando ContentManager
+    const { subId, subType } = ContentManager.getSubtitleConfig(movieData);
+
     shared.appState.player.activeCineInstance.load({
-        videoId: videoId,
-        subId: movieData.subId || null,
-        title: movieData.title || '',
+        videoId,
+        subId,     // ID de Drive del subtítulo
+        subType,   // 'srt' → nativo | 'ass' → WASM
+        title:  movieData.title  || '',
         poster: movieData.poster || movieData.image || ''
     });
 }
@@ -1426,8 +1462,8 @@ function setupMovieControls(movieId, movieData) {
     const user = shared.auth.currentUser;
     
     if (user) {
-        const isInList = shared.appState.user.watchlist.has(movieId);
-        const iconClass = isInList ? 'fa-check' : 'fa-plus';
+        const isInList    = shared.appState.user.watchlist.has(movieId);
+        const iconClass   = isInList ? 'fa-check' : 'fa-plus';
         const buttonClass = isInList ? 'btn-watchlist in-list' : 'btn-watchlist';
         controlsHTML += `
             <button class="${buttonClass}" data-content-id="${movieId}">
@@ -1508,32 +1544,22 @@ function calculateFinishTime(durationStr) {
 
     if (durationStr.includes(':')) {
         const parts = durationStr.split(':').map(Number);
-        
-        if (parts.length === 3) {
-            [hours, minutes, seconds] = parts;
-        } else if (parts.length === 2) {
-            if (parts[0] > 7) {
-                [minutes, seconds] = parts; 
-            } else {
-                [hours, minutes] = parts;
-            }
-        }
-    } 
-    else {
+        if      (parts.length === 3)  { [hours, minutes, seconds] = parts; }
+        else if (parts.length === 2)  { if (parts[0] > 7) { [minutes, seconds] = parts; } else { [hours, minutes] = parts; } }
+    } else {
         const hMatch = durationStr.match(/(\d+)\s*h/);
         const mMatch = durationStr.match(/(\d+)\s*m/);
-        if (hMatch) hours = parseInt(hMatch[1]);
+        if (hMatch) hours   = parseInt(hMatch[1]);
         if (mMatch) minutes = parseInt(mMatch[1]);
-        
         if (!hMatch && !mMatch && durationStr.includes('min')) {
             const minOnly = parseInt(durationStr);
             if (!isNaN(minOnly)) minutes = minOnly;
         }
     }
 
-    const now = new Date();
+    const now        = new Date();
     const durationMs = (hours * 3600000) + (minutes * 60000) + (seconds * 1000);
-    const endTime = new Date(now.getTime() + durationMs);
+    const endTime    = new Date(now.getTime() + durationMs);
 
     return endTime.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
 }
