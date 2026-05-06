@@ -6,8 +6,10 @@ import { logError } from '../utils/logger.js';
 import { WORKER_URL } from "../core/config.js";
 
 // ─── Constantes para SubtitlesOctopus ────────────────────────
-const OCTOPUS_WORKER = "https://cdn.jsdelivr.net/npm/libass-wasm@4/dist/js/subtitles-octopus-worker.js";
-const OCTOPUS_WASM   = "https://cdn.jsdelivr.net/npm/libass-wasm@4/dist/js/subtitles-octopus-worker.wasm";
+// ✅ FIX: Cambiado de jsDelivr a unpkg para evitar el error "Corrupted brotli dictionary"
+// jsDelivr sirve el worker con compresión brotli que se corrompe al convertirlo a blob URL
+const OCTOPUS_WORKER = "https://unpkg.com/libass-wasm@4/dist/js/subtitles-octopus-worker.js";
+const OCTOPUS_WASM   = "https://unpkg.com/libass-wasm@4/dist/js/subtitles-octopus-worker.wasm";
 
 let shared; 
 
@@ -59,6 +61,8 @@ class CinePlayer {
         this.options = options;
         this.art = null;
         this.octopus = null;
+        // ✅ FIX: Contador para cancelar llamadas a _mountOctopus que quedaron en vuelo
+        this._mountId = 0;
     }
 
     async load({ videoId, subId, title = "", poster = "" }) {
@@ -193,43 +197,48 @@ class CinePlayer {
         this.container.innerHTML = `<iframe src="${src}" style="width:100%; height:100%; border:none;" allowfullscreen allow="autoplay; fullscreen; encrypted-media; picture-in-picture"></iframe>`;
     }
 
+    // ✅ FIX: _mountOctopus ahora tiene ID de llamada para detectar y cancelar llamadas stale
+    // Esto resuelve el TypeError: Cannot read properties of null (reading 'postMessage')
+    // que ocurría cuando se cambiaba de episodio antes de que el worker terminara de inicializar
     async _mountOctopus(videoElement, subUrl) {
-        const workerBlobUrl = await this._toBlobUrl(OCTOPUS_WORKER, 'application/javascript');
-        if (!workerBlobUrl) {
-            console.warn("[CinePlayer] No se pudo cargar el worker de subtítulos.");
-            return;
-        }
+    const myId = ++this._mountId;
 
-        let subBlobUrl = null;
-        let workerBlobToRevoke = workerBlobUrl;
+    let subBlobUrl = null;
+    try {
+        const subResp = await fetch(subUrl);
+        if (!subResp.ok) throw new Error(`HTTP ${subResp.status}`);
 
-        try {
-            // Subtítulo → blob local (evita restricciones CORS en subUrl también)
-            const subResp = await fetch(subUrl);
-            if (!subResp.ok) throw new Error(`HTTP ${subResp.status}`);
-            const assContent = await subResp.text();
-            subBlobUrl = URL.createObjectURL(new Blob([assContent], { type: "text/plain" }));
+        if (myId !== this._mountId || !this.container) return;
 
-            this.octopus = new SubtitlesOctopus({
-                video: videoElement,
-                subUrl: subBlobUrl,
-                // workerUrl como blob local → mismo origen → sin SecurityError
-                workerUrl: workerBlobUrl,
-                wasmUrl: OCTOPUS_WASM,
-                renderMode: "wasm-blend",
-                onReady: () => {
-                    // Liberar blobs una vez que octopus los haya consumido
-                    if (subBlobUrl) { URL.revokeObjectURL(subBlobUrl); subBlobUrl = null; }
-                    if (workerBlobToRevoke) { URL.revokeObjectURL(workerBlobToRevoke); workerBlobToRevoke = null; }
-                },
-            });
-            this.container._octopusInstance = this.octopus;
-        } catch (err) {
-            console.warn("[CinePlayer] Sin subtítulos:", err);
-            if (subBlobUrl) URL.revokeObjectURL(subBlobUrl);
-            if (workerBlobToRevoke) URL.revokeObjectURL(workerBlobToRevoke);
-        }
+        const assContent = await subResp.text();
+        subBlobUrl = URL.createObjectURL(new Blob([assContent], { type: "text/plain" }));
+
+        // ✅ workerUrl directo — sin blob, sin brotli corrupto
+        // ✅ wasmUrl directo — mismo motivo
+        this.octopus = new SubtitlesOctopus({
+            video: videoElement,
+            subUrl: subBlobUrl,
+            workerUrl: OCTOPUS_WORKER,
+            wasmUrl: OCTOPUS_WASM,
+            renderMode: "wasm-blend",
+            // ✅ Fix "width or height is 0": forzar resize tras inicializar
+            onReady: () => {
+                if (subBlobUrl) { URL.revokeObjectURL(subBlobUrl); subBlobUrl = null; }
+                // Dar tiempo al DOM para que el canvas tenga dimensiones reales
+                requestAnimationFrame(() => {
+                    if (this.octopus && typeof this.octopus.resize === 'function') {
+                        this.octopus.resize();
+                    }
+                });
+            },
+        });
+        this.container._octopusInstance = this.octopus;
+
+    } catch (err) {
+        console.warn("[CinePlayer] Sin subtítulos:", err);
+        if (subBlobUrl) URL.revokeObjectURL(subBlobUrl);
     }
+}
 
     /**
      * Descarga un script remoto y lo convierte en un blob URL del mismo origen.
@@ -295,6 +304,8 @@ class CinePlayer {
     }
 
     destroy() {
+        // ✅ FIX: Incrementar _mountId cancela cualquier _mountOctopus que esté en vuelo
+        this._mountId++;
         this._resizeObserver?.disconnect();
         destroyPrevious(this.container);
         this.container.innerHTML = "";
