@@ -1,8 +1,13 @@
 // ===========================================================
-// MÓDULO DEL REPRODUCTOR (V2 - SOPORTE MULTI-SAGA)
+// MÓDULO DEL REPRODUCTOR (V2 - ARTPLAYER + MULTI-SAGA)
 // ===========================================================
 
 import { logError } from '../utils/logger.js'; 
+import { WORKER_URL } from "../core/config.js";
+
+// ─── Constantes para SubtitlesOctopus ────────────────────────
+const OCTOPUS_WORKER = "https://cdn.jsdelivr.net/npm/libass-wasm@4/dist/js/subtitles-octopus-worker.js";
+const OCTOPUS_WASM   = "https://cdn.jsdelivr.net/npm/libass-wasm@4/dist/js/subtitles-octopus-worker.wasm";
 
 let shared; 
 
@@ -12,24 +17,193 @@ export function initPlayer(dependencies) {
 }
 
 // ===========================================================
+// 🛠️ CLASE CINEPLAYER (Artplayer + Worker Integration)
+// ===========================================================
+function buildWorkerUrl(type, driveId) {
+    if (!driveId) return null;
+    return `${WORKER_URL}/${type}/${driveId}`;
+}
+
+function buildErrorHTML(message = "No se pudo cargar el video.") {
+    return `
+      <div class="player-error" style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; color:white; background:#000;">
+        <i class="fas fa-exclamation-circle" style="font-size: 40px; color: #e50914; margin-bottom: 15px;"></i>
+        <p style="font-weight: bold; font-size: 18px; margin-bottom: 5px;">Error de reproducción</p>
+        <p style="color: #aaa; margin-bottom: 15px;">${message}</p>
+        <button onclick="location.reload()" style="background:#e50914; border:none; padding:8px 16px; color:white; border-radius:5px; cursor:pointer;">Reintentar</button>
+      </div>`;
+}
+
+function destroyPrevious(container) {
+    if (container._artInstance) {
+        container._artInstance.destroy(false);
+        container._artInstance = null;
+    }
+    if (container._octopusInstance) {
+        container._octopusInstance.dispose();
+        container._octopusInstance = null;
+    }
+}
+
+class CinePlayer {
+    constructor(containerSelector, options = {}) {
+        this.container = typeof containerSelector === "string" ? document.querySelector(containerSelector) : containerSelector;
+        if (!this.container) throw new Error(`[CinePlayer] Contenedor no encontrado: ${containerSelector}`);
+        
+        this.container.classList.add("cine-player-wrapper");
+        this.options = options;
+        this.art = null;
+        this.octopus = null;
+    }
+
+    async load({ videoId, subId, title = "", poster = "" }) {
+        destroyPrevious(this.container);
+        this.container.innerHTML = "";
+
+        if (!videoId) {
+            this.showError("ID de video no proporcionado.");
+            return;
+        }
+
+        // Si es un ID de OK.ru o Streamtape, caemos al iframe clásico
+        if (/^\d+$/.test(videoId) || (videoId.length < 20 && !videoId.startsWith('1'))) {
+            this._mountIframeFallback(videoId);
+            return;
+        }
+
+        const videoUrl = buildWorkerUrl("video", videoId);
+        const subUrl = subId ? buildWorkerUrl("sub", subId) : null;
+
+        const available = await this._pingWorker(videoUrl);
+        if (!available) {
+            this.showError("El servidor de video no está disponible. Intenta más tarde.");
+            return;
+        }
+
+        const artConfig = {
+            container: this.container,
+            url: videoUrl,
+            title,
+            poster,
+            theme: '#e50914', // 🔥 El rojo oficial de Cine Corneta
+            volume: 1,
+            autoplay: false,
+            pip: true,
+            autoSize: false,
+            autoMini: false,
+            screenshot: false,
+            setting: true,
+            hotkey: true,
+            playbackRate: true,
+            aspectRatio: false,
+            fullscreen: true,
+            fullscreenWeb: true,
+            mutex: true,
+            lang: navigator.language || "es",
+            moreVideoAttr: { crossOrigin: "anonymous", preload: "metadata" },
+            
+            // 🎨 Menú click derecho personalizado
+            contextmenu: [
+                {
+                    html: 'Cine Corneta Player',
+                    click: function (contextmenu) {
+                        console.info('Reproductor oficial');
+                        contextmenu.show = false;
+                    },
+                }
+            ],
+
+            ...this.options,
+        };
+
+        const art = new Artplayer(artConfig);
+        this.art = art;
+        this.container._artInstance = art;
+
+        if (subUrl) {
+            art.on("ready", () => this._mountOctopus(art.video, subUrl));
+            art.on("seek", () => { if (this.octopus) this.octopus.setCurrentTime(art.currentTime); });
+        }
+
+        art.on("error", (err) => {
+            console.error("[CinePlayer] Error:", err);
+            const msg = err?.message?.includes("403") ? "Acceso denegado." : err?.message?.includes("404") ? "Archivo no encontrado." : "Ocurrió un error al reproducir.";
+            this.showError(msg);
+        });
+
+        this._observeResize();
+        return art;
+    }
+
+    _mountIframeFallback(videoId) {
+        let src = `https://streamtape.com/e/${videoId}/`;
+        if (/^\d+$/.test(videoId)) src = `https://ok.ru/videoembed/${videoId}?nochat=1`;
+        
+        this.container.innerHTML = `<iframe src="${src}" style="width:100%; height:100%; border:none;" allowfullscreen allow="autoplay; fullscreen; encrypted-media; picture-in-picture"></iframe>`;
+    }
+
+    async _mountOctopus(videoElement, subUrl) {
+        try {
+            const resp = await fetch(subUrl);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const assContent = await resp.text();
+            const blob = new Blob([assContent], { type: "text/plain" });
+            const blobUrl = URL.createObjectURL(blob);
+
+            this.octopus = new SubtitlesOctopus({
+                video: videoElement,
+                subUrl: blobUrl,
+                workerUrl: OCTOPUS_WORKER,
+                wasmUrl: OCTOPUS_WASM,
+                renderMode: "wasm-blend",
+                onReady: () => URL.revokeObjectURL(blobUrl),
+            });
+            this.container._octopusInstance = this.octopus;
+        } catch (err) { console.warn("[CinePlayer] Sin subtítulos:", err); }
+    }
+
+    async _pingWorker(url) {
+        try { const resp = await fetch(url, { method: "HEAD" }); return resp.ok || resp.status === 206; } catch { return false; }
+    }
+
+    _observeResize() {
+        if (this._resizeObserver) this._resizeObserver.disconnect();
+        this._resizeObserver = new ResizeObserver(() => { 
+            // 🔥 SOLUCIÓN AL ERROR DEL F12: Validar si existe la función resize()
+            if (this.art && typeof this.art.resize === 'function') {
+                this.art.resize(); 
+            }
+        });
+        this._resizeObserver.observe(this.container);
+    }
+
+    showError(message) {
+        destroyPrevious(this.container);
+        this.container.innerHTML = buildErrorHTML(message);
+    }
+
+    destroy() {
+        this._resizeObserver?.disconnect();
+        destroyPrevious(this.container);
+        this.container.innerHTML = "";
+    }
+}
+
+
+// ===========================================================
 // 🌐 HELPER: OBTENER TRACKS DE AUDIO DISPONIBLES DINÁMICAMENTE
-// Soporta videoId_en, videoId_es, videoId_jp + label desde campo language
 // ===========================================================
 function getLangTracks(data) {
-    // IDs disponibles (en orden: original, alternativo, latino)
     const rawEn = data.videoId_en?.trim() || data.videoId?.trim() || '';
     const rawEs = data.videoId_es?.trim() || '';
     const rawJp = data.videoId_jp?.trim() || data.videoId_alt?.trim() || '';
 
-    // Parsear campo language para obtener etiquetas reales
-    // Ejemplo: "Japonés - Latino" o "Inglés;Japonés;Latino"
     const rawLang = (data.language || data.idioma || data.audio || '').trim();
     const langParts = rawLang
         .split(/[-;|]/)
         .map(l => l.trim())
         .filter(Boolean);
 
-    // Clasificar partes: español/latino vs originales
     const SPANISH_LABELS = ['latino', 'español', 'castellano', 'doblado', 'esp'];
     const isSpanish = l => SPANISH_LABELS.some(s => l.toLowerCase().includes(s));
 
@@ -39,67 +213,32 @@ function getLangTracks(data) {
     const tracks = [];
 
     if (rawEn) {
-        tracks.push({
-            id: rawEn,
-            lang: 'en',
-            label: originalLabels[0] || 'Original',
-        });
+        tracks.push({ id: rawEn, lang: 'en', label: originalLabels[0] || 'Original' });
     }
     if (rawJp) {
-        tracks.push({
-            id: rawJp,
-            lang: 'jp',
-            label: originalLabels[1] || 'Alt',
-        });
+        tracks.push({ id: rawJp, lang: 'jp', label: originalLabels[1] || 'Alt' });
     }
     if (rawEs) {
-        tracks.push({
-            id: rawEs,
-            lang: 'es',
-            label: spanishLabel,
-        });
+        tracks.push({ id: rawEs, lang: 'es', label: spanishLabel });
     }
 
     return tracks;
 }
 
-
-// ===========================================================
-// 🎬 HELPER: CONSTRUIR URL DE EMBED SEGÚN PROVEEDOR
-// Detecta automáticamente Google Drive vs Streamtape por el formato del ID.
-// - Google Drive: empieza con "1" y tiene 25+ caracteres (ej: 1cfLvKRV-hI3LimRY97ptxp3...)
-// - Streamtape:   ID corto alfanumérico (ej: mvYbMvV3bXcb864)
-// ===========================================================
 function getEmbedUrl(videoId) {
     if (!videoId || !videoId.trim()) return '';
     const id = videoId.trim();
     
-    // 1. Identificar Google Drive (Empieza por 1 y es largo)
     const isGoogleDrive = id.startsWith('1') && id.length >= 25;
     if (isGoogleDrive) {
-        return `https://drive.google.com/file/d/${id}/preview?rm=minimal`;
+        return `https://drive.google.com/file/d/${id}/preview`;
     }
     
-    // 2. Identificar OK.ru (Solo números)
     if (/^\d+$/.test(id)) {
-        // Se añade /videoembed/ y el símbolo $ para interpolar el id correctamente
         return `https://ok.ru/videoembed/${id}?nochat=1`;
     }
     
-    // 3. Por defecto, asumir Streamtape (o cualquier otro sistema de IDs cortos)
     return `https://streamtape.com/e/${id}/`;
-}
-
-function adjustIframeScale() {
-    const iframes = document.querySelectorAll('.screen iframe, #video-frame');
-    iframes.forEach(iframe => {
-        const container = iframe.parentElement;
-        const scale = container.offsetWidth / 1280;
-        iframe.style.transform = `scale(${scale})`;
-        iframe.style.width = '1280px';
-        iframe.style.height = `${720 * scale}px`; // ajusta el contenedor también
-        container.style.height = `${720 * scale}px`;
-    });
 }
 
 function buildLangButtonsHTML(tracks, activeLang, cssClass) {
@@ -112,19 +251,14 @@ function buildLangButtonsHTML(tracks, activeLang, cssClass) {
     </div>`;
 }
 
-// 🔥 NUEVO: BUSCADOR INTELIGENTE EN TODAS LAS SAGAS
-// Esta función busca el ID en Pelis, Series, Marvel, StarWars, HP, etc.
+// 🔥 BUSCADOR INTELIGENTE EN TODAS LAS SAGAS
 function findContentData(id) {
     const content = shared.appState.content;
 
-    // 1. Buscar en listas principales
     if (content.movies && content.movies[id]) return content.movies[id];
     if (content.series && content.series[id]) return content.series[id];
-    
-    // 2. Buscar en UCM (Legacy)
     if (content.ucm && content.ucm[id]) return content.ucm[id];
 
-    // 3. 🔥 BUSCAR EN SAGAS DINÁMICAS (Star Wars, HP, etc.)
     if (content.sagas) {
         for (const sagaKey in content.sagas) {
             const sagaData = content.sagas[sagaKey];
@@ -136,7 +270,6 @@ function findContentData(id) {
     return null;
 }
 
-// 2. HELPERS
 function saveProgress(seriesId) {
     try {
         let allProgress = JSON.parse(localStorage.getItem('seriesProgress')) || {};
@@ -156,7 +289,6 @@ function loadProgress(seriesId, seasonNum) {
     } catch (e) { return 0; }
 }
 
-// 3. GESTIÓN DEL MODAL DE SERIES
 export function commitAndClearPendingSave() {
     if (shared.appState.player.pendingHistorySave) {
         try {
@@ -172,9 +304,6 @@ export function commitAndClearPendingSave() {
     }
 }
 
-// ===========================================================
-// HELPER: Abrir la página del player (reemplaza el modal)
-// ===========================================================
 function _openSeriesPlayerPage() {
     const sections = [
         'hero-section', 'carousel-container', 'full-grid-container',
@@ -188,13 +317,11 @@ function _openSeriesPlayerPage() {
         if (el) el.style.display = 'none';
     });
 
-    // Fallback: buscar en el DOM directo si shared.DOM no está listo
     const page = shared.DOM.seriesPlayerModal || document.getElementById('series-player-page');
     if (!page) {
         console.error('[Player] #series-player-page no encontrado en el DOM');
         return;
     }
-    // Actualizar la referencia por si acaso
     shared.DOM.seriesPlayerModal = page;
 
     page.style.display = 'block';
@@ -208,8 +335,13 @@ export function closeSeriesPlayerModal() {
     const page = shared.DOM.seriesPlayerModal;
     page.classList.remove('active', 'season-grid-view', 'player-layout-view');
     page.style.display = 'none';
-    const iframe = page.querySelector('iframe');
-    if (iframe) iframe.src = '';
+    
+    // Destruir ArtPlayer
+    if (shared.appState.player.activeCineInstance) {
+        shared.appState.player.activeCineInstance.destroy();
+        shared.appState.player.activeCineInstance = null;
+    }
+
     shared.appState.player.activeSeriesId = null;
     if (shared.switchView) shared.switchView(shared.appState.currentFilter || 'all');
 }
@@ -233,12 +365,9 @@ export async function openSeriesPlayer(seriesId, forceSeasonGrid = false) {
                 <div class="spinner"></div>
             </div>`;
 
-        // === 🔥 LÓGICA DE SALTO DE BLOQUEO ===
         const seriesEpisodes = shared.appState.content.seriesEpisodes[seriesId] || {};
         const postersData = shared.appState.content.seasonPosters[seriesId] || {};
         
-        // 1. Obtenemos TODAS las temporadas ordenadas
-        // PRIORIDAD: seasonOrder servidor > campo "orden" > numérico (especiales al final)
         const allSeasonsKeys = [...new Set([...Object.keys(seriesEpisodes), ...Object.keys(postersData)])];
 
         let orderedKeys;
@@ -268,58 +397,46 @@ export async function openSeriesPlayer(seriesId, forceSeasonGrid = false) {
             .filter(k => allSeasonsKeys.includes(k))
             .map(k => ({ key: k, num: !isNaN(k) ? Number(k) : 0 }));
 
-        // 2. Si forzamos grilla, mostramos grilla directamente
         if (forceSeasonGrid && seasonsMapped.length > 1) {
             renderSeasonGrid(seriesId);
             return;
         }
 
-        // 3. BUSCAMOS LA PRIMERA TEMPORADA DESBLOQUEADA
         let targetSeasonKey = null;
 
         for (const s of seasonsMapped) {
             const seasonKey = s.key;
             
-            // Verificamos estado en PostersTemporadas
             const posterEntry = postersData[seasonKey];
             let seasonStatus = '';
             if (posterEntry && typeof posterEntry === 'object') {
                 seasonStatus = String(posterEntry.estado || '').toLowerCase().trim();
             }
 
-            // Verificamos si tiene episodios reales
             const eps = seriesEpisodes[seasonKey];
             const hasEpisodes = eps && (Array.isArray(eps) ? eps.length > 0 : Object.keys(eps).length > 0);
 
-            // Condición de Bloqueo (Igual que en la grilla)
             const isManuallyLocked = seasonStatus !== '' && seasonStatus !== 'disponible';
             const isLocked = isManuallyLocked || (!hasEpisodes && seasonStatus !== 'disponible');
 
-            // Si NO está bloqueada, ¡esta es la elegida!
             if (!isLocked) {
                 targetSeasonKey = seasonKey;
-                break; // Rompemos el ciclo, ya encontramos la primera visible
+                break; 
             }
         }
 
-        // 4. RESULTADO
         if (targetSeasonKey) {
-            // Reproducimos la temporada encontrada (puede ser la 3 si la 1 y 2 están bloqueadas)
-            // Chequeamos historial primero por si el usuario ya iba avanzado en ESA temporada
             const user = shared.auth.currentUser;
             let lastWatchedEpisode = 0;
 
             if (user) {
-                // Pequeña lógica para recuperar donde quedó
                 const savedIndex = loadProgress(seriesId, targetSeasonKey);
                 if (savedIndex > 0) lastWatchedEpisode = savedIndex;
             }
 
             renderEpisodePlayer(seriesId, targetSeasonKey, lastWatchedEpisode);
         } else {
-            // Si llegamos aquí, es que TODO está bloqueado o no hay nada
             if (seasonsMapped.length > 0) {
-                 // Si hay temporadas pero todas bloqueadas, mostramos la grilla para que vea los candados
                 renderSeasonGrid(seriesId);
             } else {
                 shared.DOM.seriesPlayerModal.innerHTML = `
@@ -338,7 +455,6 @@ export async function openSeriesPlayer(seriesId, forceSeasonGrid = false) {
     }
 }
 
-// 4. VISTA DE GRILLA DE TEMPORADAS
 function renderSeasonGrid(seriesId) {
     const seriesInfo = findContentData(seriesId); 
     if (!seriesInfo) return;
@@ -361,14 +477,11 @@ function renderSeasonGrid(seriesId) {
 function populateSeasonGrid(seriesId) {
     const container = shared.DOM.seriesPlayerModal.querySelector('#season-grid');
     
-    // Función helper para formatear nombres de temporada
     function formatSeasonName(seasonKey, seasonNum, customLabel = null) {
-        // 🆕 Si hay etiqueta personalizada en el sheet, usarla directamente
         if (customLabel && customLabel.trim()) return customLabel.trim();
 
         const keyLower = String(seasonKey).toLowerCase();
         
-        // Detectar tipos especiales
         if (keyLower.includes('pelicula') || keyLower.includes('película') || keyLower === 'pelicula') {
             return 'Película';
         }
@@ -385,42 +498,31 @@ function populateSeasonGrid(seriesId) {
             return 'Especial';
         }
         
-        // Si es un número, mostrar "Temporada X"
         return `Temporada ${seasonNum}`;
     }
     
-    // Obtenemos datos usando 'shared'
     const episodesData = shared.appState.content.seriesEpisodes[seriesId] || {};
     const postersData = shared.appState.content.seasonPosters[seriesId] || {};
     const seriesInfo = findContentData(seriesId); 
     
-    // Seguridad extra: Si por alguna razón no lo encuentra, salimos para no romper la app
     if (!seriesInfo) {
         console.error("No se encontró info para la serie:", seriesId);
         return;
     }
 
     if (!container) return;
-
     container.innerHTML = '';
 
-    // 1. Obtener temporadas con el orden correcto
     let allSeasons;
 
     if (shared.appState.content.seasonOrder && shared.appState.content.seasonOrder[seriesId]) {
-        // Orden preservado del servidor (respeta campo "orden" del sheet)
         allSeasons = shared.appState.content.seasonOrder[seriesId];
-        console.log(`📺 Usando orden del servidor para ${seriesId}:`, allSeasons);
     } else {
-        // Fallback: combinar claves de episodios y posters
         const episodeSeasons = Object.keys(episodesData);
         const posterSeasons = Object.keys(postersData);
         allSeasons = [...new Set([...episodeSeasons, ...posterSeasons])];
-        console.log(`⚠️ Usando Object.keys() para ${seriesId}:`, allSeasons);
     }
 
-    // Mapear a estructura del grid
-    // num: si la clave es numérica usamos ese número, si no (especial, pelicula...) usamos 0
     const seasonsMapped = allSeasons.map((key) => {
         const num = !isNaN(key) ? Number(key) : 0;
         return { key, num };
@@ -428,42 +530,30 @@ function populateSeasonGrid(seriesId) {
 
     const totalSeasons = seasonsMapped.length;
 
-    // ============================================
-    // 🔥 LÓGICA INTELIGENTE DE LAYOUT (JAVASCRIPT)
-    // ============================================
-    let columns = 5; // Default: máximo 5 columnas
+    let columns = 5; 
     
     if (totalSeasons <= 5) {
-        // 1-5 temporadas: todas en una fila
         columns = totalSeasons;
     } else if (totalSeasons === 6) {
-        // 6 temporadas: 2 filas de 3
         columns = 3;
     } else if (totalSeasons === 7 || totalSeasons === 8) {
-        // 7-8 temporadas: 2 filas de 4
         columns = 4;
     } else {
-        // 9+ temporadas: máximo 5 por fila
         columns = 5;
     }
 
-    // Aplicar layout calculado directamente al grid
     container.style.gridTemplateColumns = `repeat(${columns}, 200px)`;
     container.style.justifyContent = 'center';
-    container.style.maxWidth = `${columns * 200 + (columns - 1) * 20}px`; // columnas × ancho + gaps
+    container.style.maxWidth = `${columns * 200 + (columns - 1) * 20}px`; 
 
-    // ============================================
-    // RENDERIZAR TARJETAS
-    // ============================================
     seasonsMapped.forEach(({ key: seasonKey, num: seasonNum }) => {
         const rawEpisodes = episodesData[seasonKey];
         const episodes = rawEpisodes ? (Array.isArray(rawEpisodes) ? rawEpisodes : Object.values(rawEpisodes)) : [];
         
-        // Datos del Poster (URL, fecha, estado)
         let posterUrl = seriesInfo.poster || '';
         let seasonStatus = ''; 
-        let seasonStatusRaw = ''; // Valor original sin lowercase
-        let seasonCustomLabel = ''; // 🆕 Etiqueta personalizada (ej: "Parte 1/2", "Parte 3"...)
+        let seasonStatusRaw = ''; 
+        let seasonCustomLabel = ''; 
 
         const posterEntry = postersData[seasonKey];
         if (posterEntry) {
@@ -471,7 +561,7 @@ function populateSeasonGrid(seriesId) {
                 posterUrl = posterEntry.posterUrl || posterEntry.poster || posterUrl;
                 seasonStatusRaw = String(posterEntry.estado || '').trim();
                 seasonStatus = seasonStatusRaw.toLowerCase();
-                seasonCustomLabel = String(posterEntry.etiqueta || '').trim(); // 🆕
+                seasonCustomLabel = String(posterEntry.etiqueta || '').trim(); 
             } else {
                 posterUrl = posterEntry;
             }
@@ -479,15 +569,12 @@ function populateSeasonGrid(seriesId) {
         
         const totalEpisodes = episodes.length;
 
-        // 🔥 BLOQUEO: cualquier estado no vacío bloquea la temporada
         const isManuallyLocked = seasonStatus !== '' && seasonStatus !== 'disponible';
         const isEmpty = (totalEpisodes === 0);
         const isLocked = isManuallyLocked || (isEmpty && seasonStatus !== 'disponible');
 
-        // 🆕 Calcular el label final una sola vez
         const seasonLabel = formatSeasonName(seasonKey, seasonNum, seasonCustomLabel);
 
-        // Renderizado de la tarjeta
         const card = document.createElement('div');
         card.className = `season-poster-card ${isLocked ? 'locked' : ''} ${seasonStatus === 'mantenimiento' ? 'en-mantenimiento' : ''}`;
         
@@ -499,7 +586,6 @@ function populateSeasonGrid(seriesId) {
             }
         };
 
-        // Texto del overlay
         let overlayText = '';
         if (isLocked) {
             if (seasonStatus === 'mantenimiento') {
@@ -514,7 +600,6 @@ function populateSeasonGrid(seriesId) {
                 overlayText = 'PRÓXIMAMENTE';
             }
         } else if (!isNaN(seasonKey)) {
-            // Mostrar episodios para cualquier temporada numérica (con o sin etiqueta custom)
             overlayText = `${totalEpisodes} episodios`;
         }
 
@@ -529,14 +614,13 @@ function populateSeasonGrid(seriesId) {
     });
 }
 
-// 5. REPRODUCTOR DE EPISODIOS (CON DETECTOR DE IDIOMA INTELIGENTE)
+// 5. REPRODUCTOR DE EPISODIOS (Restaurado con todo el HTML original)
 export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = null) {
     try {
         shared.appState.player.activeSeriesId = seriesId;
         const savedEpisodeIndex = loadProgress(seriesId, seasonNum);
         const initialEpisodeIndex = startAtIndex !== null ? startAtIndex : savedEpisodeIndex;
         
-        // Obtener episodios para analizar idiomas
         const episodes = shared.appState.content.seriesEpisodes[seriesId]?.[seasonNum] || [];
         const firstEpisode = episodes[0];
         
@@ -545,11 +629,9 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
             return;
         }
  
-        // --- 🧠 LÓGICA DE IDIOMAS DINÁMICA ---
         const seriesTracks = getLangTracks(firstEpisode);
         const hasLangOptions = seriesTracks.length > 1;
         
-        // 🔥 NUEVO: RECUPERAR IDIOMA GUARDADO DEL USUARIO
         let savedLang = null;
         try {
             const prefs = JSON.parse(localStorage.getItem('seriesLangPrefs')) || {};
@@ -559,7 +641,6 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
         let initialLang = seriesTracks[0]?.lang || 'en';
         if (!hasLangOptions && seriesTracks[0]?.lang === 'es') initialLang = 'es';
         
-        // Si existe el idioma que el usuario prefirió en este capítulo, lo forzamos
         if (savedLang && seriesTracks.some(t => t.lang === savedLang)) {
             initialLang = savedLang;
         }
@@ -570,7 +651,6 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
             lang: initialLang 
         };
  
-        // --- RESTO DE VARIABLES ---
         const seasonLower = String(seasonNum).toLowerCase();
         const isSpecialContent = seasonLower.includes('pelicula') || 
                                  seasonLower.includes('película') || 
@@ -612,16 +692,13 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
                </span>`
             : '';
  
-        // =========================================================
-        // MODO A: PELÍCULA / ESPECIAL 
-        // =========================================================
         if (isSingleMovie) {
             shared.DOM.seriesPlayerModal.innerHTML = `
                 <button class="close-btn streaming-back-btn"><i class="fas fa-arrow-left"></i> Volver</button>
                 <div class="player-layout-container movie-mode">
                     <div class="movie-player-container">
                         <h2 id="cinema-title-${seriesId}" class="movie-player-title cinema-title-above">${displayTitle}</h2>
-                        <div class="screen"><iframe id="video-frame-${seriesId}" src="" allowfullscreen allow="autoplay; fullscreen; encrypted-media; picture-in-picture"></iframe></div>
+                        <div class="screen"><div id="video-container-${seriesId}" style="width:100%; height:100%; background:#000;"></div></div>
                     </div>
                     <div class="movie-info-sidebar">
                         <div class="movie-info-sidebar-inner">
@@ -648,11 +725,6 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
             `;
  
         } else {
-            // =========================================================
-            // MODO B: SERIE NORMAL — NUEVO LAYOUT EDGE-TO-EDGE
-            // =========================================================
- 
-            // 🔥 NUEVO: Dropdown de idioma CUSTOM (Cero estilos feos del navegador)
             let langDropdown = '';
             if (hasLangOptions) {
                 const currentLangLabel = seriesTracks.find(t => t.lang === initialLang)?.label || 'Original';
@@ -670,7 +742,6 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
                             <span style="color: #fff; font-size: 12px; font-weight: 700; text-transform: uppercase; padding-right: 10px; letter-spacing: 0.5px; pointer-events: none;">${currentLangLabel}</span>
                             <i class="fas fa-chevron-down" style="font-size: 10px; color: #aaa; pointer-events: none;"></i>
                         </div>
-                        <!-- 🔥 AHORA ABRE HACIA ABAJO (top: calc...) -->
                         <div class="cc-lang-menu" style="display: none; position: absolute; top: calc(100% + 5px); right: 0; background: #141414; border: 1px solid #333; border-radius: 8px; overflow: hidden; z-index: 999999; min-width: 130px; box-shadow: 0 10px 25px rgba(0,0,0,0.9);">
                             ${optionsHtml}
                         </div>
@@ -713,7 +784,6 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
                     .cc-logo { height: 22px; }
                     .cc-back-btn { background: transparent; border: none; color: white; font-size: 0.9rem; font-weight: bold; display: flex; align-items: center; gap: 7px; cursor: pointer; padding: 0; }
                     .cc-video-wrap { width: 100%; background: #000; position: relative; padding-top: 56.25%; height: 0; }
-                    .cc-video-wrap iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: none; }
                     .cc-details { padding: 15px; }
                     .cc-title-box { position: relative; cursor: pointer; margin-bottom: 0; user-select: none; -webkit-tap-highlight-color: transparent; }
                     .cc-title { font-size: 1.2rem; font-weight: bold; margin: 0 0 4px 0; color: white; line-height: 1.2;}
@@ -727,7 +797,7 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
                     .cc-controls { display: flex; align-items: center; justify-content: flex-start; gap: 15px; margin: 10px 0 15px 0; flex-wrap: wrap; overflow: visible; }
                     .cc-controls::-webkit-scrollbar { display: none; }
                     .cc-season-btn { display: inline-flex; align-items: center; gap: 8px; font-size: 16px; font-weight: bold; cursor: pointer; padding: 8px; border-radius: 8px; background-color: transparent; color: white; margin-left: -8px; }
-                    .cc-langs { display: flex; gap: 8px; flex-wrap: nowrap; margin-left: auto; } /* margin-left auto empuja el dropdown a la derecha suavemente */
+                    .cc-langs { display: flex; gap: 8px; flex-wrap: nowrap; margin-left: auto; } 
                     .cc-card { display: flex !important; gap: 12px !important; margin-bottom: 16px !important; align-items: center !important; padding: 0 !important; background: transparent !important; border: none !important; cursor: pointer; }
                     .cc-thumb { width: 120px !important; height: 67px !important; border-radius: 8px !important; object-fit: cover !important; border: 2px solid transparent !important; flex-shrink: 0; background: #222;}
                     .cc-card.active .cc-thumb { border: 2px solid #e50914 !important; }
@@ -755,7 +825,7 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
                         <button class="cc-back-btn streaming-back-btn"><i class="fas fa-times"></i> Cerrar</button>
                     </nav>
                     <div class="cc-video-wrap">
-                        <iframe id="video-frame-${seriesId}" src="" allowfullscreen allow="autoplay; fullscreen; encrypted-media; picture-in-picture"></iframe>
+                        <div id="video-container-${seriesId}" style="width:100%; height:100%; background:#000; position:absolute; inset:0;"></div>
                     </div>
                     <div class="cc-details">
                         <div class="cc-title-box" id="toggleDescBtn">
@@ -810,7 +880,6 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
                 </div>
             `;
  
-            // — Listeners Scroll / Expandir sinopsis —
             const scrollArea    = shared.DOM.seriesPlayerModal.querySelector('#scrollArea');
             const fixedHeader   = shared.DOM.seriesPlayerModal.querySelector('#fixedHeader');
             const toggleText    = shared.DOM.seriesPlayerModal.querySelector('#toggleText');
@@ -844,7 +913,6 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
                 });
             }
  
-            // — Bottom Sheet de Temporadas —
             const seasonSelectorBtn        = shared.DOM.seriesPlayerModal.querySelector('#seasonSelectorBtn');
             const seasonModalSheet         = shared.DOM.seriesPlayerModal.querySelector('#seasonModalSheet');
             const closeSeasonSheetBtn      = shared.DOM.seriesPlayerModal.querySelector('#closeSeasonSheetBtn');
@@ -899,7 +967,6 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
                 seasonModalSheet.addEventListener('click', closeSheet);
             }
  
-            // — Listener Reportar problema (MODO B) —
             const reportBtnB = shared.DOM.seriesPlayerModal.querySelector('.vab-btn--report');
             if (reportBtnB) {
                 reportBtnB.addEventListener('click', async () => {
@@ -909,57 +976,53 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
                     } catch(e) { console.error('Error al abrir reporte:', e); }
                 });
             }
-        } // fin MODO B
+        } 
  
-        // ── LISTENERS COMUNES ──────────────────
         shared.DOM.seriesPlayerModal.querySelector('.streaming-back-btn').onclick = closeSeriesPlayerModal;
         
-        // — Lógica Dropdown Idiomas —
-            const langWrapper = shared.DOM.seriesPlayerModal.querySelector('.cc-custom-lang-wrapper');
-            if (langWrapper) {
-                const trigger = langWrapper.querySelector('.cc-lang-trigger');
-                const menu = langWrapper.querySelector('.cc-lang-menu');
-                const options = langWrapper.querySelectorAll('.cc-lang-option');
+        const langWrapper = shared.DOM.seriesPlayerModal.querySelector('.cc-custom-lang-wrapper');
+        if (langWrapper) {
+            const trigger = langWrapper.querySelector('.cc-lang-trigger');
+            const menu = langWrapper.querySelector('.cc-lang-menu');
+            const options = langWrapper.querySelectorAll('.cc-lang-option');
 
-                trigger.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    const isOpen = menu.style.display === 'block';
-                    menu.style.display = isOpen ? 'none' : 'block';
-                    trigger.style.borderColor = isOpen ? 'rgba(255, 255, 255, 0.15)' : '#e50914';
-                });
+            trigger.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const isOpen = menu.style.display === 'block';
+                menu.style.display = isOpen ? 'none' : 'block';
+                trigger.style.borderColor = isOpen ? 'rgba(255, 255, 255, 0.15)' : '#e50914';
+            });
 
-                document.addEventListener('click', () => {
-                    if (menu.style.display === 'block') {
-                        menu.style.display = 'none';
-                        trigger.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+            document.addEventListener('click', () => {
+                if (menu.style.display === 'block') {
+                    menu.style.display = 'none';
+                    trigger.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+                }
+            });
+
+            options.forEach(opt => {
+                opt.addEventListener('mouseenter', () => {
+                    if (opt.style.background !== 'rgb(229, 9, 20)' && opt.style.background !== '#e50914') {
+                        opt.style.background = '#2a2a2a';
                     }
                 });
-
-                options.forEach(opt => {
-                    opt.addEventListener('mouseenter', () => {
-                        // Solo aplica hover gris si no es el rojo seleccionado
-                        if (opt.style.background !== 'rgb(229, 9, 20)' && opt.style.background !== '#e50914') {
-                            opt.style.background = '#2a2a2a';
-                        }
-                    });
-                    opt.addEventListener('mouseleave', () => {
-                        if (opt.style.background !== 'rgb(229, 9, 20)' && opt.style.background !== '#e50914') {
-                            opt.style.background = 'transparent';
-                        }
-                    });
-                    
-                    opt.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        menu.style.display = 'none';
-                        changeLanguage(seriesId, opt.dataset.lang);
-                    });
+                opt.addEventListener('mouseleave', () => {
+                    if (opt.style.background !== 'rgb(229, 9, 20)' && opt.style.background !== '#e50914') {
+                        opt.style.background = 'transparent';
+                    }
                 });
-            }
+                
+                opt.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    menu.style.display = 'none';
+                    changeLanguage(seriesId, opt.dataset.lang);
+                });
+            });
+        }
         
         const backButton = shared.DOM.seriesPlayerModal.querySelector('.player-back-link.back-to-seasons');
         if (backButton) backButton.onclick = () => renderSeasonGrid(seriesId);
  
-        // — Botón Reseña (solo modo película) —
         const reviewBtn = shared.DOM.seriesPlayerModal.querySelector(`#btn-review-player-${seriesId}`);
         if (reviewBtn) {
             reviewBtn.onclick = () => {
@@ -980,7 +1043,6 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
             };
         }
  
-        // — Botón Reportar problema (solo modo película) —
         const reportBtnSp = shared.DOM.seriesPlayerModal.querySelector('.btn-report-sp');
         if (reportBtnSp) {
             reportBtnSp.onclick = async () => {
@@ -991,7 +1053,6 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
             };
         }
  
-        // — Ver más / Ver menos en sinopsis de película —
         if (isSingleMovie) {
             const synopsisEl = shared.DOM.seriesPlayerModal.querySelector('#cinema-synopsis-sp');
             if (synopsisEl) {
@@ -1056,17 +1117,8 @@ export function openEpisode(seriesId, season, newEpisodeIndex) {
     if (!episode) return;
  
     clearTimeout(shared.appState.player.episodeOpenTimer);
-    shared.appState.player.pendingHistorySave = null;
+    shared.appState.player.pendingHistorySave = { contentId: seriesId, type: 'series', episodeInfo: { season, index: newEpisodeIndex, title: episode.title || '' } };
  
-    shared.appState.player.episodeOpenTimer = setTimeout(() => {
-        shared.appState.player.pendingHistorySave = {
-            contentId:   seriesId,
-            type:        'series',
-            episodeInfo: { season, index: newEpisodeIndex, title: episode.title || '' }
-        };
-    }, 3000);
- 
-    // — Marcar episodio activo en la lista —
     shared.DOM.seriesPlayerModal.querySelectorAll('.episode-card.active').forEach(c => c.classList.remove('active'));
     const activeCard = shared.DOM.seriesPlayerModal.querySelector(`#episode-card-${seriesId}-${season}-${newEpisodeIndex}`);
     if (activeCard) {
@@ -1074,56 +1126,51 @@ export function openEpisode(seriesId, season, newEpisodeIndex) {
         activeCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
  
-    // — Guardar progreso —
-    shared.appState.player.state[seriesId] = {
-        ...shared.appState.player.state[seriesId],
-        season,
-        episodeIndex: newEpisodeIndex
-    };
+    shared.appState.player.state[seriesId] = { ...shared.appState.player.state[seriesId], season, episodeIndex: newEpisodeIndex };
     saveProgress(seriesId);
  
-    // — Cargar vídeo —
-    const iframe = shared.DOM.seriesPlayerModal.querySelector(`#video-frame-${seriesId}`);
-    const lang   = shared.appState.player.state[seriesId]?.lang || 'es';
+    const container = shared.DOM.seriesPlayerModal.querySelector(`#video-container-${seriesId}`);
+    const lang = shared.appState.player.state[seriesId]?.lang || 'es';
  
     let videoId;
-    if      (lang === 'en' && episode.videoId_en)  videoId = episode.videoId_en;
-    else if (lang === 'es' && episode.videoId_es)  videoId = episode.videoId_es;
+    if (lang === 'en' && episode.videoId_en) videoId = episode.videoId_en;
+    else if (lang === 'es' && episode.videoId_es) videoId = episode.videoId_es;
     else if (lang === 'jp' && (episode.videoId_jp || episode.videoId_alt)) videoId = episode.videoId_jp || episode.videoId_alt;
     else videoId = episode.videoId;
  
-    if (iframe) iframe.src = getEmbedUrl(videoId);
+    if (container) {
+        if (shared.appState.player.activeCineInstance) {
+            shared.appState.player.activeCineInstance.destroy();
+        }
+        
+        shared.appState.player.activeCineInstance = new CinePlayer(container);
+        
+        const subId = episode.subId || null; 
+        
+        shared.appState.player.activeCineInstance.load({
+            videoId: videoId,
+            subId: subId,
+            title: episode.title || `Episodio ${newEpisodeIndex + 1}`,
+            poster: episode.thumbnail || episode.thumb || episode.image || ''
+        });
+    }
  
-    // — Detectar si es contenido especial —
     const seasonLower = String(season).toLowerCase();
-    const isSpecialContent = seasonLower.includes('pelicula')  ||
-                             seasonLower.includes('película')  ||
-                             seasonLower.includes('especial')  ||
-                             seasonLower.includes('ova')       ||
-                             seasonLower.includes('movie')     ||
-                             seasonLower.includes('special');
+    const isSpecialContent = seasonLower.includes('pelicula') || seasonLower.includes('película') || seasonLower.includes('especial') || seasonLower.includes('ova') || seasonLower.includes('movie') || seasonLower.includes('special');
  
     const episodeNumber = episode.episodeNumber || newEpisodeIndex + 1;
  
-    // — Actualizar títulos —
     const subTitleEl = shared.DOM.seriesPlayerModal.querySelector('#subTitle');
     const titleEl    = shared.DOM.seriesPlayerModal.querySelector(`#cinema-title-${seriesId}`);
     const infoDescEl = shared.DOM.seriesPlayerModal.querySelector(`#episode-desc-${seriesId}`);
  
     const episodeTitleText = episode.title || `Episodio ${episodeNumber}`;
-    const subTitleText     = isSpecialContent
-        ? 'Especial / Película'
-        : `Temporada ${String(season).replace('T', '')} | Ep ${episodeNumber}`;
+    const subTitleText     = isSpecialContent ? 'Especial / Película' : `Temporada ${String(season).replace('T', '')} | Ep ${episodeNumber}`;
  
     if (subTitleEl)  subTitleEl.textContent = subTitleText;
     if (titleEl)     titleEl.textContent    = episodeTitleText;
-    if (infoDescEl)  infoDescEl.innerHTML   =
-        `<strong>Sinopsis:</strong><br><br>${
-            episode.description || episode.synopsis || episode.desc
-            || 'No hay descripción disponible para este episodio.'
-        }`;
+    if (infoDescEl)  infoDescEl.innerHTML   = `<strong>Sinopsis:</strong><br><br>${episode.description || episode.synopsis || episode.desc || 'No hay descripción disponible para este episodio.'}`;
  
-    // 🔥 Sincronizar el Dropdown Custom de Idioma visualmente —
     const langWrapper = shared.DOM.seriesPlayerModal.querySelector('.cc-custom-lang-wrapper');
     if (langWrapper) {
         const triggerSpan = langWrapper.querySelector('.cc-lang-trigger span');
@@ -1131,14 +1178,11 @@ export function openEpisode(seriesId, season, newEpisodeIndex) {
         
         options.forEach(opt => {
             if (opt.dataset.lang === lang) {
-                // Marcar como activo (fondo rojo, texto blanco)
                 opt.style.background = '#e50914';
                 opt.style.color = '#fff';
                 opt.classList.add('active');
-                // Actualizar el texto del botón principal
                 if (triggerSpan) triggerSpan.textContent = opt.textContent.trim();
             } else {
-                // Desmarcar los demás
                 opt.style.background = 'transparent';
                 opt.style.color = '#aaa';
                 opt.classList.remove('active');
@@ -1146,7 +1190,6 @@ export function openEpisode(seriesId, season, newEpisodeIndex) {
         });
     }
  
-    // — Auto-scroll al inicio en móvil al cambiar de episodio —
     const scrollAreaEp = shared.DOM.seriesPlayerModal.querySelector('#scrollArea');
     if (scrollAreaEp && window.innerWidth <= 768) {
         scrollAreaEp.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1175,7 +1218,6 @@ function updateNavButtons(seriesId, season, episodeIndex) {
 function changeLanguage(seriesId, lang) {
     shared.appState.player.state[seriesId].lang = lang;
     
-    // 🔥 NUEVO: GUARDAR LA ELECCIÓN EN LA MEMORIA DEL NAVEGADOR
     try {
         let prefs = JSON.parse(localStorage.getItem('seriesLangPrefs')) || {};
         prefs[seriesId] = lang;
@@ -1186,186 +1228,61 @@ function changeLanguage(seriesId, lang) {
     openEpisode(seriesId, season, episodeIndex);
 }
 
-// 6. REPRODUCTOR DE PELÍCULAS (FORMATO COMPLETO CON INFORMACIÓN CORRECTA)
+// 6. REPRODUCTOR DE PELÍCULAS
 export function openPlayerModal(movieId, movieTitle) {
     try {
         shared.closeAllModals();
-        
-        // 🔥 USAMOS EL BUSCADOR INTELIGENTE
         const movieData = findContentData(movieId);
 
-        if (!movieData) {
-            logError(`Película no encontrada: ${movieId}`, 'Player: Open Movie', 'warning');
-            shared.ErrorHandler.show(shared.ErrorHandler.types.CONTENT, 'No se pudo cargar la película.');
+        if (!movieData || (movieData.estado && movieData.estado.toLowerCase() === 'vetada')) {
+            shared.ErrorHandler.show(shared.ErrorHandler.types.CONTENT, 'Película no disponible.');
             return;
         }
 
-        // 🚫 VERIFICAR SI LA PELÍCULA ESTÁ VETADA
-        if (movieData.estado && movieData.estado.toLowerCase() === 'vetada') {
-            console.warn('⚠️ Intento de reproducir película vetada:', movieId);
-            shared.ErrorHandler.show(
-                shared.ErrorHandler.types.CONTENT, 
-                'Esta película no está disponible para reproducción.'
-            );
-            return; // Bloquear completamente la reproducción
-        }
-
-        const hasSpanish = !!(movieData.videoId_es && movieData.videoId_es.trim());
-        const hasEnglish = !!(movieData.videoId_en && movieData.videoId_en.trim());
-        const hasMultipleLangs = hasSpanish && hasEnglish;
-        // Mostrar modal
         shared.DOM.cinemaModal.classList.add('show');
         document.body.classList.add('modal-open');
 
-        // 1. ACTUALIZAR POSTER (de la columna "poster" de la misma hoja)
-        const posterImg = shared.DOM.cinemaModal.querySelector('#cinema-poster');
-        if (posterImg) {
-            posterImg.src = movieData.poster || movieData.image || '';
-            posterImg.alt = movieData.title || 'Poster';
-        }
-
-        // 2. ACTUALIZAR TÍTULO
-        const titleElement = shared.DOM.cinemaModal.querySelector('#cinema-title');
-        if (titleElement) {
-            titleElement.textContent = movieTitle || movieData.title || "Película";
-        }
-
-        // 3. ACTUALIZAR META INFORMACIÓN - ORDEN: Pedido, Año, Duración
-        const requesterEl = shared.DOM.cinemaModal.querySelector('#cinema-requester');
-        const yearEl = shared.DOM.cinemaModal.querySelector('#cinema-year');
-        const durationEl = shared.DOM.cinemaModal.querySelector('#cinema-duration');
-
-        // 1. Solicitante (de la columna "pedido") - PRIMERO
-        if (requesterEl) {
-            requesterEl.textContent = movieData.pedido || movieData.requester || 'Anónimo';
-            requesterEl.style.display = (movieData.pedido || movieData.requester) ? 'inline-flex' : 'none';
-        }
-
-        // 2. Año - SEGUNDO
-        if (yearEl) {
-            // Buscamos en 'year' O en 'anio' y quitamos espacios vacíos
-            const finalYear = (movieData.year || movieData.anio || '').toString().trim();
-            
-            if (finalYear.length > 0) {
-                yearEl.textContent = finalYear;
-                yearEl.style.display = 'inline-flex';
-            } else {
-                // Si no hay año real, ocultamos TODO (incluido el icono)
-                yearEl.style.display = 'none';
-            }
-        }
-
-        // 3. Duración (de la columna "duration") - TERCERO
-        if (durationEl) {
-            durationEl.textContent = movieData.duration || 'Duration';
-            durationEl.style.display = 'inline-flex';
-        }
-
-        // 🔥 4. NUEVO: HORA DE TÉRMINO CALCULADA (MEJORADA)
-        let endTimeEl = shared.DOM.cinemaModal.querySelector('#cinema-endtime');
-        const metaContainer = shared.DOM.cinemaModal.querySelector('.movie-meta-info');
-
-        if (movieData.duration) {
-            const finishTime = calculateFinishTime(movieData.duration);
-            
-            if (finishTime) {
-                if (!endTimeEl && metaContainer) {
-                    endTimeEl = document.createElement('div'); // Usamos div o span
-                    endTimeEl.id = 'cinema-endtime';
-                    
-                    if (durationEl && durationEl.nextSibling) {
-                        metaContainer.insertBefore(endTimeEl, durationEl.nextSibling);
-                    } else {
-                        metaContainer.appendChild(endTimeEl);
-                    }
-                }
-                
-                // --- ESTILO Y CONTENIDO MEJORADO ---
-                if (endTimeEl) {
-                    // 1. Aplicamos la clase para que se vea como una "cajita" igual al resto
-                    endTimeEl.className = 'meta-tag'; 
-                    
-                    // 2. Formato: Icono rojo + Texto claro + Hora en negrita
-                    endTimeEl.innerHTML = `
-                        <i class="fas fa-flag-checkered" style="color:#ff4d4d;"></i> 
-                        <span style="opacity: 0.9; margin-left: 5px;">Terminas de ver a las <strong style="color: #fff;">${finishTime}</strong> aprox.</span>
-                    `;
-                    
-                    endTimeEl.style.display = 'inline-flex';
-                    endTimeEl.style.alignItems = 'center';
-                }
-            }
-        } else {
-            if (endTimeEl) endTimeEl.style.display = 'none';
-        }
-
-        // 4.5 ACTUALIZAR SINOPSIS (de la columna "synopsis")
-        const synopsisEl = shared.DOM.cinemaModal.querySelector('#cinema-synopsis');
-        if (synopsisEl) {
-            synopsisEl.textContent = movieData.synopsis || 'Sin sinopsis disponible.';
-        }
-
-        // 5. CONFIGURAR BOTONES DE IDIOMA (DINÁMICO)
         const tracks = getLangTracks(movieData);
-        const langSelection = shared.DOM.cinemaModal.querySelector('.movie-lang-selection');
-        const langContainer = langSelection?.parentNode;
-
-        if (langSelection) langSelection.remove(); // limpiar anterior
-
-        const iframe = shared.DOM.cinemaModal.querySelector('iframe');
-        if (iframe) iframe.src = '';
-
-        if (tracks.length === 0) {
-            // Sin video registrado
-        } else if (tracks.length === 1) {
-            // Un solo idioma: carga automática sin botones
+        if (tracks.length > 0) {
             loadMovieInPlayer(tracks[0].id, movieId, movieData);
-        } else {
-            // Múltiples idiomas: botones dinámicos
-            const defaultTrack = tracks[0];
-            loadMovieInPlayer(defaultTrack.id, movieId, movieData);
-
-            const buttonsHTML = buildLangButtonsHTML(tracks, defaultTrack.lang, 'lang-select-btn');
-            const wrapper = shared.DOM.cinemaModal.querySelector('.screen')?.parentNode;
-            if (wrapper) {
-                const div = document.createElement('div');
-                div.className = 'movie-lang-selection';
-                div.innerHTML = tracks.map(t => `
-                    <button class="lang-select-btn ${t.lang === defaultTrack.lang ? 'active' : ''}" data-lang="${t.lang}">
-                        ${t.label}
-                    </button>`).join('');
-                wrapper.appendChild(div);
-
-                div.querySelectorAll('.lang-select-btn').forEach(btn => {
-                    btn.addEventListener('click', () => {
-                        div.querySelectorAll('.lang-select-btn').forEach(b => b.classList.remove('active'));
-                        btn.classList.add('active');
-                        const track = tracks.find(t => t.lang === btn.dataset.lang);
-                        if (track) loadMovieInPlayer(track.id, movieId, movieData);
-                    });
-                });
-            }
         }
 
-        // 6. CONFIGURAR CONTROLES ADICIONALES (Mi Lista + Reseñas)
         setupMovieControls(movieId, movieData);
-
     } catch (e) {
         logError(e, 'Player: Open Modal');
-        shared.ErrorHandler.show('unknown', 'Error al abrir el reproductor.');
     }
 }
 
-// Helper para cargar la película en el reproductor
 function loadMovieInPlayer(videoId, movieId, movieData) {
-    const iframe = shared.DOM.cinemaModal.querySelector('iframe');
-    if (!iframe) return;
+    const screenDiv = shared.DOM.cinemaModal.querySelector('.screen') || shared.DOM.cinemaModal.querySelector('.video-container');
+    if (!screenDiv) return;
 
-    // Cargar video (el timer ya fue iniciado desde el botón "Ver ahora" en detalles)
-    iframe.src = getEmbedUrl(videoId);
+    const iframe = screenDiv.querySelector('iframe');
+    if (iframe) iframe.remove();
+    
+    let container = screenDiv.querySelector('.artplayer-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.className = 'artplayer-container';
+        container.style.width = '100%';
+        container.style.height = '100%';
+        container.style.background = '#000';
+        screenDiv.appendChild(container);
+    }
+
+    if (shared.appState.player.activeCineInstance) {
+        shared.appState.player.activeCineInstance.destroy();
+    }
+    
+    shared.appState.player.activeCineInstance = new CinePlayer(container);
+    shared.appState.player.activeCineInstance.load({
+        videoId: videoId,
+        subId: movieData.subId || null,
+        title: movieData.title || '',
+        poster: movieData.poster || movieData.image || ''
+    });
 }
 
-// Helper para configurar controles adicionales (Mi Lista + Reseñas)
 function setupMovieControls(movieId, movieData) {
     const cinemaControls = shared.DOM.cinemaModal.querySelector('.cinema-controls');
     if (!cinemaControls) return;
@@ -1373,7 +1290,6 @@ function setupMovieControls(movieId, movieData) {
     let controlsHTML = '';
     const user = shared.auth.currentUser;
     
-    // Botón "Mi Lista" (solo si está logueado)
     if (user) {
         const isInList = shared.appState.user.watchlist.has(movieId);
         const iconClass = isInList ? 'fa-check' : 'fa-plus';
@@ -1386,7 +1302,6 @@ function setupMovieControls(movieId, movieData) {
         `;
     }
     
-    // Botón "Escribir Reseña" (siempre visible)
     controlsHTML += `
         <button class="btn-review" data-content-id="${movieId}" data-type="movie">
             <i class="fas fa-star"></i> 
@@ -1396,11 +1311,9 @@ function setupMovieControls(movieId, movieData) {
     
     cinemaControls.innerHTML = controlsHTML;
     
-    // Event listener para el botón de reseñas
     const reviewBtn = cinemaControls.querySelector('.btn-review');
     if (reviewBtn) {
         reviewBtn.addEventListener('click', () => {
-            // 🔥 CORRECCIÓN: Usar la función global window.openSmartReviewModal
             if (typeof window.openSmartReviewModal === 'function') {
                 window.openSmartReviewModal(movieId, 'movie', movieData.title);
             } else {
@@ -1410,7 +1323,6 @@ function setupMovieControls(movieId, movieData) {
     }
 }
 
-// 7. FUNCIONES PÚBLICAS AUXILIARES
 export function playRandomEpisode(seriesId) {
     const episodesData = shared.appState.content.seriesEpisodes[seriesId];
     if (!episodesData) {
@@ -1452,75 +1364,19 @@ export function openPlayerToEpisode(seriesId, seasonNum, episodeIndex) {
     renderEpisodePlayer(seriesId, seasonNum, episodeIndex);
 }
 
-/**
- * Función simplificada para reproducir un episodio específico
- * @param {string} seriesId - ID de la serie
- * @param {string} seasonNum - Número/clave de temporada
- * @param {string|number} episodeNum - Número del episodio (1-indexed en la hoja)
- */
-// NOTA: Esta función está obsoleta. Usa openPlayerToEpisode() en su lugar.
-// Mantenida aquí por compatibilidad pero no debe usarse.
-function playEpisode(seriesId, seasonKey, episodeIndex) {
-    // 1. Validar que existan los datos
-    const allEpisodes = shared.appState.content.seriesEpisodes[seriesId];
-    if (!allEpisodes || !allEpisodes[seasonKey] || !allEpisodes[seasonKey][episodeIndex]) {
-        console.error('Episodio no encontrado');
-        return;
-    }
-
-    const episode = allEpisodes[seasonKey][episodeIndex];
-    
-    // 2. Actualizar variables de estado (para saber dónde estamos)
-    state.currentSeriesId = seriesId;
-    state.currentSeason = seasonKey;
-    state.currentEpisodeIndex = episodeIndex;
-
-    // 3. Actualizar la interfaz (Título, descripción, botones)
-    updatePlayerUI(episode, seasonKey, episodeIndex, allEpisodes[seasonKey].length);
-
-    // 4. Cargar el iframe del video
-    const iframe = document.getElementById('series-iframe');
-    if (iframe) {
-        iframe.src = getEmbedUrl(rawUrl);
-    }
-
-    // 5. Marcar visualmente el episodio activo en la lista
-    highlightCurrentEpisode(seasonKey, episodeIndex);
-
-    // 🔥 AÑADIR ESTO AL FINAL: GUARDADO AUTOMÁTICO 🔥
-    // Esto asegura que apenas cargue el video, se guarde en "Continuar Viendo"
-    if (shared.addToHistoryIfLoggedIn && typeof shared.addToHistoryIfLoggedIn === 'function') {
-        shared.addToHistoryIfLoggedIn(seriesId, 'series', {
-            season: seasonKey,
-            index: episodeIndex,
-            title: episode.title
-        });
-        console.log(`✅ Historial actualizado: ${episode.title}`);
-    }
-}
-
-// ==========================================
-// HELPER: CALCULAR HORA DE TÉRMINO (V2 INTELIGENTE)
-// ==========================================
 function calculateFinishTime(durationStr) {
     if (!durationStr) return null;
     
     let hours = 0, minutes = 0, seconds = 0;
     
-    // Limpieza básica
     durationStr = durationStr.toString().trim();
 
-    // Caso 1: Formato con dos puntos (ej: "58:20" o "2:30:00")
     if (durationStr.includes(':')) {
         const parts = durationStr.split(':').map(Number);
         
         if (parts.length === 3) {
-            // Formato H:MM:SS
             [hours, minutes, seconds] = parts;
         } else if (parts.length === 2) {
-            // AMBIGÜEDAD: ¿H:MM o M:SS?
-            // 🔥 CORRECCIÓN: Si el primer número es > 7, asumimos que son MINUTOS.
-            // (Ej: "58:20" son 58 min, no 58 horas)
             if (parts[0] > 7) {
                 [minutes, seconds] = parts; 
             } else {
@@ -1528,7 +1384,6 @@ function calculateFinishTime(durationStr) {
             }
         }
     } 
-    // Caso 2: Texto (ej: "2h 15m" o "90 min")
     else {
         const hMatch = durationStr.match(/(\d+)\s*h/);
         const mMatch = durationStr.match(/(\d+)\s*m/);
@@ -1541,7 +1396,6 @@ function calculateFinishTime(durationStr) {
         }
     }
 
-    // Calcular fecha final
     const now = new Date();
     const durationMs = (hours * 3600000) + (minutes * 60000) + (seconds * 1000);
     const endTime = new Date(now.getTime() + durationMs);
