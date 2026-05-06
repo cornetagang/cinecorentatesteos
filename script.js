@@ -6,7 +6,7 @@
 // ===========================================================
 // 1. IMPORTS
 // ===========================================================
-import { API_URL, firebaseConfig, UI } from './core/config.js';
+import { API_URL, firebaseConfig, UI, THEMES } from './core/config.js';
 import { logError, ErrorHandler } from './utils/logger.js';
 import CacheManager from './utils/cache-manager.js';
 import ModalManager from './utils/modal-manager.js';
@@ -88,6 +88,7 @@ async function getPlayerModule() {
     module.initPlayer({
         appState, DOM, ErrorHandler, auth, db,
         addToHistoryIfLoggedIn, switchView,
+        THEMES,
         closeAllModals: () => modalManager.closeAll(), 
         openDetailsModal
     });
@@ -335,7 +336,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }).observe(cinemaEl, { attributes: true });
     }
 
-    const seriesModal = document.getElementById('series-player-modal');
+    const seriesModal = document.getElementById('series-player-page');
     if (seriesModal) {
         new MutationObserver(async mutations => {
             for (const m of mutations) {
@@ -3076,15 +3077,9 @@ function openAuthModal(isLogin) {
 
     ['login-error', 'register-error', 'recovery-message'].forEach(id => {
         const el = document.getElementById(id);
-        if(el) el.textContent = '';
-        el.style.display = 'none';
-    });
-    
-    ['login-error', 'register-error', 'recovery-message'].forEach(id => {
-    const el = document.getElementById(id);
-        if(el) {
+        if (el) {
             el.textContent = '';
-            el.style.display = 'none'; 
+            el.style.display = 'none';
         }
     });
     
