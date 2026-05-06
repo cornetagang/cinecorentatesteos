@@ -2302,3 +2302,48 @@ body:has(#series-player-page.active) .bottom-nav {
 #series-player-page .controls-row .lang-select-btn::before, #series-player-page .controls-row .lang-select-btn::after {
     display: none !important;
 }
+
+/* ===========================================================
+   🔥 INTEGRACIÓN ARTPLAYER (CINEPLAYER) - MÓVIL
+   =========================================================== */
+@media (max-width: 768px) {
+    .cine-player-wrapper {
+        border-radius: 0; /* Pantalla completa sin bordes redondeados en cel */
+    }
+    
+    .cine-player-wrapper .art-video-player {
+        border-radius: 0;
+    }
+
+    /* Controles de ArtPlayer más grandes para el táctil */
+    .art-video-player .art-controls {
+        padding: 0 10px 10px !important;
+    }
+
+    /* Barra de progreso más gruesa */
+    .art-video-player .art-control-progress {
+        height: 5px !important;
+    }
+
+    /* Botones de play/pausa/volumen más accesibles */
+    .art-video-player .art-icon {
+        width: 40px !important;
+        height: 40px !important;
+    }
+
+    /* Ajuste del bloque de error para móvil */
+    .player-error i {
+        font-size: 32px;
+    }
+    
+    .player-error__title {
+        font-size: 1rem;
+    }
+}
+
+/* Si giran el celular (Landscape), forzar altura máxima */
+@media (max-width: 850px) and (orientation: landscape) {
+    .cine-player-wrapper {
+        height: 100svh;
+    }
+}
