@@ -227,7 +227,85 @@ export const ContentManager = {
      */
     getSeasonPosters(seriesId, appState) {
         return appState?.content?.seasonPosters?.[seriesId] || null;
-    }
+    },
+
+    // ===========================================================
+    // 🆕 SUBTÍTULOS — Mapeo de columnas de Google Sheet
+    // Columna E → subId  |  Columna F → subType ('srt' | 'ass')
+    // ===========================================================
+
+    /**
+     * Extrae y normaliza la configuración de subtítulos de un episodio o película.
+     * Lee los campos subId (col E) y subType (col F) que devuelve el Apps Script.
+     *
+     * Reglas:
+     *  - Si subType es 'srt' → player usará art.subtitle.url (nativo, liviano, ideal móvil)
+     *  - Si subType es 'ass' → player usará SubtitlesOctopus WASM (renderizado avanzado)
+     *  - Si hay subId pero no subType → fallback a 'srt' (más seguro en móvil)
+     *  - Si no hay subId → { subId: null, subType: null } (no intentar cargar nada)
+     *
+     * @param {Object} item - Objeto de episodio o película
+     * @returns {{ subId: string|null, subType: 'srt'|'ass'|null }}
+     */
+    getSubtitleConfig(item) {
+        if (!item) return { subId: null, subType: null };
+
+        // Soportar variantes de nombre de campo por compatibilidad
+        const rawSubId = (
+            item.subId   ||
+            item.sub_id  ||
+            item.subtitleId ||
+            ''
+        ).toString().trim();
+
+        const rawSubType = (
+            item.subType      ||
+            item.sub_type     ||
+            item.subtitleType ||
+            ''
+        ).toString().trim().toLowerCase();
+
+        const subId = rawSubId || null;
+
+        // Solo aceptar valores válidos explícitos
+        let subType = null;
+        if (subId) {
+            if (rawSubType === 'ass' || rawSubType === 'ssa') {
+                subType = 'ass';
+            } else {
+                // 'srt', vacío, o cualquier otro valor → SRT (más liviano y compatible)
+                subType = 'srt';
+            }
+        }
+
+        return { subId, subType };
+    },
+
+    /**
+     * Aplica getSubtitleConfig a todos los episodios de una temporada.
+     * Útil para pre-validar antes de renderizar la lista de episodios.
+     *
+     * @param {Array} episodes - Array de objetos episodio
+     * @returns {Array} - Array con { subId, subType } normalizado en cada episodio
+     */
+    normalizeEpisodeSubtitles(episodes) {
+        if (!Array.isArray(episodes)) return [];
+        return episodes.map(ep => ({
+            ...ep,
+            ...this.getSubtitleConfig(ep)  // Sobrescribe subId/subType con versión normalizada
+        }));
+    },
+
+    /**
+     * Verifica si un episodio o película tiene subtítulos válidos configurados.
+     *
+     * @param {Object} item - Objeto de episodio o película
+     * @returns {boolean}
+     */
+    hasSubtitles(item) {
+        const { subId } = this.getSubtitleConfig(item);
+        return subId !== null;
+    },
 };
 
 export default ContentManager;
