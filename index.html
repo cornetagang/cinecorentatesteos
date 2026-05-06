@@ -9,6 +9,10 @@
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin> 
         <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Montserrat:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet"> 
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+        
+        <!-- 🔴 ArtPlayer CSS -->
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/artplayer/dist/artplayer.css">
+        
         <link rel="stylesheet" href="css/escritorio.css">
         <link rel="stylesheet" href="css/telefono.css">
         <style>.cinema-title-above { margin: 0 0 10px 0 !important; padding: 0 !important; text-align: center !important; font-size: 1.8rem !important; line-height: 1.2 !important; color: #fff !important; white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important; }</style>         
@@ -27,24 +31,12 @@
                         </div>                         
                         <nav class="main-nav"> 
                             <ul> 
-                                <li>
-                                    <a href="#" class="active" data-filter="all">Inicio</a>
-                                </li>                                 
-                                <li>
-                                    <a href="#" data-filter="movie">Películas</a>
-                                </li>                                 
-                                <li>
-                                    <a href="#" data-filter="series">Series</a>
-                                </li>                                 
-                                <li>
-                                    <a href="#" data-filter="sagas">Universos</a>
-                                </li>                                 
-                                <li>
-                                    <a href="#" data-filter="roulette">Ruleta</a>
-                                </li>                                 
-                                <li>
-                                    <a href="#" data-filter="reviews">Reseñas</a>
-                                </li>                                 
+                                <li><a href="#" class="active" data-filter="all">Inicio</a></li>                                 
+                                <li><a href="#" data-filter="movie">Películas</a></li>                                 
+                                <li><a href="#" data-filter="series">Series</a></li>                                 
+                                <li><a href="#" data-filter="sagas">Universos</a></li>                                 
+                                <li><a href="#" data-filter="roulette">Ruleta</a></li>                                 
+                                <li><a href="#" data-filter="reviews">Reseñas</a></li>                                 
                             </ul>                             
                         </nav>                         
                     </div>                     
@@ -133,7 +125,6 @@
                     </button>                     
                 </div>                 
             </div>             
-            <!-- Barra de pestañas / filtros de vista -->             
             <div class="reviews-tabs-bar" id="reviews-tabs-bar"> 
                 <div class="rv-tabs-left"> 
                     <button class="rv-tab active" data-tab="all"> 
@@ -153,8 +144,7 @@
                     </div>                     
                 </div>                 
             </div>             
-            <div class="reviews-two-col"> 
-                <!-- Columna izquierda: Stats fijos -->                 
+            <div class="reviews-two-col">               
                 <aside class="reviews-sidebar"> 
                     <div id="reviews-stats-panel" class="reviews-stats-panel" style="display:none;"> 
                         <div class="rsp-avg-block"> 
@@ -166,34 +156,21 @@
                         </div>                         
                         <div class="rsp-bars" id="rsp-bars"></div>                         
                     </div>                     
-                    <!-- Filtro por estrellas -->                     
                     <div id="reviews-star-filter" class="reviews-star-filter" style="display:none;"> 
                         <p class="rsf-label">Filtrar por estrellas</p> 
                         <div class="rsf-buttons"> 
                             <button class="rsf-btn active" data-stars="all">Todas</button>                             
-                            <button class="rsf-btn" data-stars="5">
-                                <i class="fas fa-star"></i> 5
-                            </button>                             
-                            <button class="rsf-btn" data-stars="4">
-                                <i class="fas fa-star"></i> 4
-                            </button>                             
-                            <button class="rsf-btn" data-stars="3">
-                                <i class="fas fa-star"></i> 3
-                            </button>                             
-                            <button class="rsf-btn" data-stars="2">
-                                <i class="fas fa-star"></i> 2
-                            </button>                             
-                            <button class="rsf-btn" data-stars="1">
-                                <i class="fas fa-star"></i> 1
-                            </button>                             
+                            <button class="rsf-btn" data-stars="5"><i class="fas fa-star"></i> 5</button>                             
+                            <button class="rsf-btn" data-stars="4"><i class="fas fa-star"></i> 4</button>                             
+                            <button class="rsf-btn" data-stars="3"><i class="fas fa-star"></i> 3</button>                             
+                            <button class="rsf-btn" data-stars="2"><i class="fas fa-star"></i> 2</button>                             
+                            <button class="rsf-btn" data-stars="1"><i class="fas fa-star"></i> 1</button>                             
                         </div>                         
                     </div>                     
-                </aside>                 
-                <!-- Columna derecha: Lista de reseñas -->                 
+                </aside>                                 
                 <div id="reviews-grid" class="reviews-grid"></div>                 
             </div>             
-        </div>         
-        <!-- SECCIÓN PEDIDOS -->         
+        </div>                 
         <div id="reports-container" class="content-container" style="display: none;"></div>         
         <div id="my-list-container" style="display: none;"> 
             <div class="content-header">
@@ -293,10 +270,12 @@
                 <p id="settings-feedback" class="feedback-message"></p> 
             </div>             
         </div>         
-        <!-- Reproductor de Series: Sección independiente (no modal) -->
+        <!-- Reproductor de Series -->
         <div id="series-player-page" class="series-player-page" style="display:none;"></div>
     </main>     
 </div> 
+
+<!-- Modales -->
 <div id="details-modal" class="modal"> 
     <div class="details-panel"> 
         <button class="close-btn">&times;</button>         
@@ -317,18 +296,18 @@
         </div>         
     </div>     
 </div> 
+
 <div id="cinema" class="modal"> 
     <button class="close-btn">&times;</button>     
     <div class="movie-player-layout-container"> 
         <div class="movie-player-container"> 
             <h2 id="cinema-title" class="movie-player-title cinema-title-above"></h2> 
+            
+            <!-- 🔴 AQUÍ INYECTAREMOS EL ARTPLAYER -->
             <div class="screen">
-                <iframe src="" allowfullscreen allow="autoplay; fullscreen; encrypted-media; picture-in-picture"></iframe>
+                <div class="artplayer-container" style="width:100%; height:100%; background:#000;"></div>
             </div>             
-            <div class="movie-lang-selection"> 
-                <button class="lang-select-btn active" data-lang="original">Original</button>                 
-                <button class="lang-select-btn" data-lang="spanish">Español</button>                 
-            </div>             
+            
         </div>         
         <div class="movie-info-sidebar"> 
             <div class="movie-poster-container"> 
@@ -345,11 +324,11 @@
         </div>         
     </div>     
 </div> 
+
 <div id="roulette-modal" class="modal"> 
     <div class="roulette-modal-content"> 
         <button class="close-btn">&times;</button>         
         <h2 id="roulette-title">Película Aleatoria</h2> 
-        <!-- Toggle de modo -->         
         <div class="roulette-mode-toggle"> 
             <button id="roulette-mode-normal" class="roulette-mode-btn active"> 
                 <i class="fas fa-random"></i> Normal
@@ -358,7 +337,6 @@
                 <i class="fas fa-list-ul"></i> Personalizada
             </button>             
         </div>         
-        <!-- Panel de ruleta personalizada -->         
         <div id="custom-roulette-panel" style="display:none;"> 
             <div class="crp-search-wrapper"> 
                 <input type="text" id="crp-search-input" class="crp-search-input" placeholder="Buscar película del catálogo..."> 
@@ -367,7 +345,6 @@
             <div id="crp-chips" class="crp-chips"></div>             
             <p id="crp-hint" class="crp-hint">Agrega al menos 2 películas para girar</p> 
         </div>         
-        <!-- Carrusel (compartido entre modos) -->         
         <div class="roulette-carousel-wrapper"> 
             <div id="roulette-carousel-track" class="roulette-carousel-track"></div>             
             <div class="roulette-selector"></div>             
@@ -464,7 +441,7 @@
                 <span id="review-rating-label" style="color:#f5c518; font-weight:600;"></span>
             </label>             
             <div class="star-rating-input" id="star-rating-input" style="display: flex; gap: 8px; justify-content: center; margin-bottom: 20px; font-size: 2rem;"> 
-                <!-- Generado por JS: setupStarRating() -->                 
+                <!-- Generado por JS -->                 
             </div>             
             <input type="hidden" id="review-rating-value" value="0"> 
             <textarea id="review-text-input" placeholder="¿Qué te pareció?" required style="height: 140px; background: rgba(255,255,255,0.05); color: white; border: 1px solid #333; padding: 15px; border-radius: 8px; margin-bottom: 20px; resize: none; width: 100%;"></textarea> 
@@ -580,8 +557,18 @@
         </div>         
     </div>     
 </div> 
+
+<!-- 🔴 LIBRERÍAS EXTERNAS -->
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script> 
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script> 
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script> 
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-storage.js"></script> 
-<script src="script.js?v=8" type="module" defer></script>
+
+<!-- 🔴 LIBRERÍAS DE REPRODUCCIÓN Y SUBTÍTULOS -->
+<script src="https://cdn.jsdelivr.net/npm/artplayer/dist/artplayer.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/libass-wasm@4/dist/js/subtitles-octopus.js"></script>
+
+<!-- SCRIPT PRINCIPAL DEL PROYECTO -->
+<script src="script.js?v=9" type="module" defer></script>
+</body>
+</html>
