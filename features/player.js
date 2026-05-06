@@ -19,6 +19,11 @@ export function initPlayer(dependencies) {
 // ===========================================================
 // 🛠️ CLASE CINEPLAYER (Artplayer + Worker Integration)
 // ===========================================================
+function isDriveId(id) {
+    // Google Drive IDs: empiezan con '1' y tienen >= 25 chars alfanuméricos
+    return typeof id === 'string' && id.startsWith('1') && id.length >= 25 && /^[A-Za-z0-9_-]+$/.test(id);
+}
+
 function buildWorkerUrl(type, driveId) {
     if (!driveId) return null;
     return `${WORKER_URL}/${type}/${driveId}`;
@@ -65,8 +70,8 @@ class CinePlayer {
             return;
         }
 
-        // Si es un ID de OK.ru o Streamtape, caemos al iframe clásico
-        if (/^\d+$/.test(videoId) || (videoId.length < 20 && !videoId.startsWith('1'))) {
+        // Si NO es un ID de Google Drive, caemos al iframe clásico
+        if (!isDriveId(videoId)) {
             this._mountIframeFallback(videoId);
             return;
         }
@@ -81,40 +86,86 @@ class CinePlayer {
         }
 
         const artConfig = {
-            container: this.container,
-            url: videoUrl,
-            title,
-            poster,
-            theme: '#e50914', // 🔥 El rojo oficial de Cine Corneta
-            volume: 1,
-            autoplay: false,
-            pip: true,
-            autoSize: false,
-            autoMini: false,
-            screenshot: false,
-            setting: true,
-            hotkey: true,
-            playbackRate: true,
-            aspectRatio: false,
-            fullscreen: true,
-            fullscreenWeb: true,
-            mutex: true,
-            lang: navigator.language || "es",
-            moreVideoAttr: { crossOrigin: "anonymous", preload: "metadata" },
-            
-            // 🎨 Menú click derecho personalizado
-            contextmenu: [
-                {
-                    html: 'Cine Corneta Player',
-                    click: function (contextmenu) {
-                        console.info('Reproductor oficial');
-                        contextmenu.show = false;
-                    },
-                }
-            ],
+    container: this.container,
+    url: videoUrl,
+    title,
+    poster,
+    theme: '#e50914', // 🔥 El rojo oficial de Cine Corneta
+    volume: 1,
+    autoplay: false,
+    pip: true,
+    autoSize: true,
+    autoHeight: true,
+    fastForward: true,
+    backdrop: true,
+    lock: true,
+    autoMini: false,
+    miniProgressBar: true,
+    autoOrientation: true,
+    screenshot: false,
+    hotkey: true,
+    mutex: true,
+    fullscreen: true,
+    fullscreenWeb: true,
+    lang: navigator.language.toLocaleLowerCase() || "es",
+    moreVideoAttr: { 
+        crossOrigin: "anonymous", 
+        playsinline: true, 
+        preload: "metadata" 
+    },
 
-            ...this.options,
-        };
+    // 🛠️ CONFIGURACIÓN DE MENÚS (Evita que se vea mal en móvil)
+    setting: true, 
+    settings: [
+        {
+            width: 200,
+            html: 'Velocidad',
+            tooltip: '1.0x',
+            name: 'playbackRate',
+            icon: '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
+            selector: [
+                { url: '0.5', html: '0.5x' },
+                { url: '0.75', html: '0.75x' },
+                { default: true, url: '1.0', html: 'Normal' },
+                { url: '1.25', html: '1.25x' },
+                { url: '1.5', html: '1.5x' },
+                { url: '2.0', html: '2.0x' },
+            ],
+            onSelect: function (item) {
+                this.playbackRate = parseFloat(item.url);
+                return item.html;
+            },
+        },
+        {
+            width: 200,
+            html: 'Relación de Aspecto',
+            name: 'aspectRatio',
+            column: 2, // Lo organiza en dos columnas si hay muchas opciones
+            selector: [
+                { default: true, html: 'Default', url: 'default' },
+                { html: '16:9', url: '16:9' },
+                { html: '4:3', url: '4:3' },
+            ],
+            onSelect: function (item) {
+                this.aspectRatio = item.url;
+                return item.html;
+            },
+        },
+    ],
+
+    // 🎨 Menú click derecho personalizado
+    contextmenu: [
+        {
+            html: 'Cine Corneta Player',
+            click: function (contextmenu) {
+                console.info('Reproductor oficial');
+                contextmenu.show = false;
+            },
+        }
+    ],
+
+    ...this.options,
+};
 
         const art = new Artplayer(artConfig);
         this.art = art;
@@ -143,27 +194,88 @@ class CinePlayer {
     }
 
     async _mountOctopus(videoElement, subUrl) {
+        const workerBlobUrl = await this._toBlobUrl(OCTOPUS_WORKER, 'application/javascript');
+        if (!workerBlobUrl) {
+            console.warn("[CinePlayer] No se pudo cargar el worker de subtítulos.");
+            return;
+        }
+
+        let subBlobUrl = null;
+        let workerBlobToRevoke = workerBlobUrl;
+
         try {
-            const resp = await fetch(subUrl);
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-            const assContent = await resp.text();
-            const blob = new Blob([assContent], { type: "text/plain" });
-            const blobUrl = URL.createObjectURL(blob);
+            // Subtítulo → blob local (evita restricciones CORS en subUrl también)
+            const subResp = await fetch(subUrl);
+            if (!subResp.ok) throw new Error(`HTTP ${subResp.status}`);
+            const assContent = await subResp.text();
+            subBlobUrl = URL.createObjectURL(new Blob([assContent], { type: "text/plain" }));
 
             this.octopus = new SubtitlesOctopus({
                 video: videoElement,
-                subUrl: blobUrl,
-                workerUrl: OCTOPUS_WORKER,
+                subUrl: subBlobUrl,
+                // workerUrl como blob local → mismo origen → sin SecurityError
+                workerUrl: workerBlobUrl,
                 wasmUrl: OCTOPUS_WASM,
                 renderMode: "wasm-blend",
-                onReady: () => URL.revokeObjectURL(blobUrl),
+                onReady: () => {
+                    // Liberar blobs una vez que octopus los haya consumido
+                    if (subBlobUrl) { URL.revokeObjectURL(subBlobUrl); subBlobUrl = null; }
+                    if (workerBlobToRevoke) { URL.revokeObjectURL(workerBlobToRevoke); workerBlobToRevoke = null; }
+                },
             });
             this.container._octopusInstance = this.octopus;
-        } catch (err) { console.warn("[CinePlayer] Sin subtítulos:", err); }
+        } catch (err) {
+            console.warn("[CinePlayer] Sin subtítulos:", err);
+            if (subBlobUrl) URL.revokeObjectURL(subBlobUrl);
+            if (workerBlobToRevoke) URL.revokeObjectURL(workerBlobToRevoke);
+        }
+    }
+
+    /**
+     * Descarga un script remoto y lo convierte en un blob URL del mismo origen.
+     * Si es el worker de Octopus, parchea las rutas relativas internas (como el
+     * .wasm) con URLs absolutas, ya que desde un blob URL no hay base para resolverlas.
+     */
+    async _toBlobUrl(remoteUrl, mimeType = 'application/javascript') {
+        try {
+            const resp = await fetch(remoteUrl);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            let text = await resp.text();
+
+            // La base del CDN donde viven todos los assets del worker
+            const cdnBase = remoteUrl.substring(0, remoteUrl.lastIndexOf('/') + 1);
+
+            // Reemplazar cualquier referencia relativa a archivos .wasm o .js
+            // que el worker intente cargar internamente
+            text = text.replace(
+                /(['"`])((?!https?:\/\/|blob:|data:)[^'"`]*\.(?:wasm|js))(['"`])/g,
+                (match, q1, relativePath, q2) => {
+                    // Ignorar rutas que parecen variables o plantillas
+                    if (relativePath.includes('${') || relativePath.includes('+')) return match;
+                    return `${q1}${cdnBase}${relativePath}${q2}`;
+                }
+            );
+
+            return URL.createObjectURL(new Blob([text], { type: mimeType }));
+        } catch (err) {
+            console.warn(`[CinePlayer] No se pudo descargar ${remoteUrl}:`, err);
+            return null;
+        }
     }
 
     async _pingWorker(url) {
-        try { const resp = await fetch(url, { method: "HEAD" }); return resp.ok || resp.status === 206; } catch { return false; }
+        try {
+            const resp = await fetch(url, { method: "HEAD" });
+            if (resp.ok || resp.status === 206) return true;
+            // Algunos workers no admiten HEAD — reintentamos con GET parcial
+            if (resp.status === 405 || resp.status === 501) {
+                const r2 = await fetch(url, { headers: { Range: 'bytes=0-0' } });
+                return r2.ok || r2.status === 206 || r2.status === 416;
+            }
+            return false;
+        } catch {
+            return false;
+        }
     }
 
     _observeResize() {
@@ -194,9 +306,11 @@ class CinePlayer {
 // 🌐 HELPER: OBTENER TRACKS DE AUDIO DISPONIBLES DINÁMICAMENTE
 // ===========================================================
 function getLangTracks(data) {
-    const rawEn = data.videoId_en?.trim() || data.videoId?.trim() || '';
+    const rawEn = data.videoId_en?.trim() || '';
     const rawEs = data.videoId_es?.trim() || '';
     const rawJp = data.videoId_jp?.trim() || data.videoId_alt?.trim() || '';
+    // videoId principal solo se usa si no hay pistas específicas de idioma
+    const rawMain = data.videoId?.trim() || '';
 
     const rawLang = (data.language || data.idioma || data.audio || '').trim();
     const langParts = rawLang
@@ -210,16 +324,27 @@ function getLangTracks(data) {
     const spanishLabel = langParts.find(l => isSpanish(l)) || 'Latino';
     const originalLabels = langParts.filter(l => !isSpanish(l));
 
+    // Detectar si el campo principal de idioma es español
+    const mainIsSpanish = langParts.length > 0 && langParts.every(l => isSpanish(l));
+
     const tracks = [];
 
     if (rawEn) {
         tracks.push({ id: rawEn, lang: 'en', label: originalLabels[0] || 'Original' });
+    } else if (rawMain && !mainIsSpanish && !rawEs) {
+        // Solo usamos videoId como "Original" si el idioma indicado no es español
+        tracks.push({ id: rawMain, lang: 'en', label: originalLabels[0] || 'Original' });
     }
+
     if (rawJp) {
         tracks.push({ id: rawJp, lang: 'jp', label: originalLabels[1] || 'Alt' });
     }
+
     if (rawEs) {
         tracks.push({ id: rawEs, lang: 'es', label: spanishLabel });
+    } else if (rawMain && mainIsSpanish) {
+        // El videoId principal es español, añadirlo como pista española
+        tracks.push({ id: rawMain, lang: 'es', label: spanishLabel });
     }
 
     return tracks;
@@ -229,8 +354,7 @@ function getEmbedUrl(videoId) {
     if (!videoId || !videoId.trim()) return '';
     const id = videoId.trim();
     
-    const isGoogleDrive = id.startsWith('1') && id.length >= 25;
-    if (isGoogleDrive) {
+    if (isDriveId(id)) {
         return `https://drive.google.com/file/d/${id}/preview`;
     }
     
