@@ -119,6 +119,7 @@ class CinePlayer {
             backdrop: true,         // ✅ Activado
             lock: true,             // ✅ Activado (botón lock en móvil)
             autoMini: false,
+            autoPlayback: true,     // ✅ Recuerda posición por URL (localStorage)
             miniProgressBar: true,  // ✅ Activado
             autoOrientation: true,  // ✅ Activado (rotación automática móvil)
             screenshot: false,
@@ -229,9 +230,14 @@ class CinePlayer {
         if (subUrl) {
             if (resolvedSubType === 'srt') {
                 // 🟢 RUTA LIVIANA: ya configurado en artConfig.subtitle
-                // Solo aseguramos que esté visible una vez listo
                 art.on('ready', () => {
                     art.subtitle.show = true;
+                    // Asegurar estilo inicial coherente con el CSS de móvil
+                    art.subtitle.style({
+                        color: '#ffffff',
+                        fontSize: '18px',
+                        textShadow: '1px 1px 3px rgba(0,0,0,0.9)',
+                    });
                 });
             } else {
                 // 🔴 RUTA AVANZADA (ASS): SubtitlesOctopus con WASM
@@ -249,6 +255,20 @@ class CinePlayer {
         });
 
         this._observeResize();
+
+        // ─── Orientación forzada al entrar en pantalla completa (móvil) ───
+        // autoOrientation:true ya rota el layout; esto además bloquea el SO.
+        art.on('fullscreen', (isFullscreen) => {
+            if (!window.screen?.orientation?.lock) return; // desktop / no soportado
+            if (isFullscreen) {
+                screen.orientation.lock('landscape').catch(() => {
+                    // Silencioso: algunos browsers bloquean sin gesto previo
+                });
+            } else {
+                screen.orientation.unlock();
+            }
+        });
+
         return art;
     }
 
@@ -1273,7 +1293,12 @@ export function populateEpisodeList(seriesId, seasonNum) {
 export function openEpisode(seriesId, season, newEpisodeIndex) {
     const episode = shared.appState.content.seriesEpisodes[seriesId]?.[season]?.[newEpisodeIndex];
     if (!episode) return;
- 
+
+    // ✅ FIX: Commit del episodio ANTERIOR antes de sobreescribir pendingHistorySave.
+    // Sin esto, al hacer click en una tarjeta de la lista el historial del ep anterior
+    // se perdía (navigateEpisode sí lo llamaba, pero el click directo no).
+    commitAndClearPendingSave();
+
     clearTimeout(shared.appState.player.episodeOpenTimer);
     shared.appState.player.pendingHistorySave = {
         contentId: seriesId,
@@ -1303,6 +1328,9 @@ export function openEpisode(seriesId, season, newEpisodeIndex) {
     if (container) {
         if (shared.appState.player.activeCineInstance) {
             shared.appState.player.activeCineInstance.destroy();
+            // ✅ FIX: Null explícito. Si new CinePlayer() lanzara una excepción,
+            // evitamos que activeCineInstance quede apuntando a la instancia destruida.
+            shared.appState.player.activeCineInstance = null;
         }
         
         shared.appState.player.activeCineInstance = new CinePlayer(container);
