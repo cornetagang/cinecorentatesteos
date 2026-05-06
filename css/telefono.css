@@ -2347,3 +2347,152 @@ body:has(#series-player-page.active) .bottom-nav {
         height: 100svh;
     }
 }
+
+/* ===========================================================
+   🎬 ARTPLAYER UX POLISH — CINE CORNETA (MÓVIL)
+   =========================================================== */
+
+@media (max-width: 768px) {
+
+    /* ─── 1. PANEL DE AJUSTES: Bottom Panel anclado ─────────── */
+
+    /* El panel se ancla sobre la barra de controles, no flotando */
+    .art-video-player .art-settings {
+        position: absolute !important;
+        bottom: 60px !important;      /* Por encima de la barra de controles */
+        right: 10px !important;
+        left: 10px !important;
+        top: auto !important;
+        width: auto !important;
+        max-width: 100% !important;
+        max-height: 60vh !important;
+        overflow-y: auto !important;
+
+        /* Estética Cine Corneta */
+        background: rgba(0, 0, 0, 0.95) !important;
+        border: 1px solid #e50914 !important;
+        border-radius: 14px !important;
+        box-shadow: 0 -6px 32px rgba(229, 9, 20, 0.25),
+                    0 2px 16px rgba(0, 0, 0, 0.8) !important;
+        backdrop-filter: blur(14px) !important;
+        -webkit-backdrop-filter: blur(14px) !important;
+        transform-origin: bottom center !important;
+    }
+
+    /* Scrollbar oculto dentro del panel */
+    .art-video-player .art-settings::-webkit-scrollbar { display: none; }
+
+    /* Encabezado/título de cada sección dentro del panel */
+    .art-video-player .art-settings-title {
+        padding: 14px 16px 10px !important;
+        font-size: 0.7rem !important;
+        text-transform: uppercase !important;
+        letter-spacing: 2px !important;
+        color: #e50914 !important;
+        font-weight: 700 !important;
+        border-bottom: 1px solid rgba(229, 9, 20, 0.25) !important;
+        margin-bottom: 4px !important;
+    }
+
+    /* ── Touch targets de 50px ── */
+    .art-video-player .art-setting-item {
+        height: 50px !important;
+        min-height: 50px !important;
+        padding: 0 18px !important;
+        display: flex !important;
+        align-items: center !important;
+        font-size: 0.95rem !important;
+        color: #e8e8e8 !important;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;
+        -webkit-tap-highlight-color: transparent !important;
+        touch-action: manipulation !important;
+        cursor: pointer !important;
+        transition: background 0.15s ease !important;
+    }
+
+    .art-video-player .art-setting-item:last-child {
+        border-bottom: none !important;
+        border-radius: 0 0 14px 14px !important;
+    }
+
+    .art-video-player .art-setting-item:first-child {
+        border-radius: 14px 14px 0 0 !important;
+    }
+
+    /* Feedback táctil al presionar */
+    .art-video-player .art-setting-item:active {
+        background: rgba(229, 9, 20, 0.18) !important;
+    }
+
+    /* Ítem seleccionado activo → rojo */
+    .art-video-player .art-setting-item.art-current,
+    .art-video-player .art-setting-item[data-value].art-current {
+        color: #e50914 !important;
+        font-weight: 700 !important;
+    }
+
+    /* ─── 2. SUBTÍTULOS: Elevar + legibilidad garantizada ────── */
+
+    /* Subir la capa para no chocar con los subs quemados del video */
+    .art-video-player .art-subtitle {
+        bottom: 70px !important;
+        padding: 0 14px !important;
+        text-align: center !important;
+    }
+
+    /* Fondo semitransparente + doble sombra → legibles sobre cualquier fondo */
+    .art-video-player .art-subtitle p,
+    .art-video-player .art-subtitle span {
+        display: inline !important;
+        background: rgba(0, 0, 0, 0.52) !important;
+        padding: 3px 9px !important;
+        border-radius: 4px !important;
+        line-height: 1.6 !important;
+        text-shadow:
+            1px  1px 0 #000,
+           -1px -1px 0 #000,
+            1px -1px 0 #000,
+           -1px  1px 0 #000,
+            0    2px 10px rgba(0, 0, 0, 0.95) !important;
+        box-decoration-break: clone !important;
+        -webkit-box-decoration-break: clone !important;
+    }
+
+    /* ─── 3. BOTÓN DE LOCK — touch target correcto ───────────── */
+    .art-video-player .art-control-lock {
+        width: 46px !important;
+        height: 46px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        touch-action: manipulation !important;
+        -webkit-tap-highlight-color: transparent !important;
+    }
+
+    /* Cuando el lock está activo, oculta todos los controles EXCEPTO el candado */
+    .art-video-player.art-lock .art-bottom,
+    .art-video-player.art-lock .art-controls,
+    .art-video-player.art-lock .art-progress {
+        opacity: 0 !important;
+        pointer-events: none !important;
+        transition: opacity 0.2s ease !important;
+    }
+
+    .art-video-player.art-lock .art-control-lock {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+}
+
+/* Landscape en móvil: subtítulos bajan un toque 
+   (la barra de controles es menos alta en horizontal) */
+@media (max-width: 850px) and (orientation: landscape) {
+    .art-video-player .art-subtitle {
+        bottom: 56px !important;
+    }
+
+    .art-video-player .art-settings {
+        bottom: 52px !important;
+        max-height: 80vh !important;
+    }
+}
