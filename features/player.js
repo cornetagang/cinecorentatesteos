@@ -16,6 +16,16 @@ let shared;
 // 1. INICIALIZACIÓN
 export function initPlayer(dependencies) {
     shared = dependencies;
+
+    // ✅ FIX: Cerrar el reproductor si el usuario hace clic en el menú de navegación
+    document.addEventListener('click', (e) => {
+        if (e.target.closest('.main-nav a, .nav-link, .logo, .header-logo')) {
+            const page = document.getElementById('series-player-page');
+            if (page && page.classList.contains('active')) {
+                closeSeriesPlayerModal();
+            }
+        }
+    });
 }
 
 // ===========================================================
@@ -107,6 +117,7 @@ class CinePlayer {
         const artConfig = {
             container: this.container,
             url: videoUrl,
+            type: 'mp4',
             title,
             poster,
             theme: '#e50914',
@@ -129,7 +140,7 @@ class CinePlayer {
             fullscreenWeb: true,
             lang: navigator.language.toLocaleLowerCase() || "es",
             moreVideoAttr: { 
-                crossOrigin: "anonymous",  // ✅ Seguridad CORS
+                crossOrigin: "anonymous",
                 playsinline: true, 
                 preload: "metadata" 
             },
@@ -359,18 +370,20 @@ class CinePlayer {
     }
 
     async _pingWorker(url) {
-        try {
-            const resp = await fetch(url, { method: "HEAD" });
-            if (resp.ok || resp.status === 206) return true;
-            if (resp.status === 405 || resp.status === 501) {
-                const r2 = await fetch(url, { headers: { Range: 'bytes=0-0' } });
-                return r2.ok || r2.status === 206 || r2.status === 416;
-            }
-            return false;
-        } catch {
-            return false;
+    try {
+        // redirect:'manual' → no seguimos el 302 a googlevideo.com
+        const resp = await fetch(url, { method: "HEAD", redirect: "manual" });
+        // 2xx, 206 ó cualquier 3xx (redirect) = worker funcional
+        if (resp.ok || resp.status === 206 || (resp.status >= 300 && resp.status < 400)) return true;
+        if (resp.status === 405 || resp.status === 501) {
+            const r2 = await fetch(url, { redirect: "manual", headers: { Range: 'bytes=0-0' } });
+            return r2.ok || r2.status === 206 || r2.status === 416 || (r2.status >= 300 && r2.status < 400);
         }
+        return false;
+    } catch {
+        return false;
     }
+}
 
     _observeResize() {
         if (this._resizeObserver) this._resizeObserver.disconnect();
@@ -511,7 +524,8 @@ function _openSeriesPlayerPage() {
         'my-list-container', 'history-container', 'profile-container',
         'settings-container', 'profile-hub-container', 'sagas-hub-container',
         'reviews-container', 'reports-container', 'filter-controls',
-        'live-tv-section', 'iptv-section'
+        'live-tv-section', 'iptv-section', 
+        'continue-watching-carousel', 'continue-watching-container' // <--- Añade estos dos
     ];
     sections.forEach(id => {
         const el = document.getElementById(id);
@@ -854,6 +868,16 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
         const displayTitle = isSpecialContent && firstEpisode.title 
             ? firstEpisode.title 
             : seriesInfo.title || firstEpisode.title || 'Sin título';
+
+        // 👇 NUEVO: Detectar si hay una etiqueta personalizada (Ej: "Parte 5")
+        const seasonDisplayName = postersData.etiqueta ? postersData.etiqueta : (isSpecialContent ? 'Especial / Película' : `Temporada ${seasonNum}`);
+
+        let seasonWordPlural = 'Temporadas';
+        if (seasonDisplayName.toLowerCase().includes('parte')) {
+            seasonWordPlural = 'Partes';
+        } else if (isSpecialContent) {
+            seasonWordPlural = 'Especiales';
+        }
         
         const seasonsCount   = Object.keys(shared.appState.content.seriesEpisodes[seriesId] || {}).length;
         const backButtonHTML = seasonsCount > 1 
@@ -945,98 +969,138 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
             const logoTheme = shared.THEMES?.normal?.logo || 'https://res.cloudinary.com/djhgmmdjx/image/upload/v1759209688/vgJjqSM_oicebo.png';
 
             shared.DOM.seriesPlayerModal.innerHTML = `
-                <style>
-                    body:has(#series-player-page.active) .bottom-nav { display: none !important; }
-                    #series-player-page.player-layout-view {
-                        position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
-                        display: flex !important; flex-direction: column !important; background-color: #0f0f0f !important;
-                        z-index: 99999 !important; padding: 0 !important; margin: 0 !important; 
-                        width: 100vw !important; height: 100dvh !important; border-radius: 0 !important; 
-                        align-items: stretch !important; overflow: hidden !important;
-                        overscroll-behavior: none !important;
-                    }
-                    #series-player-page .player-top-bar, #series-player-page .player-page-wrapper, #series-player-page .nav-buttons-row { display: none !important; }
-                    .cc-top-fixed { flex-shrink: 0; display: flex; flex-direction: column; background-color: #0f0f0f; z-index: 10; transition: box-shadow 0.3s ease; }
-                    .cc-top-fixed.scrolled { box-shadow: 0 4px 15px rgba(0,0,0,0.6); border-bottom: 1px solid #222; }
-                    .cc-nav { display: flex; align-items: center; justify-content: space-between; padding: 10px 15px; padding-top: calc(10px + env(safe-area-inset-top)); border-bottom: 2px solid #e50914; }
-                    .cc-logo { height: 22px; }
-                    .cc-back-btn { background: transparent; border: none; color: white; font-size: 0.9rem; font-weight: bold; display: flex; align-items: center; gap: 7px; cursor: pointer; padding: 0; }
-                    .cc-video-wrap { width: 100%; background: #000; position: relative; padding-top: 56.25%; height: 0; }
-                    .cc-details { padding: 15px; }
-                    .cc-title-box { position: relative; cursor: pointer; margin-bottom: 0; user-select: none; -webkit-tap-highlight-color: transparent; }
-                    .cc-title { font-size: 1.2rem; font-weight: bold; margin: 0 0 4px 0; color: white; line-height: 1.2;}
-                    .cc-subtitle { color: #e50914; font-size: 12px; font-weight: bold; margin-bottom: 4px; display: block; }
-                    .cc-toggle { position: absolute; bottom: 2px; right: 0; font-size: 14px; color: #8a8a92; font-weight: 500; background: linear-gradient(90deg, rgba(15,15,15,0) 0%, rgba(15,15,15,1) 25%, rgba(15,15,15,1) 100%); padding-left: 25px; padding-right: 2px; z-index: 2; }
-                    .cc-scroll { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; padding: 15px 15px 40px 15px; display: block !important; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
-                    .cc-scroll::-webkit-scrollbar { display: none; }
-                    .cc-meta { font-size: 12px; color: #8a8a92; margin-bottom: 15px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; line-height: 1.6; border-bottom: 1px solid #222; padding-bottom: 15px; }
-                    .cc-expand { display: none; background-color: #181818; border-radius: 12px; padding: 15px; margin-bottom: 20px; }
-                    .cc-desc { font-size: 13px; line-height: 1.5; color: white; margin-bottom: 15px; }
-                    .cc-controls { display: flex; align-items: center; justify-content: flex-start; gap: 15px; margin: 10px 0 15px 0; flex-wrap: wrap; overflow: visible; }
-                    .cc-controls::-webkit-scrollbar { display: none; }
-                    .cc-season-btn { display: inline-flex; align-items: center; gap: 8px; font-size: 16px; font-weight: bold; cursor: pointer; padding: 8px; border-radius: 8px; background-color: transparent; color: white; margin-left: -8px; }
-                    .cc-langs { display: flex; gap: 8px; flex-wrap: nowrap; margin-left: auto; } 
-                    .cc-card { display: flex !important; gap: 12px !important; margin-bottom: 16px !important; align-items: center !important; padding: 0 !important; background: transparent !important; border: none !important; cursor: pointer; }
-                    .cc-thumb { width: 120px !important; height: 67px !important; border-radius: 8px !important; object-fit: cover !important; border: 2px solid transparent !important; flex-shrink: 0; background: #222;}
-                    .cc-card.active .cc-thumb { border: 2px solid #e50914 !important; }
-                    .cc-info { display: flex !important; flex-direction: column !important; justify-content: center !important; flex: 1 !important; min-width: 0;}
-                    .cc-ep-title { font-size: 0.85rem !important; font-weight: bold !important; color: white !important; margin: 0 0 4px 0 !important; line-height: 1.3;}
-                    .cc-card.active .cc-ep-title { color: #e50914 !important; }
-                    .cc-ep-desc { font-size: 0.75rem !important; color: #8a8a92 !important; display: -webkit-box !important; -webkit-line-clamp: 2 !important; -webkit-box-orient: vertical !important; overflow: hidden !important; margin: 0 !important; line-height: 1.4;}
-                    .cc-sheet-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 3000; display: flex; flex-direction: column; justify-content: flex-end; opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
-                    .cc-sheet-overlay.active { opacity: 1; pointer-events: auto; }
-                    .cc-sheet { background-color: #181818; border-radius: 20px 20px 0 0; padding: 20px 15px calc(20px + env(safe-area-inset-bottom)); max-height: 75vh; display: flex; flex-direction: column; transform: translateY(100%); transition: transform 0.3s cubic-bezier(0.1, 0.9, 0.2, 1); width: 100%; box-sizing: border-box; }
-                    .cc-sheet-overlay.active .cc-sheet { transform: translateY(0); }
-                    .cc-sheet-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; font-size: 18px; font-weight: bold; color: white;}
-                    .cc-sheet-close { background: transparent; border: none; color: white; font-size: 24px; cursor: pointer; padding: 0;}
-                    .cc-sheet-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; overflow-y: auto; padding-bottom: 20px; }
-                    .cc-sheet-grid::-webkit-scrollbar { display: none; }
-                    .cc-sheet-card { position: relative; border-radius: 8px; overflow: hidden; aspect-ratio: 2/3; cursor: pointer; background-color: #111; border: 2px solid transparent; }
-                    .cc-sheet-card img { width: 100%; height: 100%; object-fit: cover; display: block; }
-                    .cc-sheet-card .cc-overlay { position: absolute; inset: 0; background: linear-gradient(to top, rgba(0,0,0,0.9) 0%, transparent 60%); display: flex; align-items: flex-end; justify-content: center; padding: 10px; color: white; font-size: 0.8rem; font-weight: bold; text-align: center; }
-                    .cc-sheet-card.active-season { border-color: #e50914; }
-                </style>
+            <style>
+                body:has(#series-player-page.active) .bottom-nav { display: none !important; }
+                #series-player-page.player-layout-view {
+                    position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
+                    display: flex !important; flex-direction: column !important; background-color: #0f0f0f !important;
+                    z-index: 99999 !important; padding: 0 !important; margin: 0 !important; 
+                    width: 100vw !important; height: 100dvh !important; border-radius: 0 !important; 
+                    align-items: stretch !important; overflow-y: auto !important; overflow-x: hidden !important;
+                }
+                
+                /* CLASES UTILITARIAS PARA SEPARAR MÓVIL Y PC */
+                @media (min-width: 1024px) { .mobile-only { display: none !important; } }
+                @media (max-width: 1023px) { .desktop-only { display: none !important; } }
 
-                <div class="cc-top-fixed" id="fixedHeader">
-                    <nav class="cc-nav">
-                        <img src="${logoTheme}" class="cc-logo">
-                        <button class="cc-back-btn streaming-back-btn"><i class="fas fa-times"></i> Cerrar</button>
-                    </nav>
-                    <div class="cc-video-wrap">
-                        <div id="video-container-${seriesId}" style="width:100%; height:100%; background:#000; position:absolute; inset:0;"></div>
-                    </div>
-                    <div class="cc-details">
-                        <div class="cc-title-box" id="toggleDescBtn">
-                            <div>
-                                <span class="cc-subtitle" id="subTitle">Temporada ${seasonNum}</span>
-                                <h1 class="cc-title" id="cinema-title-${seriesId}"></h1>
+                /* EN PC: el player NO es fixed — permite ver el nav del sitio */
+                @media (min-width: 1024px) {
+                    #series-player-page.player-layout-view {
+                        position: relative !important;
+                        top: auto !important; left: auto !important; right: auto !important; bottom: auto !important;
+                        width: 100% !important;
+                        height: auto !important;
+                        min-height: calc(100vh - 70px) !important;
+                        overflow-y: visible !important;
+                    }
+                }
+
+                /* ESTILOS MÓVILES (Los que ya existían) */
+                .cc-top-fixed { flex-shrink: 0; display: flex; flex-direction: column; background-color: #0f0f0f; z-index: 10; transition: box-shadow 0.3s ease; }
+                .cc-top-fixed.scrolled { box-shadow: 0 4px 15px rgba(0,0,0,0.6); border-bottom: 1px solid #222; }
+                .cc-nav { display: flex; align-items: center; justify-content: space-between; padding: 10px 15px; padding-top: calc(10px + env(safe-area-inset-top)); border-bottom: 2px solid #e50914; }
+                .cc-logo { height: 22px; }
+                .cc-back-btn { background: transparent; border: none; color: white; font-size: 0.9rem; font-weight: bold; display: flex; align-items: center; gap: 7px; cursor: pointer; padding: 0; }
+                .cc-video-wrap { width: 100%; background: #000; position: relative; aspect-ratio: 16/9; }
+                .cc-details { padding: 15px; }
+                .cc-title-box { position: relative; cursor: pointer; margin-bottom: 0; user-select: none; -webkit-tap-highlight-color: transparent; }
+                .cc-title { font-size: 1.2rem; font-weight: bold; margin: 0 0 4px 0; color: white; line-height: 1.2;}
+                .cc-subtitle { color: #e50914; font-size: 12px; font-weight: bold; margin-bottom: 4px; display: block; }
+                .cc-toggle { position: absolute; bottom: 2px; right: 0; font-size: 14px; color: #8a8a92; font-weight: 500; background: linear-gradient(90deg, rgba(15,15,15,0) 0%, rgba(15,15,15,1) 25%, rgba(15,15,15,1) 100%); padding-left: 25px; padding-right: 2px; z-index: 2; }
+                .cc-scroll { flex: 1 1 auto; padding: 15px 15px 40px 15px; display: block !important; -webkit-overflow-scrolling: touch; }
+                .cc-scroll::-webkit-scrollbar { display: none; }
+                .cc-meta { font-size: 12px; color: #8a8a92; margin-bottom: 15px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; line-height: 1.6; border-bottom: 1px solid #222; padding-bottom: 15px; }
+                .cc-expand { display: none; background-color: #181818; border-radius: 12px; padding: 15px; margin-bottom: 20px; }
+                .cc-desc { font-size: 13px; line-height: 1.5; color: white; margin-bottom: 15px; }
+                .cc-controls { display: flex; align-items: center; justify-content: flex-start; gap: 15px; margin: 10px 0 15px 0; flex-wrap: wrap; }
+                .cc-season-btn { display: inline-flex; align-items: center; gap: 8px; font-size: 16px; font-weight: bold; cursor: pointer; padding: 8px; border-radius: 8px; background-color: transparent; color: white; margin-left: -8px; }
+                .cc-langs { display: flex; gap: 8px; flex-wrap: nowrap; margin-left: auto; } 
+                .cc-card { display: flex !important; gap: 12px !important; margin-bottom: 16px !important; align-items: center !important; padding: 0 !important; background: transparent !important; border: none !important; cursor: pointer; }
+                .cc-thumb { width: 120px !important; height: 67px !important; border-radius: 8px !important; object-fit: cover !important; border: 2px solid transparent !important; flex-shrink: 0; background: #222;}
+                .cc-card.active .cc-thumb { border: 2px solid #e50914 !important; }
+                .cc-info { display: flex !important; flex-direction: column !important; justify-content: center !important; flex: 1 !important; min-width: 0;}
+                .cc-ep-title { font-size: 0.85rem !important; font-weight: bold !important; color: white !important; margin: 0 0 4px 0 !important; line-height: 1.3;}
+                .cc-card.active .cc-ep-title { color: #e50914 !important; }
+                .cc-ep-desc { font-size: 0.75rem !important; color: #8a8a92 !important; display: -webkit-box !important; -webkit-line-clamp: 2 !important; -webkit-box-orient: vertical !important; overflow: hidden !important; margin: 0 !important; line-height: 1.4;}
+                
+                /* Modal Temporadas Móvil */
+                .cc-sheet-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 3000; display: flex; flex-direction: column; justify-content: flex-end; opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
+                .cc-sheet-overlay.active { opacity: 1; pointer-events: auto; }
+                .cc-sheet { background-color: #181818; border-radius: 20px 20px 0 0; padding: 20px 15px calc(20px + env(safe-area-inset-bottom)); max-height: 75vh; display: flex; flex-direction: column; transform: translateY(100%); transition: transform 0.3s cubic-bezier(0.1, 0.9, 0.2, 1); width: 100%; box-sizing: border-box; }
+                .cc-sheet-overlay.active .cc-sheet { transform: translateY(0); }
+                .cc-sheet-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; font-size: 18px; font-weight: bold; color: white;}
+                .cc-sheet-close { background: transparent; border: none; color: white; font-size: 24px; cursor: pointer; padding: 0;}
+                .cc-sheet-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; overflow-y: auto; padding-bottom: 20px; }
+                .cc-sheet-grid::-webkit-scrollbar { display: none; }
+                .cc-sheet-card { position: relative; border-radius: 8px; overflow: hidden; aspect-ratio: 2/3; cursor: pointer; background-color: #111; border: 2px solid transparent; }
+                .cc-sheet-card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+                .cc-sheet-card .cc-overlay { position: absolute; inset: 0; background: linear-gradient(to top, rgba(0,0,0,0.9) 0%, transparent 60%); display: flex; align-items: flex-end; justify-content: center; padding: 10px; color: white; font-size: 0.8rem; font-weight: bold; text-align: center; }
+                .cc-sheet-card.active-season { border-color: #e50914; }
+            </style>
+
+            <div class="sp-desktop-grid">
+                
+                <div class="sp-left-column">
+                    <div class="cc-top-fixed" id="fixedHeader">
+                        <nav class="cc-nav mobile-only">
+                            <img src="${logoTheme}" class="cc-logo">
+                            <button class="cc-back-btn streaming-back-btn"><i class="fas fa-times"></i> Cerrar</button>
+                        </nav>
+                        <div class="cc-video-wrap">
+                            <div id="video-container-${seriesId}" style="width:100%; height:100%; background:#000; position:absolute; inset:0;"></div>
+                        </div>
+                        <div class="cc-details mobile-only">
+                            <div class="cc-title-box" id="toggleDescBtn">
+                                <div>
+                                    <span class="cc-subtitle" id="subTitle">${seasonDisplayName}</span>
+                                    <h1 class="cc-title" id="cinema-title-${seriesId}"></h1>
+                                </div>
+                                <span class="cc-toggle" id="toggleText">... ver más</span>
                             </div>
-                            <span class="cc-toggle" id="toggleText">... ver más</span>
+                        </div>
+                    </div>
+
+                    <div class="video-info-desktop desktop-only">
+                        <div class="info-header-clickable" id="toggleDescBtnDesktop">
+                            <div class="title-block-wrap">
+                                <span class="sub-title" id="subTitleDesktop">${seasonDisplayName}</span>
+                                <h1 class="video-title" id="cinema-title-desktop-${seriesId}"></h1>
+                                <div class="series-meta">
+                                    ${mReqHtml}
+                                    ${mYearHtml}
+                                    <span><span style="color:#fff; font-weight:bold;">${seasonsCount}</span> ${seasonWordPlural}</span>
+                                </div>
+                            </div>
+                            <div class="toggle-arrow" id="toggleArrowDesktop">
+                                <svg viewBox="0 0 24 24"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"></path></svg>
+                            </div>
+                        </div>
+                        <div class="synopsis-content" id="synopsisContentDesktop">
+                            <p class="desc-text" id="episode-desc-desktop-${seriesId}"></p>
                         </div>
                     </div>
                 </div>
 
-                <div class="cc-scroll" id="scrollArea">
-                    <div class="cc-meta">
+                <div class="sp-right-column cc-scroll" id="scrollArea">
+                    <div class="cc-meta mobile-only">
                         ${mReqHtml}
                         ${mYearHtml}
                         <span><span style="color:#fff; font-weight:bold;">${seasonsCount}</span> Temporadas</span>
                     </div>
 
-                    <div class="cc-expand" id="expandableArea">
+                    <div class="cc-expand mobile-only" id="expandableArea">
                         <div style="font-size: 12px; color: #ccc; margin-bottom: 15px; display: flex; flex-direction: column; gap: 6px; background: rgba(255,255,255,0.05); padding: 12px; border-radius: 8px; border-left: 2px solid #e50914;">
                             ${originalTitle ? `<span><i class="fas fa-film" style="color:#8a8a92; width:18px;"></i> ${originalTitle}</span>` : ''}
                             ${genresVal     ? `<span><i class="fas fa-tags" style="color:#8a8a92; width:18px;"></i> ${genresVal}</span>`     : ''}
                             ${langVal       ? `<span><i class="fas fa-language" style="color:#8a8a92; width:18px;"></i> ${langVal}</span>`    : ''}
                         </div>
-
                         <div class="cc-desc" id="episode-desc-${seriesId}"></div>
                         <button class="vab-btn--report" style="background: rgba(229, 9, 20, 0.1); color: #e50914; border: 1px solid rgba(229, 9, 20, 0.3); border-radius: 18px; padding: 8px 16px; font-size: 13px; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 6px; width: fit-content;"><i class="fas fa-flag"></i> Reportar problema</button>
                     </div>
                     
                     <div class="cc-controls">
                         <div class="cc-season-btn" id="seasonSelectorBtn">
-                            <span id="seasonBtnText">Temporada ${seasonNum}</span>
+                            <span id="seasonBtnText">${seasonDisplayName}</span>
                             <i class="fas fa-chevron-down"></i>
                         </div>
                         <div class="cc-langs">
@@ -1046,17 +1110,18 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
 
                     <div id="episode-list-${seriesId}"></div>
                 </div>
+            </div>
 
-                <div class="cc-sheet-overlay" id="seasonModalSheet">
-                    <div class="cc-sheet" onclick="event.stopPropagation();">
-                        <div class="cc-sheet-header">
-                            <span>Temporadas</span>
-                            <button class="cc-sheet-close" id="closeSeasonSheetBtn">✕</button>
-                        </div>
-                        <div class="cc-sheet-grid" id="season-grid-sheet-container"></div>
+            <div class="cc-sheet-overlay" id="seasonModalSheet">
+                <div class="cc-sheet" onclick="event.stopPropagation();">
+                    <div class="cc-sheet-header" style="position: relative; display: flex; justify-content: center; align-items: center;">
+                        <span>${seasonWordPlural}</span>
+                        <button class="cc-sheet-close" id="closeSeasonSheetBtn" style="position: absolute; right: 0;">✕</button>
                     </div>
+                    <div class="cc-sheet-grid" id="season-grid-sheet-container"></div>
                 </div>
-            `;
+            </div>
+        `;
  
             const scrollArea    = shared.DOM.seriesPlayerModal.querySelector('#scrollArea');
             const fixedHeader   = shared.DOM.seriesPlayerModal.querySelector('#fixedHeader');
@@ -1088,6 +1153,17 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
                         expandArea.style.display = 'none';
                         toggleText.innerHTML     = '... ver más';
                     }
+                });
+            }
+
+            const toggleDescBtnDesktop = shared.DOM.seriesPlayerModal.querySelector('#toggleDescBtnDesktop');
+            const toggleArrowDesktop = shared.DOM.seriesPlayerModal.querySelector('#toggleArrowDesktop');
+            const synopsisContentDesktop = shared.DOM.seriesPlayerModal.querySelector('#synopsisContentDesktop');
+
+            if (toggleDescBtnDesktop && toggleArrowDesktop && synopsisContentDesktop) {
+                toggleDescBtnDesktop.addEventListener('click', () => {
+                    toggleArrowDesktop.classList.toggle('expanded');
+                    synopsisContentDesktop.classList.toggle('expanded');
                 });
             }
  
@@ -1359,11 +1435,34 @@ export function openEpisode(seriesId, season, newEpisodeIndex) {
     const infoDescEl  = shared.DOM.seriesPlayerModal.querySelector(`#episode-desc-${seriesId}`);
  
     const episodeTitleText = episode.title || `Episodio ${episodeNumber}`;
-    const subTitleText     = isSpecialContent ? 'Especial / Película' : `Temporada ${String(season).replace('T', '')} | Ep ${episodeNumber}`;
+    
+    // 👇 NUEVO: Leer la etiqueta también al cambiar de episodio
+    const postersDataEp = shared.appState.content.seasonPosters[seriesId]?.[season] || {};
+    const customLabelEp = postersDataEp.etiqueta || '';
+    
+    const subTitleText = isSpecialContent 
+        ? 'Especial / Película' 
+        : (customLabelEp ? `${customLabelEp} | Ep ${episodeNumber}` : `Temporada ${String(season).replace('T', '')} | Ep ${episodeNumber}`);
  
+    // Actualizar Textos Mobile
     if (subTitleEl) subTitleEl.textContent = subTitleText;
     if (titleEl)    titleEl.textContent    = episodeTitleText;
     if (infoDescEl) infoDescEl.innerHTML   = `<strong>Sinopsis:</strong><br><br>${episode.description || episode.synopsis || episode.desc || 'No hay descripción disponible para este episodio.'}`;
+
+    // Actualizar Textos Desktop
+    const titleDesktopEl = shared.DOM.seriesPlayerModal.querySelector(`#cinema-title-desktop-${seriesId}`);
+    const subTitleDesktopEl = shared.DOM.seriesPlayerModal.querySelector('#subTitleDesktop');
+    const descDesktopEl = shared.DOM.seriesPlayerModal.querySelector(`#episode-desc-desktop-${seriesId}`);
+    
+    if (titleDesktopEl) titleDesktopEl.textContent = episodeTitleText;
+    if (subTitleDesktopEl) subTitleDesktopEl.textContent = subTitleText;
+    if (descDesktopEl) descDesktopEl.innerHTML = episode.description || episode.synopsis || episode.desc || 'No hay descripción disponible para este episodio.';
+
+    // Reiniciar Toggle Desktop (ocultar sinopsis al cambiar de episodio)
+    const toggleArrowDesk = shared.DOM.seriesPlayerModal.querySelector('#toggleArrowDesktop');
+    const synopsisContentDesk = shared.DOM.seriesPlayerModal.querySelector('#synopsisContentDesktop');
+    if (toggleArrowDesk) toggleArrowDesk.classList.remove('expanded');
+    if (synopsisContentDesk) synopsisContentDesk.classList.remove('expanded');
  
     const langWrapper = shared.DOM.seriesPlayerModal.querySelector('.cc-custom-lang-wrapper');
     if (langWrapper) {
