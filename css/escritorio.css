@@ -117,6 +117,7 @@ class CinePlayer {
         const artConfig = {
             container: this.container,
             url: videoUrl,
+            type: 'mp4',
             title,
             poster,
             theme: '#e50914',
@@ -139,6 +140,7 @@ class CinePlayer {
             fullscreenWeb: true,
             lang: navigator.language.toLocaleLowerCase() || "es",
             moreVideoAttr: { 
+                crossOrigin: "anonymous",
                 playsinline: true, 
                 preload: "metadata" 
             },
