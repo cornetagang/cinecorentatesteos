@@ -55,7 +55,7 @@ body::-webkit-scrollbar {
 
 .page-wrapper.visible {
     opacity: 1;
-    transform: scale(1);
+    transform: none; /* 'none' libera a los elementos fijos */
 }
 
 main {
@@ -150,7 +150,7 @@ body.modal-open {
     padding: 15px 20px;
     position: sticky;
     top: 0;
-    z-index: 1000;
+    z-index: 9999 !important; /* <--- ¡Subimos la prioridad al máximo! */
     border-bottom: 2px solid var(--primary-red);
     transition: background-color 0.3s ease, box-shadow 0.3s ease;
 }
@@ -8302,324 +8302,136 @@ button.modal-review-count:hover {
     }
 
 
-    /* ================================================================
-       SERIES PLAYER — LAYOUT BOCETO
-       ================================================================ */
-
-    /* ── BOTÓN VOLVER ── */
-    #series-player-page .streaming-back-btn {
-        background: transparent;
-        border: none;
-        color: #bbb;
-        font-size: 0.82rem;
-        font-family: 'Montserrat', sans-serif;
-        font-weight: 500;
-        letter-spacing: 0.4px;
-        display: flex;
-        align-items: center;
-        gap: 7px;
-        cursor: pointer;
-        padding: 0;
-        transition: color 0.2s;
-        white-space: nowrap;
-        flex-shrink: 0;
-    }
-    #series-player-page .streaming-back-btn:hover { color: #fff; }
-
-    /* ── TOP BAR (Volver · Serie · Episodio) ── */
-    #series-player-page .player-top-bar {
-        display: flex;
-        align-items: center;
-        gap: 14px;
-        padding: 0 20px;
-        height: 44px;
-        background: #0b0e13;
-        border-bottom: 2px solid #e50914;
-        flex-shrink: 0;
-        overflow: hidden;
-        position: relative;
-        z-index: 10;
-    }
-    #series-player-page .player-top-bar .series-name-muted {
-        font-size: 0.78rem;
-        color: #666;
-        text-transform: uppercase;
-        letter-spacing: 0.8px;
-        white-space: nowrap;
-        flex-shrink: 0;
-    }
-    #series-player-page .player-top-bar .series-name-muted::before {
-        content: '—';
-        margin-right: 12px;
-        color: #333;
-    }
-    #series-player-page .player-top-bar .ep-header-title {
-        font-size: 0.88rem;
-        font-weight: 500;
-        color: #e0e0e0;
-        overflow: hidden;
-        white-space: nowrap;
-        text-overflow: ellipsis;
-        flex: 1;
-    }
-    #series-player-page .player-top-bar .ep-header-title:not(:empty)::before {
-        content: '—';
-        margin-right: 12px;
-        color: #333;
-    }
-
-    /* ── MODAL FULL SCREEN ── */
+/* ================================================================
+   SERIES PLAYER — LAYOUT BOCETO (VERSIÓN GRID INDEPENDIENTE PC)
+   ================================================================ */
+@media (min-width: 1024px) {
     #series-player-page.player-layout-view {
-        display: flex;
-        flex-direction: column;
-        padding: 0;
-        align-items: stretch;
-        justify-content: flex-start;
-        overflow-y: auto;
-        overflow-x: hidden;
-        background: #0b0e13;
+        background: #0f0f0f !important;
+        padding-top: 0 !important;
+        justify-content: flex-start !important;
     }
 
-    /* ── PAGE WRAPPER (scrollable) ── */
-    #series-player-page .player-page-wrapper {
+    .sp-desktop-grid {
         display: grid;
-        grid-template-columns: 1fr 300px;
-        gap: 20px;
-        padding: 20px;
-        max-width: 1280px;
-        margin: 0 auto;
+        grid-template-columns: minmax(0, 1fr) 360px;
+        gap: 30px;
+        padding: 30px 40px;
         width: 100%;
+        max-width: 1500px;
+        margin: 0 auto;
         box-sizing: border-box;
-        min-height: calc(100vh - 114px);
         align-items: start;
     }
 
-    /* ── COLUMNA PRINCIPAL (video + info) ── */
-    #series-player-page .player-main-col {
-        display: flex;
-        flex-direction: column;
-        gap: 16px;
-        min-width: 0;
+    /* --- COLUMNA IZQUIERDA --- */
+    .sp-left-column { display: flex; flex-direction: column; width: 100%; min-width: 0; }
+    
+    .sp-left-column .cc-top-fixed {
+        position: relative !important;
+        border: none !important;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.3) !important;
+        border-radius: 12px 12px 0 0 !important;
+        /* SIN overflow:hidden — permite que ArtPlayer renderice su canvas correctamente */
+        background: #000 !important;
     }
 
-    /* ── VIDEO CONTAINER ── */
-    #series-player-page .video-container {
-        border-radius: 10px;
-        overflow: hidden;
-        border: 1px solid #30363d;
-        background: #000;
-        box-shadow: 0 20px 50px rgba(0,0,0,0.8);
+    .sp-left-column .cc-video-wrap {
+        padding-top: 56.25% !important;
+        border-radius: 12px 12px 0 0;
     }
 
-    /* ── PANTALLA ── */
-    #series-player-page .player-container { display: contents; } /* invisible wrapper */
-    #series-player-page .player-container .screen,
-    #series-player-page .screen {
-        width: 100%;
-        padding-top: 56.25%;
-        position: relative;
-        height: 0;
-        background: #000;
-        border-radius: 0;
-        overflow: hidden;
-        flex-shrink: 0;
-    }
-    #series-player-page .player-container .screen iframe,
-    #series-player-page .screen iframe {
-        position: absolute;
-        inset: 0;
-        width: 100%;
-        height: 100%;
-        border: none;
+    /* Caja de Info y Sinopsis */
+    .video-info-desktop {
+        background-color: var(--yt-surface, #272727);
+        padding: 20px 30px 10px 30px; /* Arriba 20px, lados 30px, y Abajo lo reducimos a 10px */
+        border-radius: 0 0 12px 12px;
+        border: 1px solid var(--cc-border, #2a2a2a);
+        border-top: none;
     }
 
-    /* ── BARRA DE ACCIONES (debajo del video) ── */
-    #series-player-page .video-actions-bar {
-        background: #161b22;
-        display: grid;
-        grid-template-columns: 1fr 1fr 1fr 1.4fr;
-        border-top: 1px solid #30363d;
+    .info-header-clickable {
+        display: flex; justify-content: space-between; align-items: flex-end;
+        cursor: pointer; user-select: none;
     }
-    #series-player-page .vab-btn {
-        background: transparent;
-        border: none;
-        border-right: 1px solid #30363d;
-        color: #8b949e;
-        padding: 14px 10px;
-        font-size: 0.72rem;
-        font-weight: 700;
-        font-family: 'Montserrat', sans-serif;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        cursor: pointer;
-        transition: background 0.15s, color 0.15s;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 6px;
-    }
-    #series-player-page .vab-btn:last-child { border-right: none; }
-    #series-player-page .vab-btn:hover { background: #1c2128; color: #fff; }
-    #series-player-page .vab-btn--report { color: #f87171; }
-    #series-player-page .vab-btn--report:hover { background: rgba(248,113,113,0.08); color: #f87171; }
-    #series-player-page .vab-btn--prev:disabled { opacity: 0.3; cursor: not-allowed; }
-    #series-player-page .vab-btn--prev:disabled:hover { background: transparent; color: #8b949e; }
-    #series-player-page .vab-btn--next {
-        background: #e50914;
-        color: #fff !important;
-        border-right: none;
-    }
-    #series-player-page .vab-btn--next:hover { background: #b20710; }
-    #series-player-page .vab-btn--next:disabled { background: #555; cursor: not-allowed; }
+    .title-block-wrap { display: flex; flex-direction: column; flex-grow: 1; padding-right: 15px; }
+    .video-info-desktop .sub-title { color: #e50914; font-size: 13px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+    .video-info-desktop .video-title { font-size: 24px; font-weight: bold; margin: 0 0 12px 0; color: #fff; line-height: 1.3; }
+    .video-info-desktop .series-meta { font-size: 13px; color: #aaa; display: flex; align-items: center; gap: 8px; margin: 0; }
+    
+    .toggle-arrow { color: #aaa; flex-shrink: 0; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); margin-bottom: -4px; }
+    .toggle-arrow svg { width: 30px; height: 30px; fill: currentColor; }
+    .info-header-clickable:hover .toggle-arrow { color: #e50914; }
+    .toggle-arrow.expanded { transform: rotate(180deg); color: #e50914; }
 
-    /* ── EPISODE INFO BOX (debajo del video) ── */
-    #series-player-page .episode-info-box {
-        padding: 18px 20px;
-        background: #161b22;
-        border-radius: 10px;
-        border: 1px solid #30363d;
-        transition: opacity 0.2s;
-    }
-    #series-player-page .episode-info-box.hidden { display: none; }
-    #series-player-page .eib-title {
-        margin: 0 0 8px 0;
-        font-size: 1.1rem;
-        font-weight: 700;
-        color: #fff;
-        font-family: 'Montserrat', sans-serif;
-    }
-    #series-player-page .eib-desc {
-        margin: 0;
-        font-size: 0.88rem;
-        color: #8b949e;
-        line-height: 1.65;
+    .synopsis-content { display: none; margin-top: 5px; padding-top: 1px; border-top: 1px solid #2a2a2a; }
+    .synopsis-content.expanded { display: block; animation: fadeIn 0.3s ease; }
+    .synopsis-content .desc-text { font-size: 14px; color: #aaa; line-height: 1.6; margin: 0; }
+
+    /* --- COLUMNA DERECHA (EPISODIOS CON TAMAÑO FIJO) --- */
+    .sp-right-column.cc-scroll {
+    background-color: var(--yt-surface, #272727) !important;
+    border-radius: 12px !important;
+    border: 1px solid var(--cc-border, #2a2a2a) !important;
+    padding: 20px 25px !important;
+    
+    /* Altura dinámica: 100% de la pantalla menos el espacio de arriba/abajo */
+    height: calc(100vh - 140px) !important; 
+    min-height: 500px !important; /* Para evitar que se aplaste mucho */
+    
+    overflow-y: auto !important;
+    display: flex; flex-direction: column;
     }
 
-    /* ── SIDEBAR ── */
-    #series-player-page .episode-sidebar {
-        background: #161b22;
-        border-radius: 10px;
-        border: 1px solid #30363d;
-        overflow: hidden;
-        display: flex;
-        flex-direction: column;
-        /* sticky para que acompañe el scroll */
-        position: sticky;
-        top: 134px;         /* 70px header + 44px top-bar + 20px gap */
-        max-height: calc(100vh - 154px);
+    .sp-right-column.cc-scroll::-webkit-scrollbar { width: 6px; display: block; }
+    .sp-right-column.cc-scroll::-webkit-scrollbar-track { background: transparent; }
+    .sp-right-column.cc-scroll::-webkit-scrollbar-thumb { background: #444; border-radius: 10px; }
+    .sp-right-column.cc-scroll::-webkit-scrollbar-thumb:hover { background: #666; }
+
+    /* Estilo de Tarjetas de Episodio para PC */
+    .sp-right-column .cc-card {
+        background: transparent !important;
+        padding: 8px !important;
+        border-radius: 8px !important;
+        margin-left: -8px; margin-right: -8px;
+        transition: background 0.2s !important;
+        border: none !important;
     }
-    #series-player-page .sidebar-header {
-        padding: 14px 16px 10px;
-        border-bottom: 1px solid #30363d;
-        flex-shrink: 0;
-        background: #0b0e13;
+    .sp-right-column .cc-card:hover { background: rgba(255,255,255,0.05) !important; }
+    .sp-right-column .cc-thumb { width: 140px !important; height: 78px !important; }
+    .sp-right-column .cc-ep-title { font-size: 13px !important; margin: 0 0 4px 0 !important; }
+    
+    /* Adaptar botones PC */
+    .sp-right-column .cc-season-btn { padding: 6px 0 !important; font-size: 15px !important; }
+    .sp-right-column .cc-controls { margin-bottom: 20px !important; }
+    
+    /* Modal centrado en PC */
+    .cc-sheet-overlay { 
+        justify-content: center !important; 
+        align-items: center !important; 
     }
-    #series-player-page .sidebar-header .sidebar-title-row h2 {
-        font-size: 0.78rem;
-        font-weight: 700;
-        color: #8b949e;
-        text-transform: uppercase;
-        letter-spacing: 1.2px;
-        margin: 0;
+    
+    .cc-sheet { 
+        border-radius: 12px !important; 
+        max-height: 85vh !important; 
+        max-width: 480px !important;
+        transform: scale(0.95) !important; 
+        
+        /* 👇 NUEVO: Se adapta exactamente a las filas que tenga 👇 */
+        height: fit-content !important; 
+        min-height: 0 !important;
     }
-    #series-player-page .player-back-link.back-to-seasons {
-        background: transparent;
-        border: 1px solid rgba(255,255,255,0.12);
-        color: #888;
-        font-size: 0.75rem;
-        padding: 4px 10px;
-        border-radius: 20px;
-        margin-bottom: 8px;
-        cursor: pointer;
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
-        transition: color 0.2s, border-color 0.2s;
-    }
-    #series-player-page .player-back-link.back-to-seasons:hover {
-        color: #fff; border-color: rgba(255,255,255,0.35);
+    
+    .cc-sheet-overlay.active .cc-sheet { 
+        transform: scale(1) !important; 
     }
 
-    /* ── LISTA DE EPISODIOS ── */
-    #series-player-page .episode-list-container {
-        flex: 1 1 0;
-        overflow-y: auto;
-        overflow-x: hidden;
-        scrollbar-width: thin;
-        scrollbar-color: rgba(255,255,255,0.1) transparent;
+    /* Forzamos 3 columnas fijas */
+    .cc-sheet-grid { 
+        grid-template-columns: repeat(3, 1fr) !important; 
+        gap: 15px !important; 
     }
-    #series-player-page .episode-list-container::-webkit-scrollbar { width: 4px; }
-    #series-player-page .episode-list-container::-webkit-scrollbar-thumb {
-        background: rgba(255,255,255,0.12); border-radius: 2px;
-    }
-
-    /* ── EPISODE CARD ── */
-    #series-player-page .episode-card {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        padding: 13px 16px;
-        cursor: pointer;
-        border-bottom: 1px solid #21262d;
-        transition: background 0.15s;
-        background: transparent;
-    }
-    #series-player-page .episode-card:hover { background: #1f242c; }
-    #series-player-page .episode-card.active {
-        background: rgba(229,9,20,0.12);
-        border-left: 3px solid #e50914;
-    }
-    #series-player-page .episode-card .ep-num {
-        font-size: 0.82rem;
-        font-weight: 700;
-        color: #555;
-        min-width: 22px;
-        flex-shrink: 0;
-        font-family: 'Montserrat', sans-serif;
-    }
-    #series-player-page .episode-card.active .ep-num { color: #e50914; }
-    #series-player-page .ep-thumb {
-        width: 88px;
-        height: 50px;
-        object-fit: cover;
-        border-radius: 4px;
-        background: #2a2a2a;
-        flex-shrink: 0;
-    }
-    #series-player-page .episode-card.active .ep-thumb {
-        outline: 2px solid #e50914; outline-offset: 1px;
-    }
-    #series-player-page .episode-card .ep-title {
-        font-size: 0.83rem;
-        color: #c9d1d9;
-        line-height: 1.35;
-        font-family: 'Montserrat', sans-serif;
-        overflow: hidden;
-        display: -webkit-box;
-        -webkit-line-clamp: 2;
-        -webkit-box-orient: vertical;
-        flex: 1;
-    }
-    #series-player-page .episode-card.active .ep-title { color: #fff; font-weight: 500; }
-
-    /* Ocultos */
-    #series-player-page .series-main-title { display: none; }
-    #series-player-page .player-title { display: none; }
-    #series-player-page .pagination-controls { display: none; }
-
-    /* ── SEASON GRID VIEW ── */
-    #series-player-page.season-grid-view {
-        padding-top: 20px;
-        align-items: flex-start;
-        justify-content: center;
-    }
-    #series-player-page.season-grid-view .season-grid-container {
-        max-height: none; border-radius: 0;
-        width: 95vw; max-width: 1200px;
-        padding: 30px 20px; margin: 0 auto;
-    }
-
-    /* ── RESPONSIVE ── */
+} 
 
     /* =====================================================
        SERIES PLAYER PAGE — Página independiente (no modal)
@@ -8745,7 +8557,8 @@ button.modal-review-count:hover {
         color: #fff;
     }
 
-    /* Ajustar grid cuando hay selector de idioma (el primer slot es flexible) */
+    /* Ajustar grid cuando hay selector de idioma (el primer slot es flexible)
+     */
     #series-player-page .video-actions-bar:has(.vab-lang-group) {
         grid-template-columns: auto 1fr 1fr 1.4fr;
     }
@@ -8826,29 +8639,46 @@ button.modal-review-count:hover {
 /* ===========================================================
    🔥 FIX DEFINITIVO: BLOQUEO DE TAMAÑO PARA ARTPLAYER
    =========================================================== */
-/* 1. Bloqueamos el contenedor padre para que SIEMPRE mantenga el ratio 16:9 */
+/* 1. Bloqueamos el contenedor padre usando la propiedad moderna aspect-ratio */
 .screen,
 .cc-video-wrap {
     position: relative !important;
     width: 100% !important;
-    padding-top: 56.25% !important; /* Proporción de cine 16:9 exacta */
-    height: 0 !important;
+    aspect-ratio: 16/9 !important; /* Reemplaza el hack del padding */
+    padding-top: 0 !important; 
+    height: auto !important;
     display: block !important;
-    flex: 0 0 auto !important; /* Evita que flexbox lo estire hacia abajo en móvil */
+    flex: 0 0 auto !important;
     min-height: auto !important;
+    background: #000 !important;
 }
 
-/* 2. Anclamos el reproductor dentro del marco para que no se desborde */
-.cine-player-wrapper,
-.artplayer-container,
-[id^="video-container-"] {
+/* 2. El reproductor debe posicionarse ABSOLUTO cubriendo el padre 100% */
+.artplayer-app {
     position: absolute !important;
     top: 0 !important;
     left: 0 !important;
-    right: 0 !important;
-    bottom: 0 !important;
     width: 100% !important;
     height: 100% !important;
-    margin: 0 !important;
-    padding: 0 !important;
+    border-radius: 8px 8px 0 0;
+    overflow: hidden;
+    z-index: 1 !important;
+}
+
+/* 3. FORZAR LA VISIBILIDAD Y CAPA DEL VIDEO */
+.art-video-player .art-video {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: contain !important;
+    z-index: 10 !important; /* Lo traemos al frente del fondo negro */
+    opacity: 1 !important;
+    visibility: visible !important;
+}
+
+/* 4. Asegurar que el poster se oculte correctamente debajo del z-index 10 al dar play */
+.art-video-player .art-poster {
+    z-index: 20 !important; 
 }
