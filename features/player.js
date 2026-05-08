@@ -1,15 +1,89 @@
 // ===========================================================
-// MÓDULO DEL REPRODUCTOR (V3 - ARTPLAYER + SRT/ASS SPLIT)
+// MÓDULO DEL REPRODUCTOR (V4 - ARTPLAYER + artplayer-plugin-ass)
+// Migración completa: SubtitlesOctopus WASM → artplayer-plugin-ass (assjs)
+//
+// ¿Por qué este cambio?
+//   SubtitlesOctopus usa libass compilado a WASM:
+//     ✗ Requiere SharedArrayBuffer → bloqueado por COOP/COEP en muchos hosts
+//     ✗ El Worker WASM crashea en móviles con poca RAM (Redmi Note 9S, etc.)
+//     ✗ Errores "Corrupted brotli dictionary", "postMessage on null", etc.
+//
+//   artplayer-plugin-ass usa assjs (Canvas puro, JavaScript 100%):
+//     ✓ Sin WASM → sin crashes ni headers especiales requeridos
+//     ✓ El canvas overlay se destruye con art.destroy() → sin fugas de memoria
+//     ✓ API limpia: art.plugins.ass.setTrack(url) para cambiar subtítulo
+//     ✓ Soporte nativo de resampling → typesetting complejo escala correctamente
 // ===========================================================
 
 import { logError } from '../utils/logger.js'; 
 import { WORKER_URL } from "../core/config.js";
 import ContentManager from '../utils/content-manager.js';
 
-// ─── Constantes para SubtitlesOctopus ────────────────────────
-// ✅ FIX: unpkg evita el error "Corrupted brotli dictionary" de jsDelivr
-const OCTOPUS_WORKER = "https://unpkg.com/libass-wasm@4/dist/js/subtitles-octopus-worker.js";
-const OCTOPUS_WASM   = "https://unpkg.com/libass-wasm@4/dist/js/subtitles-octopus-worker.wasm";
+// ─── CDN del plugin oficial (ESM) ─────────────────────────────
+// Se carga una vez y se cachea en módulo → no re-descarga por episodio
+const ASS_PLUGIN_CDN = "https://unpkg.com/artplayer-plugin-ass@1/dist/artplayer-plugin-ass.esm.js";
+
+// ─── Cache global del módulo (singleton por sesión) ───────────
+let _assPluginModule       = null;
+let _assPluginLoadPromise  = null;
+
+// ─── Mapa de fuentes comunes en fansubs de anime ──────────────
+// Clave: nombre en minúscula tal como aparece en [V4+ Styles] del .ass
+// Valor: URL pública de la fuente (.woff2 preferido por tamaño)
+//
+// Estrategia para fuentes comerciales (Gotham, Futura, etc.):
+//   → Se incluye el sustituto libre más compatible visualmente.
+//   → Para fuentes propietarias exactas, pasa el Drive ID en tu data
+//     como fontIds: ['1Abc...'] y el Worker las servirá automáticamente.
+const ANIME_FONT_MAP = {
+    // ── Sans-serif genéricas (más usadas en diálogos) ──
+    'open sans':         'https://fonts.gstatic.com/s/opensans/v36/memSYaGs126MiZpBA-UvWbX2vVnXBbObj2OVZyOOSr4dVJWUgsjZ0C4nY1M2xLER.woff2',
+    'roboto':            'https://fonts.gstatic.com/s/roboto/v30/KFOmCnqEu92Fr1Mu4mxKKTU1Kg.woff2',
+    'montserrat':        'https://fonts.gstatic.com/s/montserrat/v25/JTUHjIg1_i6t8kCHKm4532VJOt5-QNFgpCtr6Hw0aXp-p7K4KLjztg.woff2',
+    'lato':              'https://fonts.gstatic.com/s/lato/v24/S6uyw4BMUTPHjxAwXjeu.woff2',
+    'noto sans':         'https://fonts.gstatic.com/s/notosans/v27/o-0IIpQlx3QUlC5A4PNb4j5Ba_2c7A.woff2',
+    'source sans pro':   'https://fonts.gstatic.com/s/sourcesanspro/v21/6xKydSBYKcSV-LCoeQqfX1RYOo3ik4zwlxdu3cOWxw.woff2',
+    'ubuntu':            'https://fonts.gstatic.com/s/ubuntu/v20/4iCs6KVjbNBYlgoKfw72nU6AF7xm.woff2',
+    'nunito':            'https://fonts.gstatic.com/s/nunito/v25/XRXV3I6Li01BKofINeaB.woff2',
+    'inter':             'https://fonts.gstatic.com/s/inter/v13/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuLyfAZ9hiA.woff2',
+    'oswald':            'https://fonts.gstatic.com/s/oswald/v49/TK3_WkUHHAIjg75cFRf3bXL8LICs1_FvsUtiZTaR.woff2',
+    'raleway':           'https://fonts.gstatic.com/s/raleway/v28/1Ptug8zYS_SKggPNyC0IT4ttDfA.woff2',
+    'cabin':             'https://fonts.gstatic.com/s/cabin/v26/u-4X0qWljRw-PfU81xCKCpdpbgZJl6XFpfEd7eA9BIxxkV2EH7alwA.woff2',
+    'exo 2':             'https://fonts.gstatic.com/s/exo2/v21/7cH1v4okm5zmbvwkAx_sfcEuiD8jvvKcPtq-rpvLpQ.woff2',
+    'rajdhani':          'https://fonts.gstatic.com/s/rajdhani/v15/LDI2apCSOBg7S-QT7pamgLKQoBIxIQ.woff2',
+    'kanit':             'https://fonts.gstatic.com/s/kanit/v12/nKKZ-Go6G5tXcr4uPhWnVaFrNlJzIu4.woff2',
+    'yanone kaffeesatz': 'https://fonts.gstatic.com/s/yanonekaffeesatz/v24/3y9I6aknfjLm_3lMKjiMgmUUYBs04aUXNxt9gW2LIftopTWNSam3Sn1sHg.woff2',
+
+    // ── Sustitutos para fuentes comerciales comunes en fansubs ─
+    // Gotham (muy usada en carteles de anime tipo BnHA, AoT) → Montserrat
+    'gotham':            'https://fonts.gstatic.com/s/montserrat/v25/JTUHjIg1_i6t8kCHKm4532VJOt5-QNFgpCtr6Hw0aXp-p7K4KLjztg.woff2',
+    'gotham bold':       'https://fonts.gstatic.com/s/montserrat/v25/JTUHjIg1_i6t8kCHKm4532VJOt5-QNFgpCtr6Hw0aXp-p7K4KLjztg.woff2',
+    'gotham narrow':     'https://fonts.gstatic.com/s/montserrat/v25/JTUHjIg1_i6t8kCHKm4532VJOt5-QNFgpCtr6Hw0aXp-p7K4KLjztg.woff2',
+    // Futura → Nunito Sans
+    'futura':            'https://fonts.gstatic.com/s/nunitosans/v15/pe0IMImSLcBpwr2zbNJUHhFpA4Ldl2ZKGbiqJnM.woff2',
+    'futura pt':         'https://fonts.gstatic.com/s/nunitosans/v15/pe0IMImSLcBpwr2zbNJUHhFpA4Ldl2ZKGbiqJnM.woff2',
+    // Gill Sans → Lato
+    'gill sans':         'https://fonts.gstatic.com/s/lato/v24/S6uyw4BMUTPHjxAwXjeu.woff2',
+    // Myriad Pro → Source Sans Pro
+    'myriad pro':        'https://fonts.gstatic.com/s/sourcesanspro/v21/6xKydSBYKcSV-LCoeQqfX1RYOo3ik4zwlxdu3cOWxw.woff2',
+    // Helvetica Neue → Inter
+    'helvetica neue':    'https://fonts.gstatic.com/s/inter/v13/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuLyfAZ9hiA.woff2',
+    'helvetica':         'https://fonts.gstatic.com/s/inter/v13/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuLyfAZ9hiA.woff2',
+    // Franklin Gothic → Oswald
+    'franklin gothic':   'https://fonts.gstatic.com/s/oswald/v49/TK3_WkUHHAIjg75cFRf3bXL8LICs1_FvsUtiZTaR.woff2',
+
+    // ── Fuentes de sistema (sin URL → disponibles en todos los dispositivos) ─
+    // Se incluyen para que el Set de lookup no genere advertencias innecesarias
+    'arial':             '',
+    'arial bold':        '',
+    'verdana':           '',
+    'tahoma':            '',
+    'trebuchet ms':      '',
+    'times new roman':   '',
+    'georgia':           '',
+    'impact':            '',
+    'courier new':       '',
+};
 
 let shared; 
 
@@ -17,7 +91,7 @@ let shared;
 export function initPlayer(dependencies) {
     shared = dependencies;
 
-    // ✅ FIX: Cerrar el reproductor si el usuario hace clic en el menú de navegación
+    // ✅ Cierra el reproductor al navegar desde el header
     document.addEventListener('click', (e) => {
         if (e.target.closest('.main-nav a, .nav-link, .logo, .header-logo')) {
             const page = document.getElementById('series-player-page');
@@ -29,7 +103,7 @@ export function initPlayer(dependencies) {
 }
 
 // ===========================================================
-// 🛠️ CLASE CINEPLAYER (Artplayer + Worker Integration)
+// 🛠️ CLASE CINEPLAYER (Artplayer + artplayer-plugin-ass)
 // ===========================================================
 function isDriveId(id) {
     // Google Drive IDs: empiezan con '1' y tienen >= 25 chars alfanuméricos
@@ -38,8 +112,6 @@ function isDriveId(id) {
 
 function buildWorkerUrl(type, driveId) {
     if (!driveId) return null;
-    // ✅ Query params: /?id=<fileId>&type=video|sub
-    // El Worker detecta type=sub para forzar Content-Type: text/plain
     return `${WORKER_URL}/?id=${driveId}&type=${type}`;
 }
 
@@ -55,35 +127,37 @@ function buildErrorHTML(message = "No se pudo cargar el video.") {
 
 function destroyPrevious(container) {
     if (container._artInstance) {
+        // destroy(false) = no borra el nodo del DOM, solo limpia Artplayer.
+        // El canvas de artplayer-plugin-ass se destruye automáticamente aquí.
         container._artInstance.destroy(false);
         container._artInstance = null;
     }
-    if (container._octopusInstance) {
-        container._octopusInstance.dispose();
-        container._octopusInstance = null;
-    }
+    // Limpiar referencia al plugin (ya fue destruido por art.destroy() arriba)
+    container._assPluginRef = null;
 }
 
 class CinePlayer {
     constructor(containerSelector, options = {}) {
-        this.container = typeof containerSelector === "string" ? document.querySelector(containerSelector) : containerSelector;
+        this.container = typeof containerSelector === "string"
+            ? document.querySelector(containerSelector)
+            : containerSelector;
         if (!this.container) throw new Error(`[CinePlayer] Contenedor no encontrado: ${containerSelector}`);
         
         this.container.classList.add("cine-player-wrapper");
         this.options = options;
-        this.art = null;
-        this.octopus = null;
-        // ✅ FIX: Contador para cancelar llamadas a _mountOctopus que quedaron en vuelo
+        this.art      = null;
+        this._assPlugin = null;  // Referencia al plugin activo (para cambio de tracks)
+        // Contador anti-race: incrementar cancela cualquier _mountAssPlugin en vuelo
         this._mountId = 0;
     }
 
     // ===========================================================
     // 🎯 REGLAS DE SUBTÍTULOS:
     //   subType === 'srt' → Ruta Liviana: art.subtitle.url nativo
-    //                       Sin WASM. Ideal para móviles. Prioridad.
-    //   subType === 'ass' → Ruta Avanzada: SubtitlesOctopus WASM
-    //                       Solo cuando el contenido lo necesita.
-    //   !subId            → Sin subtítulos, no se intenta nada.
+    //                       Sin canvas/WASM. Ideal para móviles.
+    //   subType === 'ass' → Ruta Avanzada: artplayer-plugin-ass (assjs)
+    //                       Canvas puro, sin WASM. Typesetting complejo.
+    //   !subId            → Sin subtítulos.
     // ===========================================================
     async load({ videoId, subId = null, subType = null, title = "", poster = "" }) {
         destroyPrevious(this.container);
@@ -94,7 +168,6 @@ class CinePlayer {
             return;
         }
 
-        // Si NO es un ID de Google Drive, caemos al iframe clásico
         if (!isDriveId(videoId)) {
             this._mountIframeFallback(videoId);
             return;
@@ -103,7 +176,6 @@ class CinePlayer {
         const videoUrl = buildWorkerUrl("video", videoId);
         const subUrl   = subId ? buildWorkerUrl("sub", subId) : null;
 
-        // Normalizar subType para comparaciones seguras
         const resolvedSubType = subUrl
             ? (ContentManager.getSubtitleConfig({ subId, subType }).subType)
             : null;
@@ -116,67 +188,69 @@ class CinePlayer {
 
         const artConfig = {
             container: this.container,
-            url: videoUrl,
-            type: 'mp4',
+            url:       videoUrl,
+            type:      'mp4',
             title,
             poster,
-            theme: '#e50914',
-            volume: 1,
-            autoplay: false,
-            pip: true,
-            autoSize: true,
-            autoHeight: true,
+            theme:       '#e50914',
+            volume:      1,
+            autoplay:    false,
+            pip:         true,
+            autoSize:    true,
+            autoHeight:  true,
             fastForward: true,
-            backdrop: true,         // ✅ Activado
-            lock: true,             // ✅ Activado (botón lock en móvil)
-            autoMini: false,
-            autoPlayback: true,     // ✅ Recuerda posición por URL (localStorage)
-            miniProgressBar: true,  // ✅ Activado
-            autoOrientation: true,  // ✅ Activado (rotación automática móvil)
-            screenshot: false,
-            hotkey: true,
-            mutex: true,
-            fullscreen: true,
-            fullscreenWeb: true,
+            backdrop:    true,
+            lock:        true,
+            autoMini:    false,
+            autoPlayback:    true,
+            miniProgressBar: true,
+            autoOrientation: true,
+            screenshot:      false,
+            hotkey:          true,
+            mutex:           true,
+            fullscreen:      true,
+            fullscreenWeb:   true,
             lang: navigator.language.toLocaleLowerCase() || "es",
             moreVideoAttr: { 
-                crossOrigin: "anonymous",
                 playsinline: true, 
-                preload: "metadata" 
+                preload:     "metadata" 
             },
 
-            // 🟢 RUTA LIVIANA (SRT): Configuración nativa en artConfig
-            // ArtPlayer maneja el SRT sin WASM, perfecto para móviles
+            // 🟢 RUTA LIVIANA (SRT): Motor nativo de ArtPlayer, sin canvas extra
             ...(resolvedSubType === 'srt' && subUrl ? {
                 subtitle: {
-                    url: subUrl,
-                    type: 'srt',
+                    url:      subUrl,
+                    type:     'srt',
                     encoding: 'utf-8',
-                    escape: false,
+                    escape:   false,
                     style: {
-                        color: '#ffffff',
-                        fontSize: '20px',
+                        color:      '#ffffff',
+                        fontSize:   '20px',
                         textShadow: '1px 1px 3px rgba(0,0,0,0.8)',
                     }
                 }
             } : {}),
 
-            // 🛠️ PANEL DE AJUSTES — ancho fijo 260px (no flota feo en móvil)
-            setting: true, 
+            // 🔴 RUTA AVANZADA (ASS): artplayer-plugin-ass se monta en el evento 'ready'
+            //    NO se pasa nada en artConfig.plugins aquí; el plugin se agrega
+            //    dinámicamente para poder hacer detección de CORS previa.
+
+            // 🛠️ PANEL DE AJUSTES
+            setting:  true,
             settings: [
                 {
-                    width: 260,   // ✅ Fijo en 260px
-                    html: 'Velocidad',
+                    width:   260,
+                    html:    'Velocidad',
                     tooltip: '1.0x',
-                    name: 'playbackRate',
-                    icon: '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
+                    name:    'playbackRate',
+                    icon:    '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
                     selector: [
                         { url: '0.5',  html: '0.5x' },
                         { url: '0.75', html: '0.75x' },
                         { default: true, url: '1.0', html: 'Normal' },
                         { url: '1.25', html: '1.25x' },
-                        { url: '1.5',  html: '1.5x' },
-                        { url: '2.0',  html: '2.0x' },
+                        { url: '1.5',  html: '1.5x'  },
+                        { url: '2.0',  html: '2.0x'  },
                     ],
                     onSelect: function (item) {
                         this.playbackRate = parseFloat(item.url);
@@ -184,13 +258,13 @@ class CinePlayer {
                     },
                 },
                 {
-                    width: 260,   // ✅ Fijo en 260px
-                    html: 'Relación de Aspecto',
-                    name: 'aspectRatio',
+                    width:   260,
+                    html:    'Relación de Aspecto',
+                    name:    'aspectRatio',
                     selector: [
                         { default: true, html: 'Default', url: 'default' },
-                        { html: '16:9', url: '16:9' },
-                        { html: '4:3',  url: '4:3'  },
+                        { html: '16:9',  url: '16:9' },
+                        { html: '4:3',   url: '4:3'  },
                     ],
                     onSelect: function (item) {
                         this.aspectRatio = item.url;
@@ -198,19 +272,19 @@ class CinePlayer {
                     },
                 },
 
-                // 📝 TAMAÑO DE SUBTÍTULOS — solo activo en ruta SRT (motor nativo)
-                // Para ASS/Octopus el tamaño viene definido en el propio archivo .ass
+                // 📝 TAMAÑO DE SUBTÍTULOS — solo para ruta SRT (nativa)
+                // En ASS el tamaño viene definido en el .ass y escala con resampling
                 ...(resolvedSubType === 'srt' && subUrl ? [{
-                    width: 260,
-                    html: 'Tamaño Subtítulos',
+                    width:   260,
+                    html:    'Tamaño Subtítulos',
                     tooltip: 'Mediano',
-                    name: 'subtitleSize',
-                    icon: '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>',
+                    name:    'subtitleSize',
+                    icon:    '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>',
                     selector: [
                         { url: '14px', html: 'Pequeño'  },
                         { url: '18px', html: 'Mediano', default: true },
-                        { url: '24px', html: 'Grande'  },
-                        { url: '30px', html: 'Extra'   },
+                        { url: '24px', html: 'Grande'   },
+                        { url: '30px', html: 'Extra'    },
                     ],
                     onSelect: function (item) {
                         this.subtitle.style({ fontSize: item.url });
@@ -222,7 +296,7 @@ class CinePlayer {
             // 🎨 Menú click derecho personalizado
             contextmenu: [
                 {
-                    html: 'Cine Corneta Player',
+                    html:  'Cine Corneta Player',
                     click: function (contextmenu) {
                         console.info('Reproductor oficial');
                         contextmenu.show = false;
@@ -237,50 +311,336 @@ class CinePlayer {
         this.art = art;
         this.container._artInstance = art;
 
-        // ─── Asignación de subtítulos según tipo ─────────────────
+        // ─── Montar subtítulos según tipo ────────────────────────
         if (subUrl) {
             if (resolvedSubType === 'srt') {
-                // 🟢 RUTA LIVIANA: ya configurado en artConfig.subtitle
+                // 🟢 RUTA LIVIANA: motor nativo ya configurado en artConfig.subtitle
                 art.on('ready', () => {
                     art.subtitle.show = true;
-                    // Asegurar estilo inicial coherente con el CSS de móvil
                     art.subtitle.style({
-                        color: '#ffffff',
-                        fontSize: '18px',
+                        color:      '#ffffff',
+                        fontSize:   '18px',
                         textShadow: '1px 1px 3px rgba(0,0,0,0.9)',
                     });
                 });
             } else {
-                // 🔴 RUTA AVANZADA (ASS): SubtitlesOctopus con WASM
-                art.on("ready", () => this._mountOctopus(art.video, subUrl));
-                art.on("seek",  () => { if (this.octopus) this.octopus.setCurrentTime(art.currentTime); });
+                // 🔴 RUTA AVANZADA (ASS): montar artplayer-plugin-ass tras inicializar
+                art.on('ready', () => this._mountAssPlugin(subUrl));
             }
         }
 
-        art.on("error", (err) => {
-            console.error("[CinePlayer] Error:", err);
-            const msg = err?.message?.includes("403") ? "Acceso denegado." 
-                      : err?.message?.includes("404") ? "Archivo no encontrado." 
-                      : "Ocurrió un error al reproducir.";
-            this.showError(msg);
-        });
+        // ─── Manejo de errores del reproductor ──────────────────
+        // ─── Manejo de errores del reproductor ──────────────────
+// Artplayer emite el evento "error" con el Event nativo del <video>,
+// no con un objeto Error. err.target.error es el MediaError del browser.
+// Códigos MediaError:
+//   1 = MEDIA_ERR_ABORTED    → usuario canceló, ignorar
+//   2 = MEDIA_ERR_NETWORK    → error de red transitorio, no destruir el player
+//   3 = MEDIA_ERR_DECODE     → codec no soportado o archivo corrupto
+//   4 = MEDIA_ERR_SRC_NOT_SUPPORTED → formato/URL inválida, sí es fatal
+art.on("error", (err) => {
+    const mediaError = err?.target?.error ?? err?.error ?? null;
+    const code       = mediaError?.code ?? 0;
 
+    // Código 1: el usuario abortó la carga (p.ej. cambió de episodio)
+    // Código 2: error de red transitorio — Artplayer reintenta solo
+    // Ambos son no-fatales: solo logear, NO destruir el player.
+    if (code === 1 || code === 2) {
+        console.warn(`[CinePlayer] Error no fatal (MediaError code ${code}):`, mediaError?.message ?? err);
+        return;
+    }
+
+    // Códigos 3 y 4 son fatales: mostrar error al usuario.
+    // También cubrimos el caso raro donde no hay MediaError (code === 0).
+    console.error("[CinePlayer] Error fatal (MediaError code ${code}):", err);
+
+    const msg = code === 4
+        ? "Formato de video no soportado por este navegador."
+        : code === 3
+        ? "Error al decodificar el video. El archivo puede estar corrupto."
+        : "Ocurrió un error al reproducir. Intenta de nuevo.";
+
+    this.showError(msg);
+});
+
+        // ─── ResizeObserver para mantener proporciones ───────────
         this._observeResize();
 
-        // ─── Orientación forzada al entrar en pantalla completa (móvil) ───
-        // autoOrientation:true ya rota el layout; esto además bloquea el SO.
+        // ─── Bloqueo de orientación en pantalla completa (móvil) ─
         art.on('fullscreen', (isFullscreen) => {
-            if (!window.screen?.orientation?.lock) return; // desktop / no soportado
+            if (!window.screen?.orientation?.lock) return;
             if (isFullscreen) {
-                screen.orientation.lock('landscape').catch(() => {
-                    // Silencioso: algunos browsers bloquean sin gesto previo
-                });
+                screen.orientation.lock('landscape').catch(() => {});
             } else {
                 screen.orientation.unlock();
             }
         });
 
         return art;
+    }
+
+    // ===========================================================
+    // 🎯 _mountAssPlugin: Carga artplayer-plugin-ass dinámicamente
+    //
+    //   Flujo:
+    //     1. Cargar módulo ESM (cacheado globalmente con _assPluginModule)
+    //     2. Fetch del .ass con detección proactiva de CORS / errores del Worker
+    //     3. Parsear fuentes del archivo → mapear a CDN URLs
+    //     4. Crear Blob URL del contenido (evita CORS en el Canvas renderer)
+    //     5. Montar plugin en art.plugins → agrega canvas overlay automáticamente
+    //     6. Revocar Blob URL tras carga (15s = tiempo suficiente para assjs)
+    // ===========================================================
+    async _mountAssPlugin(subUrl) {
+        const myId = ++this._mountId;
+
+        // ── Paso 1: Cargar módulo (singleton cacheado) ───────────
+        const ArtplayerPluginAss = await this._loadAssPlugin();
+        if (myId !== this._mountId || !ArtplayerPluginAss || !this.art) return;
+
+        // ── Paso 2: Fetch con detección de errores CORS/Worker ───
+        const assContent = await this._fetchAssContent(subUrl);
+        if (myId !== this._mountId) return; // Usuario cambió de episodio mientras esperábamos
+
+        if (!assContent) {
+            // _fetchAssContent ya loguea el motivo específico
+            console.warn('[CinePlayer] Subtítulos .ass no disponibles — reproductor continúa sin subs.');
+            return;
+        }
+
+        // ── Paso 3: Extraer y resolver fuentes ───────────────────
+        const fonts = this._extractFontsFromAss(assContent);
+
+        // ── Paso 4: Crear Blob URL (mismo origen para el renderer) ─
+        const blobUrl = URL.createObjectURL(
+            new Blob([assContent], { type: 'text/plain; charset=utf-8' })
+        );
+
+        // ── Paso 5: Montar plugin en la instancia de Artplayer ───
+        try {
+            // ArtplayerPluginAss(config) devuelve una factory function (art) => plugin
+            // Al llamarla con `this.art`, el plugin:
+            //   • Crea un <canvas> overlay sobre el video
+            //   • Inicializa assjs con el .ass y las fuentes
+            //   • Se registra en art.plugins.ass para acceso externo
+            const pluginFactory = ArtplayerPluginAss({
+                assUrl: blobUrl,
+                fonts,
+                // resampling: define cómo el renderer escala el typesetting .ass
+                //   'video_width'   → ✅ Recomendado para anime 16:9
+                //                     Escala proporcionalmente al ancho del video.
+                //                     Los carteles (BnHA, AoT) mantienen posición relativa.
+                //   'video_height'  → Útil si el .ass fue mastered en altura fija
+                //   'script_width'  → Usa PlayResX del .ass sin reescalar (puede cortar)
+                //   'script_height' → Usa PlayResY del .ass sin reescalar
+                resampling: 'video_width',
+            });
+
+            this._assPlugin = pluginFactory(this.art);
+            this.container._assPluginRef = this._assPlugin;
+
+        } catch (err) {
+            console.error('[CinePlayer] Error al inicializar artplayer-plugin-ass:', err);
+            URL.revokeObjectURL(blobUrl);
+            return;
+        }
+
+        // ── Paso 6: Revocar Blob URL (assjs ya tiene el contenido en memoria) ─
+        // 15 segundos = suficiente para que assjs parsee el script completo
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 15_000);
+    }
+
+    // ===========================================================
+    // 🔌 _loadAssPlugin: Carga dinámica del módulo ESM con cache
+    //
+    //   Técnica "blob import":
+    //     1. fetch() del .js remoto
+    //     2. Crear Blob URL del mismo origen
+    //     3. dynamic import() del blob (evita error "not a module" en algunos browsers)
+    //     4. Revocar blob inmediatamente (el módulo ya está en memoria del engine)
+    //     5. Cachear en _assPluginModule → todos los episodios usan la misma instancia
+    // ===========================================================
+    async _loadAssPlugin() {
+        // Devolver módulo ya cargado (fast path)
+        if (_assPluginModule) return _assPluginModule;
+
+        // Evitar carga paralela: si ya hay una Promise en vuelo, esperarla
+        if (_assPluginLoadPromise) return _assPluginLoadPromise;
+
+        _assPluginLoadPromise = (async () => {
+            try {
+                const resp = await fetch(ASS_PLUGIN_CDN);
+                if (!resp.ok) throw new Error(`HTTP ${resp.status} al cargar plugin`);
+
+                const code = await resp.text();
+                const blob = new Blob([code], { type: 'application/javascript' });
+                const blobUrl = URL.createObjectURL(blob);
+
+                // dynamic import() de blob URL (mismo origen → sin CORS)
+                const mod = await import(/* webpackIgnore: true */ blobUrl);
+                URL.revokeObjectURL(blobUrl);
+
+                _assPluginModule = mod.default ?? mod;
+                return _assPluginModule;
+
+            } catch (err) {
+                console.error('[CinePlayer] No se pudo cargar artplayer-plugin-ass:', err);
+                // Limpiar Promise para permitir reintento en el próximo episodio
+                _assPluginLoadPromise = null;
+                return null;
+            }
+        })();
+
+        return _assPluginLoadPromise;
+    }
+
+    // ===========================================================
+    // 🔍 _fetchAssContent: Fetch robusto con detección de errores
+    //
+    //   Detecta y reporta:
+    //     • CORS bloqueado (respuesta opaca / type !== 'cors')
+    //     • HTTP 403/404 del Worker o de Google Drive
+    //     • Worker devuelve HTML (página de error / redirect de auth)
+    //     • Archivo no es .ass válido (sin [Script Info] ni [Events])
+    //     • Error de red (offline, DNS, etc.)
+    //     • Header x-deny-reason del proxy de Cloudflare (red interna)
+    // ===========================================================
+    async _fetchAssContent(subUrl) {
+        try {
+            const resp = await fetch(subUrl, {
+                cache: 'no-store', // Los subs de Drive no se deben cachear con URL vieja
+            });
+
+            // ── CORS: respuesta opaca = el Worker no envía los headers correctos ─
+            if (resp.type === 'opaque') {
+                console.warn(
+                    '[CinePlayer] Subtítulo bloqueado por CORS (respuesta opaca).\n' +
+                    'Verifica que tu Cloudflare Worker incluya:\n' +
+                    "  'Access-Control-Allow-Origin': '*'\n" +
+                    'para requests de type=sub.'
+                );
+                return null;
+            }
+
+            // ── Errores HTTP ─────────────────────────────────────
+            if (!resp.ok) {
+                // x-deny-reason: header personalizado del Worker para diagnóstico
+                const denyReason = resp.headers.get('x-deny-reason') ?? '';
+                const detail     = denyReason ? ` (${denyReason})` : '';
+
+                if      (resp.status === 403) console.warn(`[CinePlayer] .ass denegado por el servidor${detail}. Verifica el permiso del archivo en Drive.`);
+                else if (resp.status === 404) console.warn(`[CinePlayer] .ass no encontrado${detail}. Verifica el ID en tu base de datos.`);
+                else if (resp.status === 429) console.warn(`[CinePlayer] Rate limit del Worker al cargar .ass${detail}. Reintenta en unos segundos.`);
+                else                          console.warn(`[CinePlayer] Error HTTP ${resp.status} al cargar .ass${detail}.`);
+                return null;
+            }
+
+            // ── Content-Type: Worker debe devolver text/plain para subs ────────
+            const ct = resp.headers.get('content-type') ?? '';
+            if (ct.includes('text/html')) {
+                console.warn(
+                    '[CinePlayer] El Worker devolvió HTML en lugar del .ass.\n' +
+                    'Causas probables:\n' +
+                    '  • Google Drive redirigió a página de login (archivo no público)\n' +
+                    '  • El Worker no tiene la ruta /?id=&type=sub implementada\n' +
+                    'Solución: asegúrate de que type=sub fuerza Content-Type: text/plain.'
+                );
+                return null;
+            }
+
+            const text = await resp.text();
+
+            // ── Validar que realmente es un archivo .ass ─────────
+            if (!text.includes('[Script Info]') && !text.includes('[Events]')) {
+                console.warn(
+                    '[CinePlayer] La respuesta no parece ser un archivo .ass válido.\n' +
+                    'Contenido recibido (primeros 200 chars):\n' +
+                    text.slice(0, 200)
+                );
+                return null;
+            }
+
+            return text;
+
+        } catch (err) {
+            // TypeError: "Failed to fetch" → CORS sin cabeceras, red offline, etc.
+            if (err.name === 'TypeError') {
+                console.warn(
+                    '[CinePlayer] Fetch del .ass falló (posible bloqueo CORS o red offline).\n' +
+                    'Error original:', err.message
+                );
+            } else {
+                console.warn('[CinePlayer] Error inesperado al cargar .ass:', err);
+            }
+            return null;
+        }
+    }
+
+    // ===========================================================
+    // 🔤 _extractFontsFromAss: Parsea fuentes del archivo .ass
+    //
+    //   Extrae de dos fuentes:
+    //     1. Sección [V4+ Styles] → campo FontName de cada estilo definido
+    //     2. Override tags inline  → \fn<nombre> dentro de los eventos
+    //
+    //   Luego mapea los nombres a URLs via ANIME_FONT_MAP.
+    //   Las fuentes de sistema (Arial, Impact, etc.) se ignoran (sin URL).
+    //
+    //   Para fuentes propietarias no listadas en ANIME_FONT_MAP:
+    //     → Pasa los Drive IDs en tu data como fontIds: ['1Abc...']
+    //     → El Worker los servirá como /?id=1Abc&type=font
+    //     → Agrégalos manualmente al array: fonts.push(buildWorkerUrl('font', id))
+    // ===========================================================
+    _extractFontsFromAss(assContent) {
+        const fontNames = new Set();
+        const fontUrls  = [];
+
+        // ── Leer de [V4+ Styles] ─────────────────────────────────
+        // Formato de línea: Style: Name, Fontname, Fontsize, PrimaryColour, ...
+        const stylesBlock = assContent.match(/\[V4\+?\s*Styles\]([\s\S]*?)(?=\n\[|$)/i);
+        if (stylesBlock) {
+            for (const line of stylesBlock[1].split('\n')) {
+                const trimmed = line.trim();
+                if (trimmed.startsWith('Style:')) {
+                    const parts = trimmed.split(',');
+                    // parts[0] = "Style: StyleName"  → ignorar
+                    // parts[1] = FontName
+                    if (parts[1]) fontNames.add(parts[1].trim().toLowerCase());
+                }
+            }
+        }
+
+        // ── Leer fuentes de override tags inline: {\fnFuente} ────
+        const inlineRe = /\\fn([^\\{}\n]+)/g;
+        let match;
+        while ((match = inlineRe.exec(assContent)) !== null) {
+            fontNames.add(match[1].trim().toLowerCase());
+        }
+
+        // ── Mapear nombres a URLs ─────────────────────────────────
+        for (const name of fontNames) {
+            const url = ANIME_FONT_MAP[name];
+            // url === undefined → fuente desconocida, no bloquear la carga
+            // url === ''        → fuente de sistema, no necesita URL
+            // url es string URL → agregarla
+            if (url && url.length > 0) {
+                fontUrls.push(url);
+            }
+        }
+
+        // Log para debug (visible en DevTools cuando se analizan nuevos títulos)
+        if (fontNames.size > 0) {
+            const mapped    = fontUrls.length;
+            const unmapped  = fontNames.size - mapped;
+            const sysOrMiss = [...fontNames].filter(n => !ANIME_FONT_MAP[n] || ANIME_FONT_MAP[n] === '');
+            if (unmapped > 0) {
+                console.info(
+                    `[CinePlayer] Fuentes .ass: ${mapped} mapeadas a CDN, ${sysOrMiss.length} de sistema/desconocidas:`,
+                    sysOrMiss
+                );
+            }
+        }
+
+        return fontUrls;
     }
 
     _mountIframeFallback(videoId) {
@@ -290,100 +650,19 @@ class CinePlayer {
         this.container.innerHTML = `<iframe src="${src}" style="width:100%; height:100%; border:none;" allowfullscreen allow="autoplay; fullscreen; encrypted-media; picture-in-picture"></iframe>`;
     }
 
-    // ✅ FIX: ID de llamada para cancelar llamadas stale de _mountOctopus
-    // Resuelve el TypeError "Cannot read properties of null (reading 'postMessage')"
-    // que ocurría al cambiar episodio antes de que el worker terminara de inicializar
-    async _mountOctopus(videoElement, subUrl) {
-        const myId = ++this._mountId;
-
-        const workerBlobUrl = await this._toBlobUrl(OCTOPUS_WORKER, 'application/javascript');
-
-        if (myId !== this._mountId || !this.container) {
-            if (workerBlobUrl) URL.revokeObjectURL(workerBlobUrl);
-            return;
-        }
-
-        if (!workerBlobUrl) {
-            console.warn("[CinePlayer] No se pudo cargar el worker de subtítulos ASS.");
-            return;
-        }
-
-        let subBlobUrl = null;
-        let workerBlobToRevoke = workerBlobUrl;
-
-        try {
-            const subResp = await fetch(subUrl);
-            if (!subResp.ok) throw new Error(`HTTP ${subResp.status}`);
-
-            if (myId !== this._mountId || !this.container) {
-                URL.revokeObjectURL(workerBlobUrl);
-                return;
-            }
-
-            const assContent = await subResp.text();
-            subBlobUrl = URL.createObjectURL(new Blob([assContent], { type: "text/plain" }));
-
-            this.octopus = new SubtitlesOctopus({
-                video: videoElement,
-                subUrl: subBlobUrl,
-                workerUrl: workerBlobUrl,
-                wasmUrl: OCTOPUS_WASM,
-                renderMode: "wasm-blend",
-                onReady: () => {
-                    if (subBlobUrl)          { URL.revokeObjectURL(subBlobUrl);          subBlobUrl = null; }
-                    if (workerBlobToRevoke)  { URL.revokeObjectURL(workerBlobToRevoke);  workerBlobToRevoke = null; }
-                },
-            });
-            this.container._octopusInstance = this.octopus;
-        } catch (err) {
-            console.warn("[CinePlayer] Error cargando subtítulos ASS:", err);
-            if (subBlobUrl)         URL.revokeObjectURL(subBlobUrl);
-            if (workerBlobToRevoke) URL.revokeObjectURL(workerBlobToRevoke);
-        }
-    }
-
-    /**
-     * Descarga un script remoto y lo convierte en blob URL del mismo origen.
-     * Parchea rutas relativas internas (.wasm, .js) con URLs absolutas.
-     */
-    async _toBlobUrl(remoteUrl, mimeType = 'application/javascript') {
-        try {
-            const resp = await fetch(remoteUrl);
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-            let text = await resp.text();
-
-            const cdnBase = remoteUrl.substring(0, remoteUrl.lastIndexOf('/') + 1);
-
-            text = text.replace(
-                /(['\"`])((?!https?:\/\/|blob:|data:)[^'\"`]*\.(?:wasm|js))(['\"`])/g,
-                (match, q1, relativePath, q2) => {
-                    if (relativePath.includes('${') || relativePath.includes('+')) return match;
-                    return `${q1}${cdnBase}${relativePath}${q2}`;
-                }
-            );
-
-            return URL.createObjectURL(new Blob([text], { type: mimeType }));
-        } catch (err) {
-            console.warn(`[CinePlayer] No se pudo descargar ${remoteUrl}:`, err);
-            return null;
-        }
-    }
-
     async _pingWorker(url) {
-    try {
-        // redirect:'manual' → no seguimos el 302 a googlevideo.com
-        const resp = await fetch(url, { method: "HEAD", redirect: "manual" });
-        // 2xx, 206 ó cualquier 3xx (redirect) = worker funcional
-        if (resp.ok || resp.status === 206 || (resp.status >= 300 && resp.status < 400)) return true;
-        if (resp.status === 405 || resp.status === 501) {
-            const r2 = await fetch(url, { redirect: "manual", headers: { Range: 'bytes=0-0' } });
-            return r2.ok || r2.status === 206 || r2.status === 416 || (r2.status >= 300 && r2.status < 400);
+        try {
+            const resp = await fetch(url, { method: "HEAD", redirect: "manual" });
+            if (resp.ok || resp.status === 206 || (resp.status >= 300 && resp.status < 400)) return true;
+            if (resp.status === 405 || resp.status === 501) {
+                const r2 = await fetch(url, { redirect: "manual", headers: { Range: 'bytes=0-0' } });
+                return r2.ok || r2.status === 206 || r2.status === 416 || (r2.status >= 300 && r2.status < 400);
+            }
+            return false;
+        } catch {
+            return false;
         }
-        return false;
-    } catch {
-        return false;
     }
-}
 
     _observeResize() {
         if (this._resizeObserver) this._resizeObserver.disconnect();
@@ -401,9 +680,12 @@ class CinePlayer {
     }
 
     destroy() {
-        // ✅ FIX: Incrementar _mountId cancela cualquier _mountOctopus en vuelo
+        // Incrementar _mountId cancela cualquier _mountAssPlugin pendiente
+        // (el check `myId !== this._mountId` lo detectará y abortará)
         this._mountId++;
         this._resizeObserver?.disconnect();
+        this._assPlugin = null;
+        // art.destroy() limpia automáticamente el canvas overlay del plugin
         destroyPrevious(this.container);
         this.container.innerHTML = "";
     }
@@ -525,7 +807,7 @@ function _openSeriesPlayerPage() {
         'settings-container', 'profile-hub-container', 'sagas-hub-container',
         'reviews-container', 'reports-container', 'filter-controls',
         'live-tv-section', 'iptv-section', 
-        'continue-watching-carousel', 'continue-watching-container' // <--- Añade estos dos
+        'continue-watching-carousel', 'continue-watching-container'
     ];
     sections.forEach(id => {
         const el = document.getElementById(id);
@@ -761,11 +1043,11 @@ function populateSeasonGrid(seriesId) {
             }
         }
         
-        const totalEpisodes   = episodes.length;
+        const totalEpisodes    = episodes.length;
         const isManuallyLocked = seasonStatus !== '' && seasonStatus !== 'disponible';
-        const isEmpty         = (totalEpisodes === 0);
-        const isLocked        = isManuallyLocked || (isEmpty && seasonStatus !== 'disponible');
-        const seasonLabel     = formatSeasonName(seasonKey, seasonNum, seasonCustomLabel);
+        const isEmpty          = (totalEpisodes === 0);
+        const isLocked         = isManuallyLocked || (isEmpty && seasonStatus !== 'disponible');
+        const seasonLabel      = formatSeasonName(seasonKey, seasonNum, seasonCustomLabel);
 
         const card = document.createElement('div');
         card.className = `season-poster-card ${isLocked ? 'locked' : ''} ${seasonStatus === 'mantenimiento' ? 'en-mantenimiento' : ''}`;
@@ -810,7 +1092,7 @@ function populateSeasonGrid(seriesId) {
 export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = null) {
     try {
         shared.appState.player.activeSeriesId = seriesId;
-        const savedEpisodeIndex  = loadProgress(seriesId, seasonNum);
+        const savedEpisodeIndex   = loadProgress(seriesId, seasonNum);
         const initialEpisodeIndex = startAtIndex !== null ? startAtIndex : savedEpisodeIndex;
         
         const episodes    = shared.appState.content.seriesEpisodes[seriesId]?.[seasonNum] || [];
@@ -821,8 +1103,8 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
             return;
         }
  
-        const seriesTracks    = getLangTracks(firstEpisode);
-        const hasLangOptions  = seriesTracks.length > 1;
+        const seriesTracks   = getLangTracks(firstEpisode);
+        const hasLangOptions = seriesTracks.length > 1;
         
         let savedLang = null;
         try {
@@ -838,9 +1120,9 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
         }
  
         shared.appState.player.state[seriesId] = { 
-            season: seasonNum, 
+            season:       seasonNum, 
             episodeIndex: initialEpisodeIndex, 
-            lang: initialLang 
+            lang:         initialLang 
         };
  
         const seasonLower = String(seasonNum).toLowerCase();
@@ -863,13 +1145,12 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
         let specificPoster = postersData.poster || postersData.posterUrl;
         if (!specificPoster) specificPoster = seriesInfo.poster; 
  
-        const movieSynopsis = postersData.sinopsis || firstEpisode.description || "Sinopsis no disponible.";
+        const movieSynopsis  = postersData.sinopsis || firstEpisode.description || "Sinopsis no disponible.";
         
         const displayTitle = isSpecialContent && firstEpisode.title 
             ? firstEpisode.title 
             : seriesInfo.title || firstEpisode.title || 'Sin título';
 
-        // 👇 NUEVO: Detectar si hay una etiqueta personalizada (Ej: "Parte 5")
         const seasonDisplayName = postersData.etiqueta ? postersData.etiqueta : (isSpecialContent ? 'Especial / Película' : `Temporada ${seasonNum}`);
 
         let seasonWordPlural = 'Temporadas';
@@ -964,7 +1245,7 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
             }
             const langVal  = seriesInfo.language || seriesInfo.idioma || seriesInfo.audio || '';
 
-            const mReqHtml = mReq  ? `<span>Pedido por: <span style="color:#fff; font-weight:bold;">${mReq}</span></span><span style="font-size:10px; color:#555; margin:0 4px;">●</span>` : '';
+            const mReqHtml  = mReq  ? `<span>Pedido por: <span style="color:#fff; font-weight:bold;">${mReq}</span></span><span style="font-size:10px; color:#555; margin:0 4px;">●</span>` : '';
             const mYearHtml = mYear ? `<span>Estreno: <span style="color:#fff; font-weight:bold;">${mYear}</span></span><span style="font-size:10px; color:#555; margin:0 4px;">●</span>` : '';
             const logoTheme = shared.THEMES?.normal?.logo || 'https://res.cloudinary.com/djhgmmdjx/image/upload/v1759209688/vgJjqSM_oicebo.png';
 
@@ -979,11 +1260,9 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
                     align-items: stretch !important; overflow-y: auto !important; overflow-x: hidden !important;
                 }
                 
-                /* CLASES UTILITARIAS PARA SEPARAR MÓVIL Y PC */
                 @media (min-width: 1024px) { .mobile-only { display: none !important; } }
                 @media (max-width: 1023px) { .desktop-only { display: none !important; } }
 
-                /* EN PC: el player NO es fixed — permite ver el nav del sitio */
                 @media (min-width: 1024px) {
                     #series-player-page.player-layout-view {
                         position: relative !important;
@@ -995,7 +1274,6 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
                     }
                 }
 
-                /* ESTILOS MÓVILES (Los que ya existían) */
                 .cc-top-fixed { flex-shrink: 0; display: flex; flex-direction: column; background-color: #0f0f0f; z-index: 10; transition: box-shadow 0.3s ease; }
                 .cc-top-fixed.scrolled { box-shadow: 0 4px 15px rgba(0,0,0,0.6); border-bottom: 1px solid #222; }
                 .cc-nav { display: flex; align-items: center; justify-content: space-between; padding: 10px 15px; padding-top: calc(10px + env(safe-area-inset-top)); border-bottom: 2px solid #e50914; }
@@ -1023,7 +1301,6 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
                 .cc-card.active .cc-ep-title { color: #e50914 !important; }
                 .cc-ep-desc { font-size: 0.75rem !important; color: #8a8a92 !important; display: -webkit-box !important; -webkit-line-clamp: 2 !important; -webkit-box-orient: vertical !important; overflow: hidden !important; margin: 0 !important; line-height: 1.4;}
                 
-                /* Modal Temporadas Móvil */
                 .cc-sheet-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 3000; display: flex; flex-direction: column; justify-content: flex-end; opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
                 .cc-sheet-overlay.active { opacity: 1; pointer-events: auto; }
                 .cc-sheet { background-color: #181818; border-radius: 20px 20px 0 0; padding: 20px 15px calc(20px + env(safe-area-inset-bottom)); max-height: 75vh; display: flex; flex-direction: column; transform: translateY(100%); transition: transform 0.3s cubic-bezier(0.1, 0.9, 0.2, 1); width: 100%; box-sizing: border-box; }
@@ -1156,8 +1433,8 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
                 });
             }
 
-            const toggleDescBtnDesktop = shared.DOM.seriesPlayerModal.querySelector('#toggleDescBtnDesktop');
-            const toggleArrowDesktop = shared.DOM.seriesPlayerModal.querySelector('#toggleArrowDesktop');
+            const toggleDescBtnDesktop   = shared.DOM.seriesPlayerModal.querySelector('#toggleDescBtnDesktop');
+            const toggleArrowDesktop     = shared.DOM.seriesPlayerModal.querySelector('#toggleArrowDesktop');
             const synopsisContentDesktop = shared.DOM.seriesPlayerModal.querySelector('#synopsisContentDesktop');
 
             if (toggleDescBtnDesktop && toggleArrowDesktop && synopsisContentDesktop) {
@@ -1243,7 +1520,7 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
             trigger.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const isOpen = menu.style.display === 'block';
-                menu.style.display   = isOpen ? 'none' : 'block';
+                menu.style.display        = isOpen ? 'none' : 'block';
                 trigger.style.borderColor = isOpen ? 'rgba(255, 255, 255, 0.15)' : '#e50914';
             });
 
@@ -1370,15 +1647,12 @@ export function openEpisode(seriesId, season, newEpisodeIndex) {
     const episode = shared.appState.content.seriesEpisodes[seriesId]?.[season]?.[newEpisodeIndex];
     if (!episode) return;
 
-    // ✅ FIX: Commit del episodio ANTERIOR antes de sobreescribir pendingHistorySave.
-    // Sin esto, al hacer click en una tarjeta de la lista el historial del ep anterior
-    // se perdía (navigateEpisode sí lo llamaba, pero el click directo no).
     commitAndClearPendingSave();
 
     clearTimeout(shared.appState.player.episodeOpenTimer);
     shared.appState.player.pendingHistorySave = {
-        contentId: seriesId,
-        type: 'series',
+        contentId:   seriesId,
+        type:        'series',
         episodeInfo: { season, index: newEpisodeIndex, title: episode.title || '' }
     };
  
@@ -1396,28 +1670,25 @@ export function openEpisode(seriesId, season, newEpisodeIndex) {
     const lang      = shared.appState.player.state[seriesId]?.lang || 'es';
  
     let videoId;
-    if      (lang === 'en' && episode.videoId_en)                      videoId = episode.videoId_en;
-    else if (lang === 'es' && episode.videoId_es)                      videoId = episode.videoId_es;
+    if      (lang === 'en' && episode.videoId_en)                         videoId = episode.videoId_en;
+    else if (lang === 'es' && episode.videoId_es)                         videoId = episode.videoId_es;
     else if (lang === 'jp' && (episode.videoId_jp || episode.videoId_alt)) videoId = episode.videoId_jp || episode.videoId_alt;
-    else                                                                videoId = episode.videoId;
+    else                                                                   videoId = episode.videoId;
  
     if (container) {
         if (shared.appState.player.activeCineInstance) {
             shared.appState.player.activeCineInstance.destroy();
-            // ✅ FIX: Null explícito. Si new CinePlayer() lanzara una excepción,
-            // evitamos que activeCineInstance quede apuntando a la instancia destruida.
             shared.appState.player.activeCineInstance = null;
         }
         
         shared.appState.player.activeCineInstance = new CinePlayer(container);
 
-        // ✅ Extraer subId y subType del episodio usando ContentManager
         const { subId, subType } = ContentManager.getSubtitleConfig(episode);
         
         shared.appState.player.activeCineInstance.load({
             videoId,
-            subId,     // Columna E de la Sheet
-            subType,   // Columna F: 'srt' → liviano | 'ass' → WASM
+            subId,
+            subType,
             title:  episode.title || `Episodio ${newEpisodeIndex + 1}`,
             poster: episode.thumbnail || episode.thumb || episode.image || ''
         });
@@ -1436,7 +1707,6 @@ export function openEpisode(seriesId, season, newEpisodeIndex) {
  
     const episodeTitleText = episode.title || `Episodio ${episodeNumber}`;
     
-    // 👇 NUEVO: Leer la etiqueta también al cambiar de episodio
     const postersDataEp = shared.appState.content.seasonPosters[seriesId]?.[season] || {};
     const customLabelEp = postersDataEp.etiqueta || '';
     
@@ -1444,24 +1714,21 @@ export function openEpisode(seriesId, season, newEpisodeIndex) {
         ? 'Especial / Película' 
         : (customLabelEp ? `${customLabelEp} | Ep ${episodeNumber}` : `Temporada ${String(season).replace('T', '')} | Ep ${episodeNumber}`);
  
-    // Actualizar Textos Mobile
     if (subTitleEl) subTitleEl.textContent = subTitleText;
     if (titleEl)    titleEl.textContent    = episodeTitleText;
     if (infoDescEl) infoDescEl.innerHTML   = `<strong>Sinopsis:</strong><br><br>${episode.description || episode.synopsis || episode.desc || 'No hay descripción disponible para este episodio.'}`;
 
-    // Actualizar Textos Desktop
-    const titleDesktopEl = shared.DOM.seriesPlayerModal.querySelector(`#cinema-title-desktop-${seriesId}`);
+    const titleDesktopEl    = shared.DOM.seriesPlayerModal.querySelector(`#cinema-title-desktop-${seriesId}`);
     const subTitleDesktopEl = shared.DOM.seriesPlayerModal.querySelector('#subTitleDesktop');
-    const descDesktopEl = shared.DOM.seriesPlayerModal.querySelector(`#episode-desc-desktop-${seriesId}`);
+    const descDesktopEl     = shared.DOM.seriesPlayerModal.querySelector(`#episode-desc-desktop-${seriesId}`);
     
-    if (titleDesktopEl) titleDesktopEl.textContent = episodeTitleText;
+    if (titleDesktopEl)    titleDesktopEl.textContent    = episodeTitleText;
     if (subTitleDesktopEl) subTitleDesktopEl.textContent = subTitleText;
-    if (descDesktopEl) descDesktopEl.innerHTML = episode.description || episode.synopsis || episode.desc || 'No hay descripción disponible para este episodio.';
+    if (descDesktopEl)     descDesktopEl.innerHTML       = episode.description || episode.synopsis || episode.desc || 'No hay descripción disponible para este episodio.';
 
-    // Reiniciar Toggle Desktop (ocultar sinopsis al cambiar de episodio)
-    const toggleArrowDesk = shared.DOM.seriesPlayerModal.querySelector('#toggleArrowDesktop');
+    const toggleArrowDesk    = shared.DOM.seriesPlayerModal.querySelector('#toggleArrowDesktop');
     const synopsisContentDesk = shared.DOM.seriesPlayerModal.querySelector('#synopsisContentDesktop');
-    if (toggleArrowDesk) toggleArrowDesk.classList.remove('expanded');
+    if (toggleArrowDesk)     toggleArrowDesk.classList.remove('expanded');
     if (synopsisContentDesk) synopsisContentDesk.classList.remove('expanded');
  
     const langWrapper = shared.DOM.seriesPlayerModal.querySelector('.cc-custom-lang-wrapper');
@@ -1492,7 +1759,7 @@ export function openEpisode(seriesId, season, newEpisodeIndex) {
 function navigateEpisode(seriesId, direction) {
     commitAndClearPendingSave();
     const { season, episodeIndex } = shared.appState.player.state[seriesId];
-    const newIndex      = episodeIndex + direction;
+    const newIndex       = episodeIndex + direction;
     const seasonEpisodes = shared.appState.content.seriesEpisodes[seriesId][season];
     if (newIndex >= 0 && newIndex < seasonEpisodes.length) {
         openEpisode(seriesId, season, newIndex);
@@ -1556,9 +1823,9 @@ function loadMovieInPlayer(videoId, movieId, movieData) {
     let container = screenDiv.querySelector('.artplayer-container');
     if (!container) {
         container = document.createElement('div');
-        container.className   = 'artplayer-container';
-        container.style.width  = '100%';
-        container.style.height = '100%';
+        container.className        = 'artplayer-container';
+        container.style.width      = '100%';
+        container.style.height     = '100%';
         container.style.background = '#000';
         screenDiv.appendChild(container);
     }
@@ -1569,13 +1836,12 @@ function loadMovieInPlayer(videoId, movieId, movieData) {
     
     shared.appState.player.activeCineInstance = new CinePlayer(container);
 
-    // ✅ Extraer subId y subType de la película usando ContentManager
     const { subId, subType } = ContentManager.getSubtitleConfig(movieData);
 
     shared.appState.player.activeCineInstance.load({
         videoId,
-        subId,     // ID de Drive del subtítulo
-        subType,   // 'srt' → nativo | 'ass' → WASM
+        subId,
+        subType,
         title:  movieData.title  || '',
         poster: movieData.poster || movieData.image || ''
     });
@@ -1671,8 +1937,8 @@ function calculateFinishTime(durationStr) {
 
     if (durationStr.includes(':')) {
         const parts = durationStr.split(':').map(Number);
-        if      (parts.length === 3)  { [hours, minutes, seconds] = parts; }
-        else if (parts.length === 2)  { if (parts[0] > 7) { [minutes, seconds] = parts; } else { [hours, minutes] = parts; } }
+        if      (parts.length === 3) { [hours, minutes, seconds] = parts; }
+        else if (parts.length === 2) { if (parts[0] > 7) { [minutes, seconds] = parts; } else { [hours, minutes] = parts; } }
     } else {
         const hMatch = durationStr.match(/(\d+)\s*h/);
         const mMatch = durationStr.match(/(\d+)\s*m/);
