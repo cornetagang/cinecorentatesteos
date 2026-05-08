@@ -75,11 +75,11 @@ const ANIME_FONT_MAP = {
     'comic book':        'https://cdn.jsdelivr.net/npm/@fontsource/comic-neue/files/comic-neue-latin-400-normal.woff2',
 
     // ── Fuentes de sistema (Mapeadas a Clones de Fontsource NPM) ──
-    'arial':             'https://cdn.jsdelivr.net/npm/@fontsource/arimo/files/arimo-latin-400-normal.woff2',
+    'Arial':             'https://cdn.jsdelivr.net/npm/@fontsource/arimo/files/arimo-latin-400-normal.woff2',
     'arial bold':        'https://cdn.jsdelivr.net/npm/@fontsource/arimo/files/arimo-latin-700-normal.woff2',
     'times new roman':   'https://cdn.jsdelivr.net/npm/@fontsource/tinos/files/tinos-latin-400-normal.woff2',
     'courier new':       'https://cdn.jsdelivr.net/npm/@fontsource/cousine/files/cousine-latin-400-normal.woff2',
-    'trebuchet ms':      'https://cdn.jsdelivr.net/npm/@fontsource/fira-sans/files/fira-sans-latin-400-normal.woff2',
+    'Trebuchet MS':      'https://cdn.jsdelivr.net/npm/@fontsource/fira-sans/files/fira-sans-latin-400-normal.woff2',
     'verdana':           'https://cdn.jsdelivr.net/npm/@fontsource/pt-sans/files/pt-sans-latin-400-normal.woff2',
     'tahoma':            'https://cdn.jsdelivr.net/npm/@fontsource/noto-sans/files/noto-sans-latin-400-normal.woff2',
     'georgia':           'https://cdn.jsdelivr.net/npm/@fontsource/lora/files/lora-latin-400-normal.woff2',
