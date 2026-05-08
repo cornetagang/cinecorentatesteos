@@ -415,6 +415,16 @@ art.on("error", (err) => {
         this._assPlugin = pluginInit(this.art);
         this.container._assPluginRef = this._assPlugin;
         console.log('[CinePlayer] Plugin ass montado:', this._assPlugin);
+        // ✅ Inicializar explícitamente el renderer
+    if (typeof this._assPlugin.init === 'function') {
+        await this._assPlugin.init();
+        console.log('[CinePlayer] Plugin ass inicializado. libass:', this._assPlugin.libass);
+    }
+
+    // ✅ Forzar visible
+    if (typeof this._assPlugin.show === 'function') {
+        this._assPlugin.show();
+        }
     } catch (err) {
         console.error('[CinePlayer] Error al inicializar artplayer-plugin-libass:', err);
         URL.revokeObjectURL(blobUrl);
