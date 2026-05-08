@@ -406,7 +406,7 @@ art.on("error", (err) => {
         return;
     }
 
-    const fonts = this._extractFontsFromAss(assContent);
+    const { fontUrls, availableFonts } = this._extractFontsFromAss(assContent);
 
     const blobUrl = URL.createObjectURL(
         new Blob([assContent], { type: 'text/plain; charset=utf-8' })
@@ -415,7 +415,11 @@ art.on("error", (err) => {
     try {
     const pluginInit = ArtplayerPluginAss({
         subUrl:          blobUrl,
-        fonts,
+        fonts:           fontUrls,
+        // CRÍTICO: registra cada fuente bajo el nombre exacto del .ass en lugar
+        // del nombre interno del .woff2. Sin esto, "Trebuchet MS" → Fira Sans se
+        // descarga bien pero JASSUB la busca como "Fira Sans" y no la encuentra.
+        availableFonts,
         fallbackFont:    'https://fonts.gstatic.com/s/roboto/v30/KFOmCnqEu92Fr1Mu4mxKKTU1Kg.woff2',
         workerUrl:       '/cinecorentatesteos/assests/js/jassub-worker.js',
         wasmUrl:         '/cinecorentatesteos/assests/js/jassub-worker.wasm',
@@ -587,8 +591,10 @@ art.on("error", (err) => {
     //     → Agrégalos manualmente al array: fonts.push(buildWorkerUrl('font', id))
     // ===========================================================
     _extractFontsFromAss(assContent) {
-        const fontNames = new Set();
-        const fontUrls  = [];
+        // Map lowercase → nombre original del .ass (para preservar capitalización exacta)
+        const fontNames     = new Map();
+        const fontUrls      = [];
+        const availableFonts = {};  // { "Trebuchet MS": "https://cdn.../fira-sans.woff2", ... }
 
         // ── Leer de [V4+ Styles] ─────────────────────────────────
         // Formato de línea: Style: Name, Fontname, Fontsize, PrimaryColour, ...
@@ -600,7 +606,10 @@ art.on("error", (err) => {
                     const parts = trimmed.split(',');
                     // parts[0] = "Style: StyleName"  → ignorar
                     // parts[1] = FontName
-                    if (parts[1]) fontNames.add(parts[1].trim().toLowerCase());
+                    if (parts[1]) {
+                        const original = parts[1].trim();
+                        fontNames.set(original.toLowerCase(), original);
+                    }
                 }
             }
         }
@@ -609,17 +618,23 @@ art.on("error", (err) => {
         const inlineRe = /\\fn([^\\{}\n]+)/g;
         let match;
         while ((match = inlineRe.exec(assContent)) !== null) {
-            fontNames.add(match[1].trim().toLowerCase());
+            const original = match[1].trim();
+            fontNames.set(original.toLowerCase(), original);
         }
 
         // ── Mapear nombres a URLs ─────────────────────────────────
-        for (const name of fontNames) {
-            const url = ANIME_FONT_MAP[name];
+        // CRÍTICO: se registra la fuente bajo el nombre exacto que usa el .ass
+        // (no bajo el nombre interno del .woff2) para que JASSUB pueda encontrarla.
+        // Ej: .ass pide "Trebuchet MS" → se descarga Fira Sans, pero JASSUB la
+        // registra como "Trebuchet MS" gracias al mapa availableFonts.
+        for (const [lower, original] of fontNames) {
+            const url = ANIME_FONT_MAP[lower];
             // url === undefined → fuente desconocida, no bloquear la carga
             // url === ''        → fuente de sistema, no necesita URL
             // url es string URL → agregarla
             if (url && url.length > 0) {
                 fontUrls.push(url);
+                availableFonts[original] = url;
             }
         }
 
@@ -627,7 +642,7 @@ art.on("error", (err) => {
         if (fontNames.size > 0) {
             const mapped    = fontUrls.length;
             const unmapped  = fontNames.size - mapped;
-            const sysOrMiss = [...fontNames].filter(n => !ANIME_FONT_MAP[n] || ANIME_FONT_MAP[n] === '');
+            const sysOrMiss = [...fontNames.keys()].filter(n => !ANIME_FONT_MAP[n] || ANIME_FONT_MAP[n] === '');
             if (unmapped > 0) {
                 console.info(
                     `[CinePlayer] Fuentes .ass: ${mapped} mapeadas a CDN, ${sysOrMiss.length} de sistema/desconocidas:`,
@@ -636,7 +651,7 @@ art.on("error", (err) => {
             }
         }
 
-        return fontUrls;
+        return { fontUrls, availableFonts };
     }
 
     _mountIframeFallback(videoId) {
