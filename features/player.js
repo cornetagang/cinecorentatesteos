@@ -423,16 +423,10 @@ art.on("error", (err) => {
             //   • Inicializa assjs con el .ass y las fuentes
             //   • Se registra en art.plugins.ass para acceso externo
             const pluginFactory = ArtplayerPluginAss({
-                assUrl: blobUrl,
+                subUrl: blobUrl,   // ← artplayer-plugin-libass usa subUrl
                 fonts,
-                // resampling: define cómo el renderer escala el typesetting .ass
-                //   'video_width'   → ✅ Recomendado para anime 16:9
-                //                     Escala proporcionalmente al ancho del video.
-                //                     Los carteles (BnHA, AoT) mantienen posición relativa.
-                //   'video_height'  → Útil si el .ass fue mastered en altura fija
-                //   'script_width'  → Usa PlayResX del .ass sin reescalar (puede cortar)
-                //   'script_height' → Usa PlayResY del .ass sin reescalar
-                resampling: 'video_width',
+                // wasmUrl por defecto apunta a cdnjs libass-wasm 4.1.0 — no hace falta cambiarlo
+                // resampling no existe en este plugin, el escalado lo maneja SubtitlesOctopus
             });
 
             this._assPlugin = pluginFactory(this.art);
