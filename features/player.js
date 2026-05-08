@@ -75,11 +75,11 @@ const ANIME_FONT_MAP = {
     'comic book':        'https://cdn.jsdelivr.net/npm/@fontsource/comic-neue/files/comic-neue-latin-400-normal.woff2',
 
     // ── Fuentes de sistema (Mapeadas a Clones de Fontsource NPM) ──
-    'Arial':             'https://cdn.jsdelivr.net/npm/@fontsource/arimo/files/arimo-latin-400-normal.woff2',
+    'arial':             'https://cdn.jsdelivr.net/npm/@fontsource/arimo/files/arimo-latin-400-normal.woff2',
     'arial bold':        'https://cdn.jsdelivr.net/npm/@fontsource/arimo/files/arimo-latin-700-normal.woff2',
     'times new roman':   'https://cdn.jsdelivr.net/npm/@fontsource/tinos/files/tinos-latin-400-normal.woff2',
     'courier new':       'https://cdn.jsdelivr.net/npm/@fontsource/cousine/files/cousine-latin-400-normal.woff2',
-    'Trebuchet MS':      'https://cdn.jsdelivr.net/npm/@fontsource/fira-sans/files/fira-sans-latin-400-normal.woff2',
+    'trebuchet ms':      'https://cdn.jsdelivr.net/npm/@fontsource/fira-sans/files/fira-sans-latin-400-normal.woff2',
     'verdana':           'https://cdn.jsdelivr.net/npm/@fontsource/pt-sans/files/pt-sans-latin-400-normal.woff2',
     'tahoma':            'https://cdn.jsdelivr.net/npm/@fontsource/noto-sans/files/noto-sans-latin-400-normal.woff2',
     'georgia':           'https://cdn.jsdelivr.net/npm/@fontsource/lora/files/lora-latin-400-normal.woff2',
@@ -414,24 +414,20 @@ art.on("error", (err) => {
 
     try {
     // Arimo como fuente base: siempre disponible antes del primer frame
-    const EAGER_FALLBACK = 'https://cdn.jsdelivr.net/npm/@fontsource/arimo/files/arimo-latin-400-normal.woff2';
+    const EAGER_FALLBACK = 'https://cdn.jsdelivr.net/gh/google/fonts@main/apache/arimo/Arimo-Regular.ttf';
 
     const pluginInit = ArtplayerPluginAss({
         subUrl: blobUrl,
 
-        // ✅ fonts[]: carga EAGER (síncrona antes del frame 0)
-        //    Garantiza que libass tenga ≥1 fuente en el VFS desde el inicio.
-        //    → Elimina "failed to find any fallback with glyph 0x0"
-        //    Nota: cada fuente se registra con su nombre interno del TTF ("Arimo", "Fira Sans"),
-        //    pero libass las usa de fallback cuando no encuentra la fuente exacta del .ass.
+        // ✅ fonts[]: TTF eagerly preloaded → al menos 1 fuente en VFS desde frame 0
         fonts: [EAGER_FALLBACK, ...fontUrls],
 
-        // ✅ availableFonts: carga on-demand con aliasing correcto (clave lowercase)
-        //    Cuando libass pide "trebuchet ms", JASSUB descarga fira-sans y lo escribe al VFS.
+        // ✅ availableFonts: on-demand aliasing (clave lowercase, correcta)
         availableFonts,
 
-        // ❌ fallbackFont → NO existe en JASSUB, se ignoraba silenciosamente.
-        //    El fallback ahora se preloada vía fonts[] arriba.
+        // ✅ fallbackFont SÍ es opción válida de artplayer-plugin-jassub,
+        //    pero NECESITA ser TTF, no woff2 — el bug original era el formato, no el nombre
+        fallbackFont: EAGER_FALLBACK,
 
         workerUrl:         '/cinecorentatesteos/assests/js/jassub-worker.js',
         wasmUrl:           '/cinecorentatesteos/assests/js/jassub-worker.wasm',
