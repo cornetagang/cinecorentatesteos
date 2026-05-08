@@ -413,19 +413,25 @@ art.on("error", (err) => {
     );
 
     try {
-    const pluginInit = ArtplayerPluginAss({
-        subUrl:          blobUrl,
-        // fonts: fontUrls,  ← ELIMINAR o dejar comentado:
-        //   Los woff2 preloadados se registran por su nombre INTERNO (ej: "Fira Sans"),
-        //   no por el alias del .ass ("Trebuchet MS"). availableFonts ya cubre el aliasing.
-        //   Puedes mantenerlo solo si tienes fuentes cuyo nombre interno coincide
-        //   exactamente con el nombre en el .ass.
+    // Arimo como fuente base: siempre disponible antes del primer frame
+    const EAGER_FALLBACK = 'https://cdn.jsdelivr.net/npm/@fontsource/arimo/files/arimo-latin-400-normal.woff2';
 
-        // ✅ availableFonts con claves lowercase y valores array — el mecanismo correcto
+    const pluginInit = ArtplayerPluginAss({
+        subUrl: blobUrl,
+
+        // ✅ fonts[]: carga EAGER (síncrona antes del frame 0)
+        //    Garantiza que libass tenga ≥1 fuente en el VFS desde el inicio.
+        //    → Elimina "failed to find any fallback with glyph 0x0"
+        //    Nota: cada fuente se registra con su nombre interno del TTF ("Arimo", "Fira Sans"),
+        //    pero libass las usa de fallback cuando no encuentra la fuente exacta del .ass.
+        fonts: [EAGER_FALLBACK, ...fontUrls],
+
+        // ✅ availableFonts: carga on-demand con aliasing correcto (clave lowercase)
+        //    Cuando libass pide "trebuchet ms", JASSUB descarga fira-sans y lo escribe al VFS.
         availableFonts,
 
-        // ✅ fallbackFont: usar jsDelivr en lugar de fonts.gstatic.com (evita CORS issues)
-        fallbackFont: 'https://cdn.jsdelivr.net/npm/@fontsource/arimo/files/arimo-latin-400-normal.woff2',
+        // ❌ fallbackFont → NO existe en JASSUB, se ignoraba silenciosamente.
+        //    El fallback ahora se preloada vía fonts[] arriba.
 
         workerUrl:         '/cinecorentatesteos/assests/js/jassub-worker.js',
         wasmUrl:           '/cinecorentatesteos/assests/js/jassub-worker.wasm',
