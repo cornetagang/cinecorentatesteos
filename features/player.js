@@ -411,28 +411,34 @@ art.on("error", (err) => {
     );
 
     try {
-        const pluginInit = ArtplayerPluginAss({ subUrl: blobUrl, fonts });
+        const pluginInit = ArtplayerPluginAss({
+            subUrl: blobUrl,
+            fonts,
+            fallbackFont: 'https://fonts.gstatic.com/s/roboto/v30/KFOmCnqEu92Fr1Mu4mxKKTU1Kg.woff2',
+        });
+        
         this._assPlugin = pluginInit(this.art);
         this.container._assPluginRef = this._assPlugin;
         console.log('[CinePlayer] Plugin ass montado:', this._assPlugin);
+        
         // ✅ Inicializar explícitamente el renderer
-    if (typeof this._assPlugin.init === 'function') {
-        await this._assPlugin.init();
-        console.log('[CinePlayer] Plugin ass inicializado. libass:', this._assPlugin.libass);
-    }
-
-    // ✅ Forzar visible
-    if (typeof this._assPlugin.show === 'function') {
-        this._assPlugin.show();
+        if (typeof this._assPlugin.init === 'function') {
+            await this._assPlugin.init();
+            console.log('[CinePlayer] Plugin ass inicializado. libass:', this._assPlugin.libass);
         }
-    } catch (err) {
-        console.error('[CinePlayer] Error al inicializar artplayer-plugin-libass:', err);
-        URL.revokeObjectURL(blobUrl);
-        return;
-    }
 
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
-}
+        // ✅ Forzar visible
+        if (typeof this._assPlugin.show === 'function') {
+            this._assPlugin.show();
+            }
+        } catch (err) {
+            console.error('[CinePlayer] Error al inicializar artplayer-plugin-libass:', err);
+            URL.revokeObjectURL(blobUrl);
+            return;
+        }
+
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
+    }
 
     // ===========================================================
     // 🔌 _loadAssPlugin: Carga dinámica del módulo ESM con cache
