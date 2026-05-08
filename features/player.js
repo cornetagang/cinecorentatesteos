@@ -21,7 +21,7 @@ import ContentManager from '../utils/content-manager.js';
 
 // ─── CDN del plugin oficial (ESM) ─────────────────────────────
 // Se carga una vez y se cachea en módulo → no re-descarga por episodio
-const ASS_PLUGIN_CDN = "/cinecorentatesteos/assests/js/artplayer-plugin-libass.min.js";
+const ASS_PLUGIN_CDN = "/cinecorentatesteos/assests/js/artplayer-plugin-jassub.js";
 
 // ─── Cache global del módulo (singleton por sesión) ───────────
 let _assPluginModule       = null;
@@ -330,7 +330,6 @@ class CinePlayer {
         }
 
         // ─── Manejo de errores del reproductor ──────────────────
-        // ─── Manejo de errores del reproductor ──────────────────
 // Artplayer emite el evento "error" con el Event nativo del <video>,
 // no con un objeto Error. err.target.error es el MediaError del browser.
 // Códigos MediaError:
@@ -352,7 +351,7 @@ art.on("error", (err) => {
 
     // Códigos 3 y 4 son fatales: mostrar error al usuario.
     // También cubrimos el caso raro donde no hay MediaError (code === 0).
-    console.error("[CinePlayer] Error fatal (MediaError code ${code}):", err);
+    console.error(`[CinePlayer] Error fatal (MediaError code ${code}):`, err);
 
     const msg = code === 4
         ? "Formato de video no soportado por este navegador."
@@ -411,31 +410,27 @@ art.on("error", (err) => {
     );
 
     try {
-        const pluginInit = ArtplayerPluginAss({
-            subUrl: blobUrl,
-            fonts,
-            fallbackFont: 'https://fonts.gstatic.com/s/roboto/v30/KFOmCnqEu92Fr1Mu4mxKKTU1Kg.woff2',
-        });
-        
+    const pluginInit = ArtplayerPluginAss({
+        subUrl:          blobUrl,
+        fonts,
+        fallbackFont:    'https://fonts.gstatic.com/s/roboto/v30/KFOmCnqEu92Fr1Mu4mxKKTU1Kg.woff2',
+        workerUrl:       '/cinecorentatesteos/assests/js/jassub-worker.js',
+        wasmUrl:         '/cinecorentatesteos/assests/js/jassub-worker.wasm',
+        legacyWasmUrl: '/cinecorentatesteos/assests/js/jassub-worker-legacy.js',
+        libassMemoryLimit: 40,        // MiB — evita crashes en móvil (Redmi Note 9S)
+        prescaleFactor:    0.8,       // Reduce carga de rasterización en pantallas densas
+        dropAllAnimations: false,     // true solo si el móvil sigue crasheando
+    });
+
         this._assPlugin = pluginInit(this.art);
         this.container._assPluginRef = this._assPlugin;
         console.log('[CinePlayer] Plugin ass montado:', this._assPlugin);
-        
-        // ✅ Inicializar explícitamente el renderer
-        if (typeof this._assPlugin.init === 'function') {
-            await this._assPlugin.init();
-            console.log('[CinePlayer] Plugin ass inicializado. libass:', this._assPlugin.libass);
-        }
 
-        // ✅ Forzar visible
-        if (typeof this._assPlugin.show === 'function') {
-            this._assPlugin.show();
-            }
-        } catch (err) {
-            console.error('[CinePlayer] Error al inicializar artplayer-plugin-libass:', err);
-            URL.revokeObjectURL(blobUrl);
-            return;
-        }
+    } catch (err) {
+        console.error('[CinePlayer] Error al inicializar artplayer-plugin-jassub:', err);
+        URL.revokeObjectURL(blobUrl);
+        return;
+    }
 
         setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
     }
@@ -457,11 +452,11 @@ art.on("error", (err) => {
     _assPluginLoadPromise = new Promise((resolve) => {
         // Script tag: los navegadores cargan scripts cross-origin
         // sin restricción CORS, a diferencia de fetch().
-        // El build UMD expone window.artplayerPluginAss como global.
+        // El build UMD expone window.artplayerPluginJassub como global.
         const existing = document.querySelector(`script[src="${ASS_PLUGIN_CDN}"]`);
         if (existing) {
             // Ya fue inyectado antes (cambio de episodio rápido)
-            _assPluginModule = window.artplayerPluginAss ?? null;
+            _assPluginModule = window.artplayerPluginJassub ?? null;
             resolve(_assPluginModule);
             return;
         }
@@ -471,15 +466,15 @@ art.on("error", (err) => {
         script.async = true;
 
         script.onload = () => {
-    _assPluginModule = window.artplayerPluginLibass ?? null;
-    if (!_assPluginModule) {
-        console.error('[CinePlayer] artplayer-plugin-libass cargó pero no expuso window.artplayerPluginLibass');
-    }
-     resolve(_assPluginModule);
-    };
+            _assPluginModule = window.artplayerPluginJassub ?? null;
+            if (!_assPluginModule) {
+            console.error('[CinePlayer] artplayer-plugin-jassub cargó pero no expuso window.artplayerPluginJassub');
+        }
+         resolve(_assPluginModule);
+        };
 
         script.onerror = () => {
-            console.error('[CinePlayer] No se pudo cargar artplayer-plugin-ass desde jsDelivr.');
+            console.error('[CinePlayer] No se pudo cargar artplayer-plugin-jassub (self-hosted).');
             _assPluginLoadPromise = null; // Permite reintento en el próximo episodio
             resolve(null);
         };
@@ -1359,7 +1354,7 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
                     <div class="cc-meta mobile-only">
                         ${mReqHtml}
                         ${mYearHtml}
-                        <span><span style="color:#fff; font-weight:bold;">${seasonsCount}</span> Temporadas</span>
+                        <span><span style="color:#fff; font-weight:bold;">${seasonsCount}</span> ${seasonWordPlural}</span>
                     </div>
 
                     <div class="cc-expand mobile-only" id="expandableArea">
@@ -1514,6 +1509,11 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
             const menu    = langWrapper.querySelector('.cc-lang-menu');
             const options = langWrapper.querySelectorAll('.cc-lang-option');
 
+            // AbortController para limpiar el listener global al renderizar de nuevo
+            if (shared._langMenuAbortCtrl) shared._langMenuAbortCtrl.abort();
+            shared._langMenuAbortCtrl = new AbortController();
+            const { signal } = shared._langMenuAbortCtrl;
+
             trigger.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const isOpen = menu.style.display === 'block';
@@ -1526,7 +1526,7 @@ export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = nu
                     menu.style.display        = 'none';
                     trigger.style.borderColor = 'rgba(255, 255, 255, 0.15)';
                 }
-            });
+            }, { signal });
 
             options.forEach(opt => {
                 opt.addEventListener('mouseenter', () => {
@@ -1616,7 +1616,7 @@ export function populateEpisodeList(seriesId, seasonNum) {
  
     container.innerHTML = '';
  
-    episodes.sort((a, b) => a.episodeNumber - b.episodeNumber).forEach((episode, index) => {
+    [...episodes].sort((a, b) => a.episodeNumber - b.episodeNumber).forEach((episode, index) => {
         const card = document.createElement('div');
         card.className = 'cc-card episode-card'; 
         card.id        = `episode-card-${seriesId}-${seasonNum}-${index}`;
