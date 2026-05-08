@@ -411,24 +411,17 @@ art.on("error", (err) => {
     );
 
     try {
-        // art.plugins.add() registra el plugin correctamente en el ciclo de vida
-        // de Artplayer — monta el canvas overlay y conecta los eventos automáticamente.
-        // pluginFactory(config)(art) es equivalente pero sin el binding del lifecycle.
-        this._assPlugin = this.art.plugins.add(
-            ArtplayerPluginAss({
-                subUrl: blobUrl,
-                fonts,
-            })
-        );
+        const pluginInit = ArtplayerPluginAss({ subUrl: blobUrl, fonts });
+        this._assPlugin = pluginInit(this.art);
         this.container._assPluginRef = this._assPlugin;
-
+        console.log('[CinePlayer] Plugin ass montado:', this._assPlugin);
     } catch (err) {
         console.error('[CinePlayer] Error al inicializar artplayer-plugin-libass:', err);
         URL.revokeObjectURL(blobUrl);
         return;
     }
 
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 15_000);
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
 }
 
     // ===========================================================
