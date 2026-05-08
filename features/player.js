@@ -21,7 +21,7 @@ import ContentManager from '../utils/content-manager.js';
 
 // ─── CDN del plugin oficial (ESM) ─────────────────────────────
 // Se carga una vez y se cachea en módulo → no re-descarga por episodio
-const ASS_PLUGIN_CDN = "https://unpkg.com/artplayer-plugin-ass@1/dist/artplayer-plugin-ass.esm.js";
+const ASS_PLUGIN_CDN = "/cinecorentatesteos/assests/js/artplayer-plugin-libass.min.js";
 
 // ─── Cache global del módulo (singleton por sesión) ───────────
 let _assPluginModule       = null;
@@ -460,38 +460,44 @@ art.on("error", (err) => {
     //     5. Cachear en _assPluginModule → todos los episodios usan la misma instancia
     // ===========================================================
     async _loadAssPlugin() {
-        // Devolver módulo ya cargado (fast path)
-        if (_assPluginModule) return _assPluginModule;
+    if (_assPluginModule) return _assPluginModule;
+    if (_assPluginLoadPromise) return _assPluginLoadPromise;
 
-        // Evitar carga paralela: si ya hay una Promise en vuelo, esperarla
-        if (_assPluginLoadPromise) return _assPluginLoadPromise;
+    _assPluginLoadPromise = new Promise((resolve) => {
+        // Script tag: los navegadores cargan scripts cross-origin
+        // sin restricción CORS, a diferencia de fetch().
+        // El build UMD expone window.artplayerPluginAss como global.
+        const existing = document.querySelector(`script[src="${ASS_PLUGIN_CDN}"]`);
+        if (existing) {
+            // Ya fue inyectado antes (cambio de episodio rápido)
+            _assPluginModule = window.artplayerPluginAss ?? null;
+            resolve(_assPluginModule);
+            return;
+        }
 
-        _assPluginLoadPromise = (async () => {
-            try {
-                const resp = await fetch(ASS_PLUGIN_CDN);
-                if (!resp.ok) throw new Error(`HTTP ${resp.status} al cargar plugin`);
+        const script = document.createElement('script');
+        script.src   = ASS_PLUGIN_CDN;
+        script.async = true;
 
-                const code = await resp.text();
-                const blob = new Blob([code], { type: 'application/javascript' });
-                const blobUrl = URL.createObjectURL(blob);
-
-                // dynamic import() de blob URL (mismo origen → sin CORS)
-                const mod = await import(/* webpackIgnore: true */ blobUrl);
-                URL.revokeObjectURL(blobUrl);
-
-                _assPluginModule = mod.default ?? mod;
-                return _assPluginModule;
-
-            } catch (err) {
-                console.error('[CinePlayer] No se pudo cargar artplayer-plugin-ass:', err);
-                // Limpiar Promise para permitir reintento en el próximo episodio
-                _assPluginLoadPromise = null;
-                return null;
-            }
-        })();
-
-        return _assPluginLoadPromise;
+        script.onload = () => {
+    _assPluginModule = window.artplayerPluginLibass ?? null;
+    if (!_assPluginModule) {
+        console.error('[CinePlayer] artplayer-plugin-libass cargó pero no expuso window.artplayerPluginLibass');
     }
+     resolve(_assPluginModule);
+    };
+
+        script.onerror = () => {
+            console.error('[CinePlayer] No se pudo cargar artplayer-plugin-ass desde jsDelivr.');
+            _assPluginLoadPromise = null; // Permite reintento en el próximo episodio
+            resolve(null);
+        };
+
+        document.head.appendChild(script);
+    });
+
+    return _assPluginLoadPromise;
+}
 
     // ===========================================================
     // 🔍 _fetchAssContent: Fetch robusto con detección de errores
