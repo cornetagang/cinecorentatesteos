@@ -36,65 +36,55 @@ let _assPluginLoadPromise  = null;
 //   → Para fuentes propietarias exactas, pasa el Drive ID en tu data
 //     como fontIds: ['1Abc...'] y el Worker las servirá automáticamente.
 const ANIME_FONT_MAP = {
-    // ── Sans-serif genéricas (más usadas en diálogos) ──
-    'open sans':         'https://fonts.gstatic.com/s/opensans/v36/memSYaGs126MiZpBA-UvWbX2vVnXBbObj2OVZyOOSr4dVJWUgsjZ0C4nY1M2xLER.woff2',
-    'roboto':            'https://fonts.gstatic.com/s/roboto/v30/KFOmCnqEu92Fr1Mu4mxKKTU1Kg.woff2',
-    'montserrat':        'https://fonts.gstatic.com/s/montserrat/v25/JTUHjIg1_i6t8kCHKm4532VJOt5-QNFgpCtr6Hw0aXp-p7K4KLjztg.woff2',
-    'lato':              'https://fonts.gstatic.com/s/lato/v24/S6uyw4BMUTPHjxAwXjeu.woff2',
-    'noto sans':         'https://fonts.gstatic.com/s/notosans/v27/o-0IIpQlx3QUlC5A4PNb4j5Ba_2c7A.woff2',
-    'source sans pro':   'https://fonts.gstatic.com/s/sourcesanspro/v21/6xKydSBYKcSV-LCoeQqfX1RYOo3ik4zwlxdu3cOWxw.woff2',
-    'ubuntu':            'https://fonts.gstatic.com/s/ubuntu/v20/4iCs6KVjbNBYlgoKfw72nU6AF7xm.woff2',
-    'nunito':            'https://fonts.gstatic.com/s/nunito/v25/XRXV3I6Li01BKofINeaB.woff2',
-    'inter':             'https://fonts.gstatic.com/s/inter/v13/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuLyfAZ9hiA.woff2',
-    'oswald':            'https://fonts.gstatic.com/s/oswald/v49/TK3_WkUHHAIjg75cFRf3bXL8LICs1_FvsUtiZTaR.woff2',
-    'raleway':           'https://fonts.gstatic.com/s/raleway/v28/1Ptug8zYS_SKggPNyC0IT4ttDfA.woff2',
-    'cabin':             'https://fonts.gstatic.com/s/cabin/v26/u-4X0qWljRw-PfU81xCKCpdpbgZJl6XFpfEd7eA9BIxxkV2EH7alwA.woff2',
-    'exo 2':             'https://fonts.gstatic.com/s/exo2/v21/7cH1v4okm5zmbvwkAx_sfcEuiD8jvvKcPtq-rpvLpQ.woff2',
-    'rajdhani':          'https://fonts.gstatic.com/s/rajdhani/v15/LDI2apCSOBg7S-QT7pamgLKQoBIxIQ.woff2',
-    'kanit':             'https://fonts.gstatic.com/s/kanit/v12/nKKZ-Go6G5tXcr4uPhWnVaFrNlJzIu4.woff2',
-    'yanone kaffeesatz': 'https://fonts.gstatic.com/s/yanonekaffeesatz/v24/3y9I6aknfjLm_3lMKjiMgmUUYBs04aUXNxt9gW2LIftopTWNSam3Sn1sHg.woff2',
+    // ── Sans-serif genéricas (100% Permanentes en NPM) ──
+    'open sans':         'https://cdn.jsdelivr.net/npm/@fontsource/open-sans/files/open-sans-latin-400-normal.woff2',
+    'roboto':            'https://cdn.jsdelivr.net/npm/@fontsource/roboto/files/roboto-latin-400-normal.woff2',
+    'montserrat':        'https://cdn.jsdelivr.net/npm/@fontsource/montserrat/files/montserrat-latin-400-normal.woff2',
+    'lato':              'https://cdn.jsdelivr.net/npm/@fontsource/lato/files/lato-latin-400-normal.woff2',
+    'noto sans':         'https://cdn.jsdelivr.net/npm/@fontsource/noto-sans/files/noto-sans-latin-400-normal.woff2',
+    'source sans pro':   'https://cdn.jsdelivr.net/npm/@fontsource/source-sans-pro/files/source-sans-pro-latin-400-normal.woff2',
+    'ubuntu':            'https://cdn.jsdelivr.net/npm/@fontsource/ubuntu/files/ubuntu-latin-400-normal.woff2',
+    'nunito':            'https://cdn.jsdelivr.net/npm/@fontsource/nunito/files/nunito-latin-400-normal.woff2',
+    'inter':             'https://cdn.jsdelivr.net/npm/@fontsource/inter/files/inter-latin-400-normal.woff2',
+    'oswald':            'https://cdn.jsdelivr.net/npm/@fontsource/oswald/files/oswald-latin-400-normal.woff2',
+    'raleway':           'https://cdn.jsdelivr.net/npm/@fontsource/raleway/files/raleway-latin-400-normal.woff2',
+    'cabin':             'https://cdn.jsdelivr.net/npm/@fontsource/cabin/files/cabin-latin-400-normal.woff2',
+    'exo 2':             'https://cdn.jsdelivr.net/npm/@fontsource/exo-2/files/exo-2-latin-400-normal.woff2',
+    'rajdhani':          'https://cdn.jsdelivr.net/npm/@fontsource/rajdhani/files/rajdhani-latin-400-normal.woff2',
+    'kanit':             'https://cdn.jsdelivr.net/npm/@fontsource/kanit/files/kanit-latin-400-normal.woff2',
+    'yanone kaffeesatz': 'https://cdn.jsdelivr.net/npm/@fontsource/yanone-kaffeesatz/files/yanone-kaffeesatz-latin-400-normal.woff2',
 
     // ── Sustitutos para fuentes comerciales comunes en fansubs ──
-    // Gotham (muy usada en carteles de anime tipo BnHA, AoT) → Montserrat
-    'gotham':            'https://fonts.gstatic.com/s/montserrat/v25/JTUHjIg1_i6t8kCHKm4532VJOt5-QNFgpCtr6Hw0aXp-p7K4KLjztg.woff2',
-    'gotham bold':       'https://fonts.gstatic.com/s/montserrat/v25/JTUHjIg1_i6t8kCHKm4532VJOt5-QNFgpCtr6Hw0aXp-p7K4KLjztg.woff2',
-    'gotham narrow':     'https://fonts.gstatic.com/s/montserrat/v25/JTUHjIg1_i6t8kCHKm4532VJOt5-QNFgpCtr6Hw0aXp-p7K4KLjztg.woff2',
-    // Futura → Nunito Sans
-    'futura':            'https://fonts.gstatic.com/s/nunitosans/v15/pe0IMImSLcBpwr2zbNJUHhFpA4Ldl2ZKGbiqJnM.woff2',
-    'futura pt':         'https://fonts.gstatic.com/s/nunitosans/v15/pe0IMImSLcBpwr2zbNJUHhFpA4Ldl2ZKGbiqJnM.woff2',
-    // Gill Sans → Lato
-    'gill sans':         'https://fonts.gstatic.com/s/lato/v24/S6uyw4BMUTPHjxAwXjeu.woff2',
-    // Myriad Pro → Source Sans Pro
-    'myriad pro':        'https://fonts.gstatic.com/s/sourcesanspro/v21/6xKydSBYKcSV-LCoeQqfX1RYOo3ik4zwlxdu3cOWxw.woff2',
-    // Helvetica Neue → Inter
-    'helvetica neue':    'https://fonts.gstatic.com/s/inter/v13/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuLyfAZ9hiA.woff2',
-    'helvetica':         'https://fonts.gstatic.com/s/inter/v13/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuLyfAZ9hiA.woff2',
-    // Franklin Gothic → Oswald
-    'franklin gothic':   'https://fonts.gstatic.com/s/oswald/v49/TK3_WkUHHAIjg75cFRf3bXL8LICs1_FvsUtiZTaR.woff2',
+    'gotham':            'https://cdn.jsdelivr.net/npm/@fontsource/montserrat/files/montserrat-latin-400-normal.woff2',
+    'gotham bold':       'https://cdn.jsdelivr.net/npm/@fontsource/montserrat/files/montserrat-latin-700-normal.woff2',
+    'gotham narrow':     'https://cdn.jsdelivr.net/npm/@fontsource/montserrat/files/montserrat-latin-400-normal.woff2',
+    'futura':            'https://cdn.jsdelivr.net/npm/@fontsource/nunito-sans/files/nunito-sans-latin-400-normal.woff2',
+    'futura pt':         'https://cdn.jsdelivr.net/npm/@fontsource/nunito-sans/files/nunito-sans-latin-400-normal.woff2',
+    'gill sans':         'https://cdn.jsdelivr.net/npm/@fontsource/lato/files/lato-latin-400-normal.woff2',
+    'myriad pro':        'https://cdn.jsdelivr.net/npm/@fontsource/source-sans-pro/files/source-sans-pro-latin-400-normal.woff2',
+    'helvetica neue':    'https://cdn.jsdelivr.net/npm/@fontsource/inter/files/inter-latin-400-normal.woff2',
+    'helvetica':         'https://cdn.jsdelivr.net/npm/@fontsource/inter/files/inter-latin-400-normal.woff2',
+    'franklin gothic':   'https://cdn.jsdelivr.net/npm/@fontsource/oswald/files/oswald-latin-400-normal.woff2',
 
     // ── Sustitutos para fuentes CLÁSICAS de Fansubs de Anime y Manga ──
-    'anime ace':         'https://cdn.jsdelivr.net/fontsource/fonts/comic-neue@latest/latin-700-normal.woff2',
-    'anime ace bb':      'https://cdn.jsdelivr.net/fontsource/fonts/comic-neue@latest/latin-700-normal.woff2',
-    'wild words':        'https://cdn.jsdelivr.net/fontsource/fonts/bangers@latest/latin-400-normal.woff2',
-    'cc wild words':     'https://cdn.jsdelivr.net/fontsource/fonts/bangers@latest/latin-400-normal.woff2',
-    'action man':        'https://cdn.jsdelivr.net/fontsource/fonts/bangers@latest/latin-400-normal.woff2',
-    'comic book':        'https://cdn.jsdelivr.net/fontsource/fonts/comic-neue@latest/latin-400-normal.woff2',
+    'anime ace':         'https://cdn.jsdelivr.net/npm/@fontsource/comic-neue/files/comic-neue-latin-700-normal.woff2',
+    'anime ace bb':      'https://cdn.jsdelivr.net/npm/@fontsource/comic-neue/files/comic-neue-latin-700-normal.woff2',
+    'wild words':        'https://cdn.jsdelivr.net/npm/@fontsource/bangers/files/bangers-latin-400-normal.woff2',
+    'cc wild words':     'https://cdn.jsdelivr.net/npm/@fontsource/bangers/files/bangers-latin-400-normal.woff2',
+    'action man':        'https://cdn.jsdelivr.net/npm/@fontsource/bangers/files/bangers-latin-400-normal.woff2',
+    'comic book':        'https://cdn.jsdelivr.net/npm/@fontsource/comic-neue/files/comic-neue-latin-400-normal.woff2',
 
-    // ── Fuentes de sistema (Mapeadas a Clones de Google Fonts para evitar crasheos de JASSUB) ──
-    // Arimo es un clon métrico de Arial
-    'arial':             'https://cdn.jsdelivr.net/fontsource/fonts/arimo@latest/latin-400-normal.woff2',
-    'arial bold':        'https://cdn.jsdelivr.net/fontsource/fonts/arimo@latest/latin-700-normal.woff2',
-    // Tinos es un clon métrico de Times New Roman
-    'times new roman':   'https://cdn.jsdelivr.net/fontsource/fonts/tinos@latest/latin-400-normal.woff2',
-    // Cousine es un clon métrico de Courier New
-    'courier new':       'https://cdn.jsdelivr.net/fontsource/fonts/cousine@latest/latin-400-normal.woff2',
-    // Sustitutos cercanos para el resto
-    'trebuchet ms':      'https://cdn.jsdelivr.net/fontsource/fonts/fira-sans@latest/latin-400-normal.woff2',
-    'verdana':           'https://cdn.jsdelivr.net/fontsource/fonts/pt-sans@latest/latin-400-normal.woff2',
-    'tahoma':            'https://cdn.jsdelivr.net/fontsource/fonts/noto-sans@latest/latin-400-normal.woff2',
-    'georgia':           'https://cdn.jsdelivr.net/fontsource/fonts/lora@latest/latin-400-normal.woff2',
-    'impact':            'https://cdn.jsdelivr.net/fontsource/fonts/oswald@latest/latin-700-normal.woff2',
-    'comic sans ms':     'https://cdn.jsdelivr.net/fontsource/fonts/comic-neue@latest/latin-400-normal.woff2',
+    // ── Fuentes de sistema (Mapeadas a Clones de Fontsource NPM) ──
+    'arial':             'https://cdn.jsdelivr.net/npm/@fontsource/arimo/files/arimo-latin-400-normal.woff2',
+    'arial bold':        'https://cdn.jsdelivr.net/npm/@fontsource/arimo/files/arimo-latin-700-normal.woff2',
+    'times new roman':   'https://cdn.jsdelivr.net/npm/@fontsource/tinos/files/tinos-latin-400-normal.woff2',
+    'courier new':       'https://cdn.jsdelivr.net/npm/@fontsource/cousine/files/cousine-latin-400-normal.woff2',
+    'trebuchet ms':      'https://cdn.jsdelivr.net/npm/@fontsource/fira-sans/files/fira-sans-latin-400-normal.woff2',
+    'verdana':           'https://cdn.jsdelivr.net/npm/@fontsource/pt-sans/files/pt-sans-latin-400-normal.woff2',
+    'tahoma':            'https://cdn.jsdelivr.net/npm/@fontsource/noto-sans/files/noto-sans-latin-400-normal.woff2',
+    'georgia':           'https://cdn.jsdelivr.net/npm/@fontsource/lora/files/lora-latin-400-normal.woff2',
+    'impact':            'https://cdn.jsdelivr.net/npm/@fontsource/oswald/files/oswald-latin-700-normal.woff2',
+    'comic sans ms':     'https://cdn.jsdelivr.net/npm/@fontsource/comic-neue/files/comic-neue-latin-400-normal.woff2'
 };
 
 let shared; 
