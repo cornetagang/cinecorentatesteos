@@ -83,6 +83,7 @@ const ANIME_FONT_MAP = {
     'georgia':           '',
     'impact':            '',
     'courier new':       '',
+    'comic sans ms':     '',
 };
 
 let shared; 
@@ -213,7 +214,8 @@ class CinePlayer {
             lang: navigator.language.toLocaleLowerCase() || "es",
             moreVideoAttr: { 
                 playsinline: true, 
-                preload:     "metadata" 
+                preload:     "metadata",
+                crossorigin: "anonymous",
             },
 
             // 🟢 RUTA LIVIANA (SRT): Motor nativo de ArtPlayer, sin canvas extra
@@ -420,6 +422,7 @@ art.on("error", (err) => {
         libassMemoryLimit: 40,        // MiB — evita crashes en móvil (Redmi Note 9S)
         prescaleFactor:    0.8,       // Reduce carga de rasterización en pantallas densas
         dropAllAnimations: false,     // true solo si el móvil sigue crasheando
+        offscreenRender:   false,
     });
 
         this._assPlugin = pluginInit(this.art);
