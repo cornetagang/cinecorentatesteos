@@ -54,7 +54,7 @@ const ANIME_FONT_MAP = {
     'kanit':             'https://fonts.gstatic.com/s/kanit/v12/nKKZ-Go6G5tXcr4uPhWnVaFrNlJzIu4.woff2',
     'yanone kaffeesatz': 'https://fonts.gstatic.com/s/yanonekaffeesatz/v24/3y9I6aknfjLm_3lMKjiMgmUUYBs04aUXNxt9gW2LIftopTWNSam3Sn1sHg.woff2',
 
-    // ── Sustitutos para fuentes comerciales comunes en fansubs ─
+    // ── Sustitutos para fuentes comerciales comunes en fansubs ──
     // Gotham (muy usada en carteles de anime tipo BnHA, AoT) → Montserrat
     'gotham':            'https://fonts.gstatic.com/s/montserrat/v25/JTUHjIg1_i6t8kCHKm4532VJOt5-QNFgpCtr6Hw0aXp-p7K4KLjztg.woff2',
     'gotham bold':       'https://fonts.gstatic.com/s/montserrat/v25/JTUHjIg1_i6t8kCHKm4532VJOt5-QNFgpCtr6Hw0aXp-p7K4KLjztg.woff2',
@@ -72,18 +72,29 @@ const ANIME_FONT_MAP = {
     // Franklin Gothic → Oswald
     'franklin gothic':   'https://fonts.gstatic.com/s/oswald/v49/TK3_WkUHHAIjg75cFRf3bXL8LICs1_FvsUtiZTaR.woff2',
 
-    // ── Fuentes de sistema (sin URL → disponibles en todos los dispositivos) ─
-    // Se incluyen para que el Set de lookup no genere advertencias innecesarias
-    'arial':             '',
-    'arial bold':        '',
-    'verdana':           '',
-    'tahoma':            '',
-    'trebuchet ms':      '',
-    'times new roman':   '',
-    'georgia':           '',
-    'impact':            '',
-    'courier new':       '',
-    'comic sans ms':     '',
+    // ── Sustitutos para fuentes CLÁSICAS de Fansubs de Anime y Manga ──
+    'anime ace':         'https://cdn.jsdelivr.net/fontsource/fonts/comic-neue@latest/latin-700-normal.woff2',
+    'anime ace bb':      'https://cdn.jsdelivr.net/fontsource/fonts/comic-neue@latest/latin-700-normal.woff2',
+    'wild words':        'https://cdn.jsdelivr.net/fontsource/fonts/bangers@latest/latin-400-normal.woff2',
+    'cc wild words':     'https://cdn.jsdelivr.net/fontsource/fonts/bangers@latest/latin-400-normal.woff2',
+    'action man':        'https://cdn.jsdelivr.net/fontsource/fonts/bangers@latest/latin-400-normal.woff2',
+    'comic book':        'https://cdn.jsdelivr.net/fontsource/fonts/comic-neue@latest/latin-400-normal.woff2',
+
+    // ── Fuentes de sistema (Mapeadas a Clones de Google Fonts para evitar crasheos de JASSUB) ──
+    // Arimo es un clon métrico de Arial
+    'arial':             'https://cdn.jsdelivr.net/fontsource/fonts/arimo@latest/latin-400-normal.woff2',
+    'arial bold':        'https://cdn.jsdelivr.net/fontsource/fonts/arimo@latest/latin-700-normal.woff2',
+    // Tinos es un clon métrico de Times New Roman
+    'times new roman':   'https://cdn.jsdelivr.net/fontsource/fonts/tinos@latest/latin-400-normal.woff2',
+    // Cousine es un clon métrico de Courier New
+    'courier new':       'https://cdn.jsdelivr.net/fontsource/fonts/cousine@latest/latin-400-normal.woff2',
+    // Sustitutos cercanos para el resto
+    'trebuchet ms':      'https://cdn.jsdelivr.net/fontsource/fonts/fira-sans@latest/latin-400-normal.woff2',
+    'verdana':           'https://cdn.jsdelivr.net/fontsource/fonts/pt-sans@latest/latin-400-normal.woff2',
+    'tahoma':            'https://cdn.jsdelivr.net/fontsource/fonts/noto-sans@latest/latin-400-normal.woff2',
+    'georgia':           'https://cdn.jsdelivr.net/fontsource/fonts/lora@latest/latin-400-normal.woff2',
+    'impact':            'https://cdn.jsdelivr.net/fontsource/fonts/oswald@latest/latin-700-normal.woff2',
+    'comic sans ms':     'https://cdn.jsdelivr.net/fontsource/fonts/comic-neue@latest/latin-400-normal.woff2',
 };
 
 let shared; 
