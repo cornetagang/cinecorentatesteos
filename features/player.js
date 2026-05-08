@@ -415,18 +415,24 @@ art.on("error", (err) => {
     try {
     const pluginInit = ArtplayerPluginAss({
         subUrl:          blobUrl,
-        fonts:           fontUrls,
-        // CRÍTICO: registra cada fuente bajo el nombre exacto del .ass en lugar
-        // del nombre interno del .woff2. Sin esto, "Trebuchet MS" → Fira Sans se
-        // descarga bien pero JASSUB la busca como "Fira Sans" y no la encuentra.
+        // fonts: fontUrls,  ← ELIMINAR o dejar comentado:
+        //   Los woff2 preloadados se registran por su nombre INTERNO (ej: "Fira Sans"),
+        //   no por el alias del .ass ("Trebuchet MS"). availableFonts ya cubre el aliasing.
+        //   Puedes mantenerlo solo si tienes fuentes cuyo nombre interno coincide
+        //   exactamente con el nombre en el .ass.
+
+        // ✅ availableFonts con claves lowercase y valores array — el mecanismo correcto
         availableFonts,
-        fallbackFont:    'https://fonts.gstatic.com/s/roboto/v30/KFOmCnqEu92Fr1Mu4mxKKTU1Kg.woff2',
-        workerUrl:       '/cinecorentatesteos/assests/js/jassub-worker.js',
-        wasmUrl:         '/cinecorentatesteos/assests/js/jassub-worker.wasm',
-        legacyWasmUrl: '/cinecorentatesteos/assests/js/jassub-worker-legacy.js',
-        libassMemoryLimit: 40,        // MiB — evita crashes en móvil (Redmi Note 9S)
-        prescaleFactor:    0.8,       // Reduce carga de rasterización en pantallas densas
-        dropAllAnimations: false,     // true solo si el móvil sigue crasheando
+
+        // ✅ fallbackFont: usar jsDelivr en lugar de fonts.gstatic.com (evita CORS issues)
+        fallbackFont: 'https://cdn.jsdelivr.net/npm/@fontsource/arimo/files/arimo-latin-400-normal.woff2',
+
+        workerUrl:         '/cinecorentatesteos/assests/js/jassub-worker.js',
+        wasmUrl:           '/cinecorentatesteos/assests/js/jassub-worker.wasm',
+        legacyWasmUrl:     '/cinecorentatesteos/assests/js/jassub-worker-legacy.js',
+        libassMemoryLimit: 40,
+        prescaleFactor:    0.8,
+        dropAllAnimations: false,
         offscreenRender:   false,
     });
 
@@ -623,20 +629,24 @@ art.on("error", (err) => {
         }
 
         // ── Mapear nombres a URLs ─────────────────────────────────
-        // CRÍTICO: se registra la fuente bajo el nombre exacto que usa el .ass
-        // (no bajo el nombre interno del .woff2) para que JASSUB pueda encontrarla.
-        // Ej: .ass pide "Trebuchet MS" → se descarga Fira Sans, pero JASSUB la
-        // registra como "Trebuchet MS" gracias al mapa availableFonts.
+        // CRÍTICO: availableFonts debe usar claves en MINÚSCULA.
+        // JASSUB normaliza el nombre pedido por el .ass a lowercase antes de buscar
+        // en este objeto. Si la clave es "Trebuchet MS" y JASSUB busca "trebuchet ms",
+        // no hay match → "failed to find any fallback".
+        // Los valores deben ser arrays de URLs (string[] según el tipado de JASSUB).
         for (const [lower, original] of fontNames) {
             const url = ANIME_FONT_MAP[lower];
             // url === undefined → fuente desconocida, no bloquear la carga
             // url === ''        → fuente de sistema, no necesita URL
             // url es string URL → agregarla
             if (url && url.length > 0) {
+                // ✅ Clave en minúscula (lower) para que JASSUB la encuentre
+                // ✅ Valor como array [url] según el contrato de JASSUB
+                availableFonts[lower] = [url];
+                // fontUrls se mantiene para preloading eager opcional
                 fontUrls.push(url);
-                availableFonts[original] = url;
             }
-        }
+        }   
 
         // Log para debug (visible en DevTools cuando se analizan nuevos títulos)
         if (fontNames.size > 0) {
@@ -651,8 +661,15 @@ art.on("error", (err) => {
             }
         }
 
-        return { fontUrls, availableFonts };
-    }
+        const FALLBACK_URL = ['https://cdn.jsdelivr.net/npm/@fontsource/arimo/files/arimo-latin-400-normal.woff2'];
+        for (const genericName of ['arial', 'sans-serif', 'helvetica', 'default']) {
+            if (!availableFonts[genericName]) {
+                availableFonts[genericName] = FALLBACK_URL;
+            }
+        }
+
+            return { fontUrls, availableFonts };
+        }
 
     _mountIframeFallback(videoId) {
         let src = `https://streamtape.com/e/${videoId}/`;
