@@ -226,7 +226,7 @@ class CinePlayer {
             moreVideoAttr: { 
                 playsinline: true, 
                 preload:     "metadata",
-                crossorigin: "anonymous",
+                crossOrigin: "anonymous",
             },
 
             // 🟢 RUTA LIVIANA (SRT): Motor nativo de ArtPlayer, sin canvas extra
