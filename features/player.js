@@ -391,57 +391,45 @@ art.on("error", (err) => {
     //     6. Revocar Blob URL tras carga (15s = tiempo suficiente para assjs)
     // ===========================================================
     async _mountAssPlugin(subUrl) {
-        const myId = ++this._mountId;
+    const myId = ++this._mountId;
 
-        // ── Paso 1: Cargar módulo (singleton cacheado) ───────────
-        const ArtplayerPluginAss = await this._loadAssPlugin();
-        if (myId !== this._mountId || !ArtplayerPluginAss || !this.art) return;
+    const ArtplayerPluginAss = await this._loadAssPlugin();
+    if (myId !== this._mountId || !ArtplayerPluginAss || !this.art) return;
 
-        // ── Paso 2: Fetch con detección de errores CORS/Worker ───
-        const assContent = await this._fetchAssContent(subUrl);
-        if (myId !== this._mountId) return; // Usuario cambió de episodio mientras esperábamos
+    const assContent = await this._fetchAssContent(subUrl);
+    if (myId !== this._mountId) return;
 
-        if (!assContent) {
-            // _fetchAssContent ya loguea el motivo específico
-            console.warn('[CinePlayer] Subtítulos .ass no disponibles — reproductor continúa sin subs.');
-            return;
-        }
-
-        // ── Paso 3: Extraer y resolver fuentes ───────────────────
-        const fonts = this._extractFontsFromAss(assContent);
-
-        // ── Paso 4: Crear Blob URL (mismo origen para el renderer) ─
-        const blobUrl = URL.createObjectURL(
-            new Blob([assContent], { type: 'text/plain; charset=utf-8' })
-        );
-
-        // ── Paso 5: Montar plugin en la instancia de Artplayer ───
-        try {
-            // ArtplayerPluginAss(config) devuelve una factory function (art) => plugin
-            // Al llamarla con `this.art`, el plugin:
-            //   • Crea un <canvas> overlay sobre el video
-            //   • Inicializa assjs con el .ass y las fuentes
-            //   • Se registra en art.plugins.ass para acceso externo
-            const pluginFactory = ArtplayerPluginAss({
-                subUrl: blobUrl,   // ← artplayer-plugin-libass usa subUrl
-                fonts,
-                // wasmUrl por defecto apunta a cdnjs libass-wasm 4.1.0 — no hace falta cambiarlo
-                // resampling no existe en este plugin, el escalado lo maneja SubtitlesOctopus
-            });
-
-            this._assPlugin = pluginFactory(this.art);
-            this.container._assPluginRef = this._assPlugin;
-
-        } catch (err) {
-            console.error('[CinePlayer] Error al inicializar artplayer-plugin-ass:', err);
-            URL.revokeObjectURL(blobUrl);
-            return;
-        }
-
-        // ── Paso 6: Revocar Blob URL (assjs ya tiene el contenido en memoria) ─
-        // 15 segundos = suficiente para que assjs parsee el script completo
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 15_000);
+    if (!assContent) {
+        console.warn('[CinePlayer] Subtítulos .ass no disponibles — reproductor continúa sin subs.');
+        return;
     }
+
+    const fonts = this._extractFontsFromAss(assContent);
+
+    const blobUrl = URL.createObjectURL(
+        new Blob([assContent], { type: 'text/plain; charset=utf-8' })
+    );
+
+    try {
+        // art.plugins.add() registra el plugin correctamente en el ciclo de vida
+        // de Artplayer — monta el canvas overlay y conecta los eventos automáticamente.
+        // pluginFactory(config)(art) es equivalente pero sin el binding del lifecycle.
+        this._assPlugin = this.art.plugins.add(
+            ArtplayerPluginAss({
+                subUrl: blobUrl,
+                fonts,
+            })
+        );
+        this.container._assPluginRef = this._assPlugin;
+
+    } catch (err) {
+        console.error('[CinePlayer] Error al inicializar artplayer-plugin-libass:', err);
+        URL.revokeObjectURL(blobUrl);
+        return;
+    }
+
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 15_000);
+}
 
     // ===========================================================
     // 🔌 _loadAssPlugin: Carga dinámica del módulo ESM con cache
