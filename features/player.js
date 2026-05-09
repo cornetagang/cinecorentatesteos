@@ -492,13 +492,24 @@ class CinePlayer {
     );
 
     try {
-      // Arimo como fuente base: TTF requerido — libass no puede leer woff2
-      const EAGER_FALLBACK =
-        "https://cdn.jsdelivr.net/npm/@expo-google-fonts/arimo/400Regular/Arimo_400Regular.ttf";
+      // Las 4 variantes de Arimo en TTF — libass elige peso/estilo correcto por familia.
+      // TTF requerido: libass dentro del worker WASM no puede parsear woff/woff2.
+      // Cargamos las 4 variantes eager para que fontconfig pueda seleccionar
+      // la negrita o cursiva correcta cuando el .ass lo pida (p.ej. Arial 700).
+      const ARIMO_BASE =
+        "https://cdn.jsdelivr.net/npm/@expo-google-fonts/arimo";
+      const ARIMO_FONTS = [
+        `${ARIMO_BASE}/400Regular/Arimo_400Regular.ttf`,
+        `${ARIMO_BASE}/700Bold/Arimo_700Bold.ttf`,
+        `${ARIMO_BASE}/400Regular_Italic/Arimo_400Regular_Italic.ttf`,
+        `${ARIMO_BASE}/700Bold_Italic/Arimo_700Bold_Italic.ttf`,
+      ];
+      // Regular sigue siendo el anchor: es la URL que se registra en availableFonts
+      // bajo la clave "arimo" para que fallbackFont tenga una URL válida que resolver.
+      const EAGER_FALLBACK = ARIMO_FONTS[0];
 
-      // "arimo" como fuente de emergencia: nombre que JASSUB usará como fallbackFont.
       // fallbackFont espera un NOMBRE de fuente (no una URL).
-      // La URL se registra en availableFonts bajo esa misma clave.
+      // La URL correspondiente debe existir en availableFonts bajo esa misma clave.
       const FALLBACK_FONT_NAME = "arimo";
       const availableFontsWithFallback = {
         ...availableFonts,
@@ -508,13 +519,19 @@ class CinePlayer {
       const pluginInit = ArtplayerPluginAss({
         subUrl: blobUrl,
 
-        // fonts[]: descarga eager — en VFS antes del frame 0
-        fonts: [EAGER_FALLBACK, ...fontUrls],
+        // fonts[]: descarga eager — en VFS antes del frame 0.
+        // Las 4 variantes de Arimo garantizan que fontconfig elija el peso/estilo
+        // correcto cuando cualquier fuente de sistema caiga al fallback.
+        // fontUrls contiene los sustitutos mapeados (Fira Sans, Tinos, etc.)
+        // para los nombres que sí matchean en availableFonts.
+        fonts: [...ARIMO_FONTS, ...fontUrls],
 
-        // availableFonts: lazy fetch por nombre (claves en minúscula)
+        // availableFonts: lazy fetch por nombre cuando libass pide una fuente
+        // que aún no está en VFS. Las claves vienen en minúscula Y en caso original
+        // del .ass (ver _extractFontsFromAss) para cubrir ambas estrategias de lookup.
         availableFonts: availableFontsWithFallback,
 
-        // fallbackFont: NOMBRE de fuente (no URL) — debe existir en availableFonts
+        // fallbackFont: NOMBRE de fuente (no URL) — debe existir en availableFonts.
         fallbackFont: FALLBACK_FONT_NAME,
 
         workerUrl: "/cinecorentatesteos/assests/js/jassub-worker.js",
@@ -750,21 +767,11 @@ class CinePlayer {
     }
 
     // ── Mapear nombres a URLs ─────────────────────────────────
-    // CRÍTICO: availableFonts debe usar claves en MINÚSCULA.
-    // JASSUB normaliza el nombre pedido por el .ass a lowercase antes de buscar
-    // en este objeto. Si la clave es "Trebuchet MS" y JASSUB busca "trebuchet ms",
-    // no hay match → "failed to find any fallback".
-    // Los valores deben ser strings URL. libass/JASSUB no acepta arrays.
     for (const [lower, original] of fontNames) {
       const url = ANIME_FONT_MAP[lower];
-      // url === undefined → fuente desconocida, no bloquear la carga
-      // url === ''        → fuente de sistema, no necesita URL
-      // url es string URL → agregarla
       if (url && url.length > 0) {
-        // ✅ Clave en minúscula (lower) para que JASSUB la encuentre
-        // ✅ Valor como string TTF — JASSUB espera URL string, no array
-        availableFonts[lower] = url;
-        // fontUrls se mantiene para preloading eager opcional
+        availableFonts[lower] = url; // "arial" — por si JASSUB normaliza
+        availableFonts[original] = url; // "Arial" — caso exacto del .ass  ← NUEVO
         fontUrls.push(url);
       }
     }
