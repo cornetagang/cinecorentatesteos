@@ -1,4668 +1,1993 @@
 // ===========================================================
-// CINE CORNETA - SCRIPT PRINCIPAL
-// Versión: 9.8 (ArtPlayer + Worker Integrado)
+// MÓDULO DEL REPRODUCTOR (V4 - ARTPLAYER + artplayer-plugin-ass)
+// Migración completa: SubtitlesOctopus WASM → artplayer-plugin-ass (assjs)
+//
+// ¿Por qué este cambio?
+//   SubtitlesOctopus usa libass compilado a WASM:
+//     ✗ Requiere SharedArrayBuffer → bloqueado por COOP/COEP en muchos hosts
+//     ✗ El Worker WASM crashea en móviles con poca RAM (Redmi Note 9S, etc.)
+//     ✗ Errores "Corrupted brotli dictionary", "postMessage on null", etc.
+//
+//   artplayer-plugin-ass usa assjs (Canvas puro, JavaScript 100%):
+//     ✓ Sin WASM → sin crashes ni headers especiales requeridos
+//     ✓ El canvas overlay se destruye con art.destroy() → sin fugas de memoria
+//     ✓ API limpia: art.plugins.ass.setTrack(url) para cambiar subtítulo
+//     ✓ Soporte nativo de resampling → typesetting complejo escala correctamente
 // ===========================================================
 
-// ===========================================================
-// 1. IMPORTS
-// ===========================================================
-import { API_URL, firebaseConfig, UI, THEMES } from './core/config.js';
-import { logError, ErrorHandler } from './utils/logger.js';
-import CacheManager from './utils/cache-manager.js';
-import ModalManager from './utils/modal-manager.js';
-import ContentManager from './utils/content-manager.js';
-import ThemeManager, { updateThemeAssets } from './utils/theme-manager.js';
-import LazyImageLoader from './utils/lazy-loader.js';
-import { initUniverses, renderUniversesHub } from './features/universes.js';
+import { logError } from '../utils/logger.js'; 
+import { WORKER_URL } from "../core/config.js";
+import ContentManager from '../utils/content-manager.js';
 
-// Instancias vacías (se llenan abajo)
-let cacheManager;
-let modalManager;
-let lazyLoader;
-let contentManager;
+// ─── CDN del plugin oficial (ESM) ─────────────────────────────
+// Se carga una vez y se cachea en módulo → no re-descarga por episodio
+const ASS_PLUGIN_CDN = "/cinecorentatesteos/assests/js/artplayer-plugin-jassub.js";
 
-// ==========================================
-// PEGAR ESTO ANTES DE 'let playerModule = null;'
-// ==========================================
-function checkUserLogin() {
-    const user = JSON.parse(localStorage.getItem('cineCornetoUser'));
-    
-    // Mantener estructura de appState.user incluso sin usuario logueado
-    if (typeof appState !== 'undefined') {
-        if (user) {
-            appState.user = {
-                ...user,
-                watchlist: appState.user?.watchlist || new Set(),
-                historyListenerRef: appState.user?.historyListenerRef || null
-            };
-        } else {
-            appState.user = {
-                watchlist: new Set(),
-                historyListenerRef: null
-            };
-        }
-    }
+// ─── Cache global del módulo (singleton por sesión) ───────────
+let _assPluginModule       = null;
+let _assPluginLoadPromise  = null;
 
-    // 1. Saludo Escritorio
-    if (typeof DOM !== 'undefined' && DOM.userGreeting) {
-        DOM.userGreeting.textContent = user ? `Hola, ${user.username}` : '';
-    }
+// ─── Mapa de fuentes comunes en fansubs de anime ──────────────
+// Clave: nombre en minúscula tal como aparece en [V4+ Styles] del .ass
+// Valor: URL pública de la fuente (.woff2 preferido por tamaño)
+//
+// Estrategia para fuentes comerciales (Gotham, Futura, etc.):
+//   → Se incluye el sustituto libre más compatible visualmente.
+//   → Para fuentes propietarias exactas, pasa el Drive ID en tu data
+//     como fontIds: ['1Abc...'] y el Worker las servirá automáticamente.
+const ANIME_FONT_MAP = {
+    // ── Sans-serif genéricas (100% Permanentes en NPM) ──
+    'open sans':         'https://cdn.jsdelivr.net/npm/@fontsource/open-sans/files/open-sans-latin-400-normal.woff2',
+    'roboto':            'https://cdn.jsdelivr.net/npm/@fontsource/roboto/files/roboto-latin-400-normal.woff2',
+    'montserrat':        'https://cdn.jsdelivr.net/npm/@fontsource/montserrat/files/montserrat-latin-400-normal.woff2',
+    'lato':              'https://cdn.jsdelivr.net/npm/@fontsource/lato/files/lato-latin-400-normal.woff2',
+    'noto sans':         'https://cdn.jsdelivr.net/npm/@fontsource/noto-sans/files/noto-sans-latin-400-normal.woff2',
+    'source sans pro':   'https://cdn.jsdelivr.net/npm/@fontsource/source-sans-pro/files/source-sans-pro-latin-400-normal.woff2',
+    'ubuntu':            'https://cdn.jsdelivr.net/npm/@fontsource/ubuntu/files/ubuntu-latin-400-normal.woff2',
+    'nunito':            'https://cdn.jsdelivr.net/npm/@fontsource/nunito/files/nunito-latin-400-normal.woff2',
+    'inter':             'https://cdn.jsdelivr.net/npm/@fontsource/inter/files/inter-latin-400-normal.woff2',
+    'oswald':            'https://cdn.jsdelivr.net/npm/@fontsource/oswald/files/oswald-latin-400-normal.woff2',
+    'raleway':           'https://cdn.jsdelivr.net/npm/@fontsource/raleway/files/raleway-latin-400-normal.woff2',
+    'cabin':             'https://cdn.jsdelivr.net/npm/@fontsource/cabin/files/cabin-latin-400-normal.woff2',
+    'exo 2':             'https://cdn.jsdelivr.net/npm/@fontsource/exo-2/files/exo-2-latin-400-normal.woff2',
+    'rajdhani':          'https://cdn.jsdelivr.net/npm/@fontsource/rajdhani/files/rajdhani-latin-400-normal.woff2',
+    'kanit':             'https://cdn.jsdelivr.net/npm/@fontsource/kanit/files/kanit-latin-400-normal.woff2',
+    'yanone kaffeesatz': 'https://cdn.jsdelivr.net/npm/@fontsource/yanone-kaffeesatz/files/yanone-kaffeesatz-latin-400-normal.woff2',
 
-    // 2. Email en Profile Hub Móvil
-    const profileHubEmail = document.getElementById('profile-hub-email');
-    if (profileHubEmail) {
-        if (user) {
-            profileHubEmail.textContent = user.email;
-            profileHubEmail.style.display = 'block';
-        } else {
-            profileHubEmail.textContent = 'Visitante';
-            profileHubEmail.style.display = 'block';
-        }
-    }
+    // ── Sustitutos para fuentes comerciales comunes en fansubs ──
+    'gotham':            'https://cdn.jsdelivr.net/npm/@fontsource/montserrat/files/montserrat-latin-400-normal.woff2',
+    'gotham bold':       'https://cdn.jsdelivr.net/npm/@fontsource/montserrat/files/montserrat-latin-700-normal.woff2',
+    'gotham narrow':     'https://cdn.jsdelivr.net/npm/@fontsource/montserrat/files/montserrat-latin-400-normal.woff2',
+    'futura':            'https://cdn.jsdelivr.net/npm/@fontsource/nunito-sans/files/nunito-sans-latin-400-normal.woff2',
+    'futura pt':         'https://cdn.jsdelivr.net/npm/@fontsource/nunito-sans/files/nunito-sans-latin-400-normal.woff2',
+    'gill sans':         'https://cdn.jsdelivr.net/npm/@fontsource/lato/files/lato-latin-400-normal.woff2',
+    'myriad pro':        'https://cdn.jsdelivr.net/npm/@fontsource/source-sans-pro/files/source-sans-pro-latin-400-normal.woff2',
+    'helvetica neue':    'https://cdn.jsdelivr.net/npm/@fontsource/inter/files/inter-latin-400-normal.woff2',
+    'helvetica':         'https://cdn.jsdelivr.net/npm/@fontsource/inter/files/inter-latin-400-normal.woff2',
+    'franklin gothic':   'https://cdn.jsdelivr.net/npm/@fontsource/oswald/files/oswald-latin-400-normal.woff2',
 
-    // 3. Menús
-    if (typeof DOM !== 'undefined') {
-        if (user) {
-            if(DOM.loginBtn) DOM.loginBtn.style.display = 'none';
-            if(DOM.userMenuContainer) DOM.userMenuContainer.style.display = 'block';
-        } else {
-            if(DOM.loginBtn) DOM.loginBtn.style.display = 'block';
-            if(DOM.userMenuContainer) DOM.userMenuContainer.style.display = 'none';
-            if(DOM.userMenuDropdown && DOM.userMenuDropdown.classList) DOM.userMenuDropdown.classList.remove('show');
-        }
-    }
-}
+    // ── Sustitutos para fuentes CLÁSICAS de Fansubs de Anime y Manga ──
+    'anime ace':         'https://cdn.jsdelivr.net/npm/@fontsource/comic-neue/files/comic-neue-latin-700-normal.woff2',
+    'anime ace bb':      'https://cdn.jsdelivr.net/npm/@fontsource/comic-neue/files/comic-neue-latin-700-normal.woff2',
+    'wild words':        'https://cdn.jsdelivr.net/npm/@fontsource/bangers/files/bangers-latin-400-normal.woff2',
+    'cc wild words':     'https://cdn.jsdelivr.net/npm/@fontsource/bangers/files/bangers-latin-400-normal.woff2',
+    'action man':        'https://cdn.jsdelivr.net/npm/@fontsource/bangers/files/bangers-latin-400-normal.woff2',
+    'comic book':        'https://cdn.jsdelivr.net/npm/@fontsource/comic-neue/files/comic-neue-latin-400-normal.woff2',
 
-// Módulos dinámicos
-let playerModule = null;
-let profileModule = null;
-let rouletteModule = null;
-let reviewsModule = null; 
-let iptvModule = null;
-let universesModule = null;
-let reportsModule = null;
-
-async function getPlayerModule() {
-    if (playerModule) return playerModule;
-    const module = await import('./features/player.js?v=15');
-    module.initPlayer({
-        appState, DOM, ErrorHandler, auth, db,
-        addToHistoryIfLoggedIn, switchView,
-        THEMES,
-        closeAllModals: () => modalManager.closeAll(), 
-        openDetailsModal
-    });
-    playerModule = module;
-    return playerModule;
-}
-
-async function getProfileModule() {
-    if (profileModule) return profileModule;
-    const module = await import('./features/profile.js?v=8');
-    module.initProfile({
-        appState, DOM, auth, db, switchView, ErrorHandler
-    });
-    profileModule = module;
-    module.setupUserDropdown();
-    return profileModule;
-}
-
-async function getRouletteModule() {
-    if (rouletteModule) return rouletteModule;
-    const module = await import('./features/roulette.js?v=8');
-    module.initRoulette({
-        appState, DOM, createMovieCardElement, openDetailsModal, auth, db,
-        getPlayerModule, addToHistoryIfLoggedIn
-    });
-    rouletteModule = module;
-    return module;
-}
-
-async function getReviewsModule() {
-    if (reviewsModule) return reviewsModule;
-    const module = await import('./features/reviews.js?v=8');
-    module.initReviews({
-        appState, DOM, auth, db, ErrorHandler, ModalManager, openConfirmationModal
-    });
-    reviewsModule = module;
-    return module;
-}
-
-
-async function getUniversesModule() {
-    if (universesModule) return universesModule;
-    const module = await import('./features/universes.js?v=8');
-    module.initUniverses({ appState, switchView });
-    universesModule = module;
-    return module;
-}
-
-async function getReportsModule() {
-    if (reportsModule) return reportsModule;
-    const module = await import('./features/reports.js?v=' + Date.now());
-    module.initReports({ appState, DOM, auth, db, ErrorHandler });
-    reportsModule = module;
-    return module;
-}
-
-// ===========================================================
-// 1. ESTADO GLOBAL Y CONFIGURACIÓN
-// ===========================================================
-const appState = {
-    content: {
-        movies: {},
-        series: {},
-        sagas: {},       
-        sagasList: [],   
-        seriesEpisodes: {},
-        seasonPosters: {},
-        seasonOrder: {}, 
-        metadata: { movies: {}, series: {} },
-        averages: {}     
-    },
-    ui: {
-        heroMovieIds: [],
-        contentToDisplay: [],
-        currentIndex: 0,
-        heroInterval: null,
-        activeSagaId: null
-    },
-    user: {
-        watchlist: new Set(),
-        historyListenerRef: null
-    },
-    player: {
-        state: {},
-        activeSeriesId: null,
-        pendingHistorySave: null,
-        episodeOpenTimer: null,
-        historyUpdateDebounceTimer: null,
-        activeCineInstance: null // 🔥 NUEVO: Referencia a la instancia de ArtPlayer
-    },
-    flags: {
-        isLoadingMore: false,
-        pendingUpdate: false
-    },
-    hero: {
-        preloadedImages: new Map(),
-        currentIndex: 0,
-        isTransitioning: false
-    }
+    // ── Fuentes de sistema (Mapeadas a Clones de Fontsource NPM) ──
+    'arial':             'https://cdn.jsdelivr.net/npm/@fontsource/arimo/files/arimo-latin-400-normal.woff2',
+    'arial bold':        'https://cdn.jsdelivr.net/npm/@fontsource/arimo/files/arimo-latin-700-normal.woff2',
+    'times new roman':   'https://cdn.jsdelivr.net/npm/@fontsource/tinos/files/tinos-latin-400-normal.woff2',
+    'courier new':       'https://cdn.jsdelivr.net/npm/@fontsource/cousine/files/cousine-latin-400-normal.woff2',
+    'trebuchet ms':      'https://cdn.jsdelivr.net/npm/@fontsource/fira-sans/files/fira-sans-latin-400-normal.woff2',
+    'verdana':           'https://cdn.jsdelivr.net/npm/@fontsource/pt-sans/files/pt-sans-latin-400-normal.woff2',
+    'tahoma':            'https://cdn.jsdelivr.net/npm/@fontsource/noto-sans/files/noto-sans-latin-400-normal.woff2',
+    'georgia':           'https://cdn.jsdelivr.net/npm/@fontsource/lora/files/lora-latin-400-normal.woff2',
+    'impact':            'https://cdn.jsdelivr.net/npm/@fontsource/oswald/files/oswald-latin-700-normal.woff2',
+    'comic sans ms':     'https://cdn.jsdelivr.net/npm/@fontsource/comic-neue/files/comic-neue-latin-400-normal.woff2'
 };
 
-window.appState = appState; // Exponer a módulos
+let shared; 
 
+// 1. INICIALIZACIÓN
+export function initPlayer(dependencies) {
+    shared = dependencies;
 
-const DOM = {
-    preloader: document.getElementById('preloader'),
-    pageWrapper: document.querySelector('.page-wrapper'),
-    header: document.querySelector('.main-header'),
-    heroSection: document.getElementById('hero-section'),
-    carouselContainer: document.getElementById('carousel-container'),
-    gridContainer: document.getElementById('full-grid-container'),
-    myListContainer: document.getElementById('my-list-container'),
-    historyContainer: document.getElementById('history-container'),
-    
-    // --- SECCIÓN RESEÑAS ---
-    reviewsContainer: document.getElementById('reviews-container'),
-    reviewsGrid: document.getElementById('reviews-grid'),
-    reviewModal: document.getElementById('review-form-modal'),
-    reviewForm: document.getElementById('review-submission-form'),
-    openReviewBtn: document.getElementById('open-review-modal-btn'),
-
-    detailsModal: document.getElementById('details-modal'),
-    cinemaModal: document.getElementById('cinema'),
-    rouletteModal: document.getElementById('roulette-modal'),
-    seriesPlayerModal: document.getElementById('series-player-page'),
-    authModal: document.getElementById('auth-modal'),
-    confirmationModal: document.getElementById('confirmation-modal'),
-    searchInput: document.getElementById('search-input'),
-    filterControls: document.getElementById('filter-controls'),
-    
-    // --- FILTROS ---
-    genreFilter: document.getElementById('genre-filter'),
-    langFilter: document.getElementById('lang-filter'),
-    sortBy: document.getElementById('sort-by'),
-    ucmSortButtonsContainer: document.getElementById('ucm-sort-buttons'),
-    ucmSortButtons: document.querySelectorAll('.sort-btn'),
-    
-    // --- AUTH ---
-    authButtons: document.getElementById('auth-buttons'),
-    loginBtnHeader: document.getElementById('login-btn-header'),
-    registerBtnHeader: document.getElementById('register-btn-header'),
-    loginForm: document.getElementById('login-form'),
-    registerForm: document.getElementById('register-form'),
-    switchAuthModeLink: document.getElementById('switch-auth-mode'),
-    loginError: document.getElementById('login-error'),
-    registerError: document.getElementById('register-error'),
-    registerUsernameInput: document.getElementById('register-username'),
-    registerEmailInput: document.getElementById('register-email'),
-    registerPasswordInput: document.getElementById('register-password'),
-    loginEmailInput: document.getElementById('login-email'),
-    loginPasswordInput: document.getElementById('login-password'),
-    
-    // --- PERFIL ---
-    userProfileContainer: document.getElementById('user-profile-container'),
-    userGreetingBtn: document.getElementById('user-greeting'),
-    userMenuDropdown: document.getElementById('user-menu-dropdown'),
-    myListNavLink: document.getElementById('my-list-nav-link'),
-    historyNavLink: document.getElementById('history-nav-link'),
-    profileUsername: document.getElementById('profile-username'),
-    profileEmail: document.getElementById('profile-email'),
-    settingsUsernameInput: document.getElementById('settings-username-input'),
-    updateUsernameBtn: document.getElementById('update-username-btn'),
-    settingsPasswordInput: document.getElementById('settings-password-input'),
-    updatePasswordBtn: document.getElementById('update-password-btn'),
-    settingsFeedback: document.getElementById('settings-feedback'),
-    confirmDeleteBtn: document.getElementById('confirm-delete-btn'),
-    cancelDeleteBtn: document.getElementById('cancel-delete-btn'),
-    
-    // --- MÓVIL ---
-    hamburgerBtn: document.getElementById('menu-toggle'),
-    mobileNavPanel: document.getElementById('mobile-nav-panel'),
-    closeNavBtn: document.querySelector('.close-nav-btn'),
-    menuOverlay: document.getElementById('menu-overlay')
-};
-
-firebase.initializeApp(firebaseConfig);
-const auth = firebase.auth();
-const db = firebase.database();
-
-// ===========================================================
-// 2. INICIO Y CARGA DE DATOS (🆕 MEJORADO CON CACHÉ)
-// ===========================================================
-document.addEventListener('DOMContentLoaded', () => {
-    const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.has('force_update')) {
-        const preloader = document.getElementById('preloader');
-        if (preloader) {
-            preloader.innerHTML = `
-                <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;">
-                    <div class="spinner" style="margin-bottom: 20px;"></div>
-                    <h2 class="loading-text" style="font-size: 2rem; color: var(--text-light); margin: 0;">REFRESCANDO CONTENIDO</h2>
-                    <p style="color: var(--text-muted); margin-top: 10px; font-size: 1.1rem;">Aplicando la última versión...</p>
-                </div>
-            `;
+    // ✅ Cierra el reproductor al navegar desde el header
+    document.addEventListener('click', (e) => {
+        if (e.target.closest('.main-nav a, .nav-link, .logo, .header-logo')) {
+            const page = document.getElementById('series-player-page');
+            if (page && page.classList.contains('active')) {
+                closeSeriesPlayerModal();
+            }
         }
-        const newUrl = window.location.pathname;
-        window.history.replaceState({}, document.title, newUrl);
+    });
+}
+
+// ===========================================================
+// 🛠️ CLASE CINEPLAYER (Artplayer + artplayer-plugin-ass)
+// ===========================================================
+function isDriveId(id) {
+    // Google Drive IDs: empiezan con '1' y tienen >= 25 chars alfanuméricos
+    return typeof id === 'string' && id.startsWith('1') && id.length >= 25 && /^[A-Za-z0-9_-]+$/.test(id);
+}
+
+function buildWorkerUrl(type, driveId) {
+    if (!driveId) return null;
+    return `${WORKER_URL}/?id=${driveId}&type=${type}`;
+}
+
+function buildErrorHTML(message = "No se pudo cargar el video.") {
+    return `
+      <div class="player-error" style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; color:white; background:#000;">
+        <i class="fas fa-exclamation-circle" style="font-size: 40px; color: #e50914; margin-bottom: 15px;"></i>
+        <p style="font-weight: bold; font-size: 18px; margin-bottom: 5px;">Error de reproducción</p>
+        <p style="color: #aaa; margin-bottom: 15px;">${message}</p>
+        <button onclick="location.reload()" style="background:#e50914; border:none; padding:8px 16px; color:white; border-radius:5px; cursor:pointer;">Reintentar</button>
+      </div>`;
+}
+
+function destroyPrevious(container) {
+    if (container._artInstance) {
+        // destroy(false) = no borra el nodo del DOM, solo limpia Artplayer.
+        // El canvas de artplayer-plugin-ass se destruye automáticamente aquí.
+        container._artInstance.destroy(false);
+        container._artInstance = null;
+    }
+    // Limpiar referencia al plugin (ya fue destruido por art.destroy() arriba)
+    container._assPluginRef = null;
+}
+
+class CinePlayer {
+    constructor(containerSelector, options = {}) {
+        this.container = typeof containerSelector === "string"
+            ? document.querySelector(containerSelector)
+            : containerSelector;
+        if (!this.container) throw new Error(`[CinePlayer] Contenedor no encontrado: ${containerSelector}`);
+        
+        this.container.classList.add("cine-player-wrapper");
+        this.options = options;
+        this.art      = null;
+        this._assPlugin = null;  // Referencia al plugin activo (para cambio de tracks)
+        // Contador anti-race: incrementar cancela cualquier _mountAssPlugin en vuelo
+        this._mountId = 0;
     }
 
-    cacheManager = new CacheManager();
-    lazyLoader = new LazyImageLoader();
-    
-    modalManager = ModalManager;
-    contentManager = ContentManager;
+    // ===========================================================
+    // 🎯 REGLAS DE SUBTÍTULOS:
+    //   subType === 'srt' → Ruta Liviana: art.subtitle.url nativo
+    //                       Sin canvas/WASM. Ideal para móviles.
+    //   subType === 'ass' → Ruta Avanzada: artplayer-plugin-ass (assjs)
+    //                       Canvas puro, sin WASM. Typesetting complejo.
+    //   !subId            → Sin subtítulos.
+    // ===========================================================
+    async load({ videoId, subId = null, subType = null, title = "", poster = "" }) {
+        destroyPrevious(this.container);
+        this.container.innerHTML = "";
 
-    // Parchear ModalManager.closeAll para destruir instancias de Artplayer y timers
-    const _originalCloseAll = ModalManager.closeAll.bind(ModalManager);
-    ModalManager.closeAll = () => {
-        if (appState?.player?.movieHistoryTimer) {
-            clearTimeout(appState.player.movieHistoryTimer);
-            appState.player.movieHistoryTimer = null;
+        if (!videoId) {
+            this.showError("ID de video no proporcionado.");
+            return;
         }
-        // 🔥 NUEVO: Destruir el reproductor si está activo
-        if (appState?.player?.activeCineInstance) {
-            appState.player.activeCineInstance.destroy();
-            appState.player.activeCineInstance = null;
+
+        if (!isDriveId(videoId)) {
+            this._mountIframeFallback(videoId);
+            return;
         }
-        _originalCloseAll();
-    };
 
-    updateThemeAssets();
-    fetchInitialDataWithCache();
-    checkResetPasswordMode();
+        const videoUrl = buildWorkerUrl("video", videoId);
+        const subUrl   = subId ? buildWorkerUrl("sub", subId) : null;
 
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
-    document.addEventListener('mozfullscreenchange', handleFullscreenChange);
-    document.addEventListener('msfullscreenchange', handleFullscreenChange);
+        const resolvedSubType = subUrl
+            ? (ContentManager.getSubtitleConfig({ subId, subType }).subType)
+            : null;
 
-    const cinemaEl = document.getElementById('cinema');
-    if (cinemaEl) {
-        new MutationObserver(async mutations => {
-            for (const m of mutations) {
-                if (m.type === 'attributes' && m.attributeName === 'class' && cinemaEl.classList.contains('show')) {
-                    const titleEl = cinemaEl.querySelector('#cinema-title');
-                    const contentTitle = titleEl?.textContent || '';
-                    const contentId = cinemaEl.dataset.contentId || '';
-                    const controls = cinemaEl.querySelector('.cinema-controls');
-                    if (controls && contentTitle) {
-                        const reports = await getReportsModule();
-                        reports.injectReportButtonInCinema(contentId, contentTitle);
+        const available = await this._pingWorker(videoUrl);
+        if (!available) {
+            this.showError("El servidor de video no está disponible. Intenta más tarde.");
+            return;
+        }
+
+        const artConfig = {
+            container: this.container,
+            url:       videoUrl,
+            type:      'mp4',
+            title,
+            poster,
+            theme:       '#e50914',
+            volume:      1,
+            autoplay:    false,
+            pip:         true,
+            autoSize:    true,
+            autoHeight:  true,
+            fastForward: true,
+            backdrop:    true,
+            lock:        true,
+            autoMini:    false,
+            autoPlayback:    true,
+            miniProgressBar: true,
+            autoOrientation: true,
+            screenshot:      false,
+            hotkey:          true,
+            mutex:           true,
+            fullscreen:      true,
+            fullscreenWeb:   true,
+            lang: navigator.language.toLocaleLowerCase() || "es",
+            moreVideoAttr: { 
+                playsinline: true, 
+                preload:     "metadata",
+                crossOrigin: "anonymous",
+            },
+
+            // 🟢 RUTA LIVIANA (SRT): Motor nativo de ArtPlayer, sin canvas extra
+            ...(resolvedSubType === 'srt' && subUrl ? {
+                subtitle: {
+                    url:      subUrl,
+                    type:     'srt',
+                    encoding: 'utf-8',
+                    escape:   false,
+                    style: {
+                        color:      '#ffffff',
+                        fontSize:   '20px',
+                        textShadow: '1px 1px 3px rgba(0,0,0,0.8)',
                     }
                 }
-            }
-        }).observe(cinemaEl, { attributes: true });
-    }
+            } : {}),
 
-    const seriesModal = document.getElementById('series-player-page');
-    if (seriesModal) {
-        new MutationObserver(async mutations => {
-            for (const m of mutations) {
-                if (m.type !== 'attributes' || m.attributeName !== 'class') continue;
-                if (seriesModal.classList.contains('show')) {
-                    const rptMod = await getReportsModule();
-                    setTimeout(() => rptMod.syncSeriesReportButton(), 400);
+            // 🔴 RUTA AVANZADA (ASS): artplayer-plugin-ass se monta en el evento 'ready'
+            //    NO se pasa nada en artConfig.plugins aquí; el plugin se agrega
+            //    dinámicamente para poder hacer detección de CORS previa.
+
+            // 🛠️ PANEL DE AJUSTES
+            setting:  true,
+            settings: [
+                {
+                    width:   260,
+                    html:    'Velocidad',
+                    tooltip: '1.0x',
+                    name:    'playbackRate',
+                    icon:    '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
+                    selector: [
+                        { url: '0.5',  html: '0.5x' },
+                        { url: '0.75', html: '0.75x' },
+                        { default: true, url: '1.0', html: 'Normal' },
+                        { url: '1.25', html: '1.25x' },
+                        { url: '1.5',  html: '1.5x'  },
+                        { url: '2.0',  html: '2.0x'  },
+                    ],
+                    onSelect: function (item) {
+                        this.playbackRate = parseFloat(item.url);
+                        return item.html;
+                    },
+                },
+                {
+                    width:   260,
+                    html:    'Relación de Aspecto',
+                    name:    'aspectRatio',
+                    selector: [
+                        { default: true, html: 'Default', url: 'default' },
+                        { html: '16:9',  url: '16:9' },
+                        { html: '4:3',   url: '4:3'  },
+                    ],
+                    onSelect: function (item) {
+                        this.aspectRatio = item.url;
+                        return item.html;
+                    },
+                },
+
+                // 📝 TAMAÑO DE SUBTÍTULOS — solo para ruta SRT (nativa)
+                // En ASS el tamaño viene definido en el .ass y escala con resampling
+                ...(resolvedSubType === 'srt' && subUrl ? [{
+                    width:   260,
+                    html:    'Tamaño Subtítulos',
+                    tooltip: 'Mediano',
+                    name:    'subtitleSize',
+                    icon:    '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>',
+                    selector: [
+                        { url: '14px', html: 'Pequeño'  },
+                        { url: '18px', html: 'Mediano', default: true },
+                        { url: '24px', html: 'Grande'   },
+                        { url: '30px', html: 'Extra'    },
+                    ],
+                    onSelect: function (item) {
+                        this.subtitle.style({ fontSize: item.url });
+                        return item.html;
+                    },
+                }] : []),
+            ],
+
+            // 🎨 Menú click derecho personalizado
+            contextmenu: [
+                {
+                    html:  'Cine Corneta Player',
+                    click: function (contextmenu) {
+                        console.info('Reproductor oficial');
+                        contextmenu.show = false;
+                    },
                 }
-            }
-        }).observe(seriesModal, { attributes: true });
+            ],
 
-        seriesModal.addEventListener('click', async e => {
-            const isNavBtn   = e.target.closest('.episode-nav-btn');
-            const isEpisode  = e.target.closest('.episode-card, .episode-item, [data-episode]');
-            if (isNavBtn || isEpisode) {
-                const rptMod = await getReportsModule();
-                setTimeout(() => rptMod.syncSeriesReportButton(), 350);
+            ...this.options,
+        };
+
+        const art = new Artplayer(artConfig);
+        this.art = art;
+        this.container._artInstance = art;
+
+        // ─── Montar subtítulos según tipo ────────────────────────
+        if (subUrl) {
+            if (resolvedSubType === 'srt') {
+                // 🟢 RUTA LIVIANA: motor nativo ya configurado en artConfig.subtitle
+                art.on('ready', () => {
+                    art.subtitle.show = true;
+                    art.subtitle.style({
+                        color:      '#ffffff',
+                        fontSize:   '18px',
+                        textShadow: '1px 1px 3px rgba(0,0,0,0.9)',
+                    });
+                });
+            } else {
+                // 🔴 RUTA AVANZADA (ASS): montar artplayer-plugin-ass tras inicializar
+                art.on('ready', () => this._mountAssPlugin(subUrl));
             }
-        });
+        }
+
+        // ─── Manejo de errores del reproductor ──────────────────
+// Artplayer emite el evento "error" con el Event nativo del <video>,
+// no con un objeto Error. err.target.error es el MediaError del browser.
+// Códigos MediaError:
+//   1 = MEDIA_ERR_ABORTED    → usuario canceló, ignorar
+//   2 = MEDIA_ERR_NETWORK    → error de red transitorio, no destruir el player
+//   3 = MEDIA_ERR_DECODE     → codec no soportado o archivo corrupto
+//   4 = MEDIA_ERR_SRC_NOT_SUPPORTED → formato/URL inválida, sí es fatal
+art.on("error", (err) => {
+    const mediaError = err?.target?.error ?? err?.error ?? null;
+    const code       = mediaError?.code ?? 0;
+
+    // Código 1: el usuario abortó la carga (p.ej. cambió de episodio)
+    // Código 2: error de red transitorio — Artplayer reintenta solo
+    // Ambos son no-fatales: solo logear, NO destruir el player.
+    if (code === 1 || code === 2) {
+        console.warn(`[CinePlayer] Error no fatal (MediaError code ${code}):`, mediaError?.message ?? err);
+        return;
     }
+
+    // Códigos 3 y 4 son fatales: mostrar error al usuario.
+    // También cubrimos el caso raro donde no hay MediaError (code === 0).
+    console.error(`[CinePlayer] Error fatal (MediaError code ${code}):`, err);
+
+    const msg = code === 4
+        ? "Formato de video no soportado por este navegador."
+        : code === 3
+        ? "Error al decodificar el video. El archivo puede estar corrupto."
+        : "Ocurrió un error al reproducir. Intenta de nuevo.";
+
+    this.showError(msg);
 });
 
-function preloadImage(url) {
-    return new Promise((resolve) => {
-        if (!url) { resolve(); return; }
-        const img = new Image();
-        img.src = url;
-        img.onload = () => resolve();
-        img.onerror = () => resolve(); 
-    });
-}
+        // ─── ResizeObserver para mantener proporciones ───────────
+        this._observeResize();
 
-async function fetchInitialDataWithCache() {
-    const cores = navigator.hardwareConcurrency || 4; 
-    if (cores <= 4) {
-        console.log(`💻 Hardware modesto detectado (${cores} núcleos): Activando Modo Rendimiento.`);
-        document.body.classList.add('low-spec');
-    } else {
-        console.log(`🚀 Hardware potente detectado (${cores} núcleos): Gráficos en Ultra.`);
-        document.body.classList.remove('low-spec');
-    }
-
-    const startLoadTime = Date.now();
-
-    if (typeof db !== 'undefined') {
-        const updatesRef = db.ref('system_metadata/last_update');
-        updatesRef.on('value', (snapshot) => {
-            const serverLastUpdate = Number(snapshot.val()); 
-            const localRaw = localStorage.getItem('local_last_update');
-            const localLastUpdate = localRaw ? Number(localRaw) : 0;
-
-            if (serverLastUpdate > localLastUpdate) {
-                const isWatching = document.body.classList.contains('modal-open');
-
-                if (isWatching) {
-                    localStorage.setItem('pending_reload', 'true');
-                    localStorage.setItem('local_last_update', serverLastUpdate);
-                    refreshDataInBackground(); 
-                } else {
-                    safeClearStorage();
-                    localStorage.setItem('local_last_update', serverLastUpdate);
-                    
-                    const url = new URL(window.location.href);
-                    url.searchParams.set('force_update', Date.now());
-                    window.location.href = url.toString();
-                }
-            } 
-            else if (serverLastUpdate && localLastUpdate === 0) {
-                localStorage.setItem('local_last_update', serverLastUpdate);
-            }
-        });
-    }
-
-    const processData = (data) => {
-        window.processDataPublic = processData; 
-        appState.content.movies = data.allMovies || {};
-        appState.content.series = data.series || {};
-        appState.content.seriesEpisodes = data.episodes || {};
-        appState.content.seasonPosters = data.posters || {};
-        
-        appState.content.seasonOrder = {};
-
-        function smartSeasonSort(keys, postersData) {
-            if (postersData) {
-                const withOrder = keys.filter(k => postersData[k]?.orden !== undefined && postersData[k]?.orden !== '');
-                if (withOrder.length > 0) {
-                    return keys.slice().sort((a, b) => {
-                        const oA = postersData[a]?.orden !== undefined && postersData[a]?.orden !== '' ? Number(postersData[a].orden) : 999;
-                        const oB = postersData[b]?.orden !== undefined && postersData[b]?.orden !== '' ? Number(postersData[b].orden) : 999;
-                        return oA - oB;
-                    });
-                }
-            }
-            const nonNumeric = keys.filter(k => isNaN(k));
-            const numeric = keys.filter(k => !isNaN(k)).sort((a, b) => Number(a) - Number(b));
-            return [...nonNumeric, ...numeric];
-        }
-
-        for (const seriesId in data.episodes) {
-            const seasons = data.episodes[seriesId];
-            const postersData = data.posters?.[seriesId];
-            appState.content.seasonOrder[seriesId] = smartSeasonSort(Object.keys(seasons), postersData);
-        }
-
-        for (const seriesId in data.posters) {
-            const posterSeasons = Object.keys(data.posters[seriesId]);
-            const postersData = data.posters[seriesId];
-            if (appState.content.seasonOrder[seriesId]) {
-                posterSeasons.forEach(key => {
-                    if (!appState.content.seasonOrder[seriesId].includes(key)) {
-                        appState.content.seasonOrder[seriesId].push(key);
-                    }
-                });
-                appState.content.seasonOrder[seriesId] = smartSeasonSort(appState.content.seasonOrder[seriesId], postersData);
+        // ─── Bloqueo de orientación en pantalla completa (móvil) ─
+        art.on('fullscreen', (isFullscreen) => {
+            if (!window.screen?.orientation?.lock) return;
+            if (isFullscreen) {
+                screen.orientation.lock('landscape').catch(() => {});
             } else {
-                appState.content.seasonOrder[seriesId] = smartSeasonSort(posterSeasons, postersData);
+                screen.orientation.unlock();
             }
-        }
-        
-        appState.content.sagasList = Object.values(data.sagas_list || {});
-        
-        if (appState.content.sagasList.length > 0) {
-            appState.content.sagasList.forEach(saga => {
-                if (data[saga.id]) {
-                    appState.content.sagas[saga.id] = data[saga.id];
-                }
-            });
-        }
-    };
-
-    const setupAndShow = async (movieMeta, seriesMeta) => {
-        appState.content.metadata.movies = movieMeta || {};
-        appState.content.metadata.series = seriesMeta || {};
-
-        setupHero();
-        generateCarousels();
-        setupEventListeners();
-        setupNavigation();
-        setupAuthListeners();
-        setupSearch();
-        setupPageVisibilityHandler();
-
-        const activeFilter = document.querySelector('.main-nav a.active, .mobile-nav a.active')?.dataset.filter || 'all';
-        const isSaga = appState.content.sagas[activeFilter];
-
-        if (['movie', 'series'].includes(activeFilter) || isSaga) {
-            applyAndDisplayFilters(activeFilter);
-        } else if (activeFilter === 'sagas') {
-            switchView('sagas');
-        }
-
-        const timeElapsed = Date.now() - startLoadTime;
-        const remainingTime = Math.max(0, 800 - timeElapsed);
-        await new Promise(r => setTimeout(r, remainingTime));
-
-        requestAnimationFrame(() => {
-            if (DOM.pageWrapper) DOM.pageWrapper.style.display = 'block';
-            setTimeout(() => {
-                if (DOM.pageWrapper) DOM.pageWrapper.classList.add('visible'); 
-                if (DOM.preloader) DOM.preloader.classList.add('fade-out');
-            }, 50);
-            setTimeout(() => { if(DOM.preloader) DOM.preloader.remove(); }, 800); 
         });
-    };
 
-    const cachedContent = cacheManager.get(cacheManager.keys.content);
-    const cachedMetadata = cacheManager.get(cacheManager.keys.metadata);
-
-    if (cachedContent) {
-        console.log('✓ Iniciando desde caché...');
-        processData(cachedContent);
-        await getReviewsModule();
-        await setupAndShow(cachedMetadata?.movies, cachedMetadata?.series);
-        refreshDataInBackground(); 
-        
-        const user = auth.currentUser;
-        if (user) {
-            db.ref(`users/${user.uid}/history`).orderByChild('viewedAt').once('value', snapshot => {
-                if (snapshot.exists()) generateContinueWatchingCarousel(snapshot);
-            });
-        }
-    } else {
-        try {
-            console.log('⟳ Descargando base de datos completa...');
-            const [series, episodes, allMovies, posters, sagasListData, movieMeta, seriesMeta] = await Promise.all([
-                ErrorHandler.fetchOperation(`${API_URL.BASE_URL}?data=series`),
-                ErrorHandler.fetchOperation(`${API_URL.BASE_URL}?data=episodes`),
-                ErrorHandler.fetchOperation(`${API_URL.BASE_URL}?data=allMovies&order=desc`),
-                ErrorHandler.fetchOperation(`${API_URL.BASE_URL}?data=PostersTemporadas`),
-                ErrorHandler.fetchOperation(`${API_URL.BASE_URL}?data=sagas_list`),
-                db.ref('movie_metadata').once('value').then(s => s.val() || {}),
-                db.ref('series_metadata').once('value').then(s => s.val() || {})
-            ]);
-
-            const sagasArray = Object.values(sagasListData || {});
-            const sagasRequests = sagasArray.map(saga => 
-                ErrorHandler.fetchOperation(`${API_URL.BASE_URL}?data=${saga.id}`)
-                .then(data => ({ id: saga.id, data: data }))
-            );
-
-            const sagasResults = await Promise.all(sagasRequests);
-
-            const freshContent = { 
-                allMovies, series, episodes, posters, 
-                sagas_list: sagasListData 
-            };
-
-            sagasResults.forEach(item => {
-                freshContent[item.id] = item.data;
-            });
-            
-            const freshMetadata = { movies: movieMeta, series: seriesMeta };
-
-            processData(freshContent);
-            cacheManager.set(cacheManager.keys.content, freshContent);
-            cacheManager.set(cacheManager.keys.metadata, freshMetadata);
-            
-            await getReviewsModule();
-            
-            if (!localStorage.getItem('local_last_update')) {
-                localStorage.setItem('local_last_update', Date.now());
-            }
-
-            await setupAndShow(freshMetadata.movies, freshMetadata.series);
-            
-            const user = auth.currentUser;
-            if (user) {
-                db.ref(`users/${user.uid}/history`).orderByChild('viewedAt').once('value', snapshot => {
-                    if (snapshot.exists()) generateContinueWatchingCarousel(snapshot);
-                });
-            }
-
-        } catch (error) {
-            console.error('✗ Error crítico en carga inicial:', error);
-            if (DOM.preloader) DOM.preloader.innerHTML = `
-                <div style="text-align: center; color: white;">
-                    <p>Error de conexión</p>
-                    <button onclick="location.reload()" class="btn-primary" style="margin-top:10px;">Reintentar</button>
-                </div>`;
-        }
+        return art;
     }
-}
 
-async function refreshDataInBackground() {
+    // ===========================================================
+    // 🎯 _mountAssPlugin: Carga artplayer-plugin-ass dinámicamente
+    //
+    //   Flujo:
+    //     1. Cargar módulo ESM (cacheado globalmente con _assPluginModule)
+    //     2. Fetch del .ass con detección proactiva de CORS / errores del Worker
+    //     3. Parsear fuentes del archivo → mapear a CDN URLs
+    //     4. Crear Blob URL del contenido (evita CORS en el Canvas renderer)
+    //     5. Montar plugin en art.plugins → agrega canvas overlay automáticamente
+    //     6. Revocar Blob URL tras carga (15s = tiempo suficiente para assjs)
+    // ===========================================================
+    async _mountAssPlugin(subUrl) {
+    const myId = ++this._mountId;
+
+    const ArtplayerPluginAss = await this._loadAssPlugin();
+    if (myId !== this._mountId || !ArtplayerPluginAss || !this.art) return;
+
+    const assContent = await this._fetchAssContent(subUrl);
+    if (myId !== this._mountId) return;
+
+    if (!assContent) {
+        console.warn('[CinePlayer] Subtítulos .ass no disponibles — reproductor continúa sin subs.');
+        return;
+    }
+
+    const { fontUrls, availableFonts } = this._extractFontsFromAss(assContent);
+
+    const blobUrl = URL.createObjectURL(
+        new Blob([assContent], { type: 'text/plain; charset=utf-8' })
+    );
+
     try {
-        const [series, episodes, allMovies, posters, sagasListData] = await Promise.all([
-            ErrorHandler.fetchOperation(`${API_URL.BASE_URL}?data=series`),
-            ErrorHandler.fetchOperation(`${API_URL.BASE_URL}?data=episodes`),
-            ErrorHandler.fetchOperation(`${API_URL.BASE_URL}?data=allMovies&order=desc`),
-            ErrorHandler.fetchOperation(`${API_URL.BASE_URL}?data=PostersTemporadas`),
-            ErrorHandler.fetchOperation(`${API_URL.BASE_URL}?data=sagas_list`)
-        ]);
+    // Arimo como fuente base: siempre disponible antes del primer frame
+    const EAGER_FALLBACK = 'https://cdn.jsdelivr.net/npm/@fontsource/arimo/files/arimo-latin-400-normal.woff2';
 
-        const sagasArray = Object.values(sagasListData || {});
-        const sagasRequests = sagasArray.map(saga => 
-            ErrorHandler.fetchOperation(`${API_URL.BASE_URL}?data=${saga.id}`)
-            .then(data => ({ id: saga.id, data: data }))
-        );
+    const pluginInit = ArtplayerPluginAss({
+        subUrl: blobUrl,
 
-        const sagasResults = await Promise.all(sagasRequests);
+        // ✅ fonts[]: TTF eagerly preloaded → al menos 1 fuente en VFS desde frame 0
+        fonts: [EAGER_FALLBACK, ...fontUrls],
 
-        const freshContent = { 
-            allMovies, series, episodes, posters, 
-            sagas_list: sagasListData 
-        };
+        // ✅ availableFonts: on-demand aliasing (clave lowercase, correcta)
+        availableFonts,
 
-        sagasResults.forEach(item => {
-            freshContent[item.id] = item.data;
-        });
+        // ✅ fallbackFont SÍ es opción válida de artplayer-plugin-jassub,
+        //    pero NECESITA ser TTF, no woff2 — el bug original era el formato, no el nombre
+        fallbackFont: EAGER_FALLBACK,
 
-        cacheManager.set(cacheManager.keys.content, freshContent);
-        console.log('✓ Caché actualizada en segundo plano (Sagas Dinámicas)');
-    } catch (e) { console.warn('No se pudo actualizar background', e); }
-}
-
-// ===========================================================
-// 3. NAVEGACIÓN Y MANEJO DE VISTAS
-// ===========================================================
-function setupNavigation() {
-    const navContainers = document.querySelectorAll('.main-nav ul, .mobile-nav ul, .bottom-nav, #profile-hub-container, .header-right');
-    
-    navContainers.forEach(container => {
-        if (container) { 
-            container.addEventListener('click', handleFilterClick);
-        }
+        workerUrl:         '/cinecorentatesteos/assests/js/jassub-worker.js',
+        wasmUrl:           '/cinecorentatesteos/assests/js/jassub-worker.wasm',
+        legacyWasmUrl:     '/cinecorentatesteos/assests/js/jassub-worker-legacy.js',
+        libassMemoryLimit: 40,
+        prescaleFactor:    0.8,
+        dropAllAnimations: false,
+        offscreenRender:   false,
     });
-    
-    const openMenu = () => { 
-        if (DOM.mobileNavPanel) DOM.mobileNavPanel.classList.add('is-open'); 
-        if (DOM.menuOverlay) DOM.menuOverlay.classList.add('active'); 
-    };
-    const closeMenu = () => { 
-        if (DOM.mobileNavPanel) DOM.mobileNavPanel.classList.remove('is-open'); 
-        if (DOM.menuOverlay) DOM.menuOverlay.classList.remove('active'); 
-    };
 
-    if (DOM.hamburgerBtn) DOM.hamburgerBtn.addEventListener('click', openMenu);
-    if (DOM.closeNavBtn) DOM.closeNavBtn.addEventListener('click', closeMenu);
-    if (DOM.menuOverlay) DOM.menuOverlay.addEventListener('click', closeMenu);
-}
+        this._assPlugin = pluginInit(this.art);
+        this.container._assPluginRef = this._assPlugin;
+        console.log('[CinePlayer] Plugin ass montado:', this._assPlugin);
 
-async function handleFilterClick(event) {
-    const link = event.target.closest('a');
-    if (!link || !link.dataset.filter) return;
-
-    event.preventDefault();
-
-    if (DOM.mobileNavPanel) DOM.mobileNavPanel.classList.remove('is-open');
-    if (DOM.menuOverlay) DOM.menuOverlay.classList.remove('active');
-    if (DOM.userMenuDropdown) DOM.userMenuDropdown.classList.remove('show');
-
-    const filter = link.dataset.filter;
-
-    if (filter === 'roulette') {
-        const roulette = await getRouletteModule();
-        roulette.openRouletteModal();
+    } catch (err) {
+        console.error('[CinePlayer] Error al inicializar artplayer-plugin-jassub:', err);
+        URL.revokeObjectURL(blobUrl);
         return;
     }
 
-    if (link.classList.contains('active') && !['history', 'my-list', 'profile', 'profile-hub', 'settings'].includes(filter)) return;
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
+    }
 
-    document.querySelectorAll('a[data-filter]').forEach(l => l.classList.remove('active'));
-    document.querySelectorAll(`a[data-filter="${filter}"]`).forEach(l => l.classList.add('active'));
+    // ===========================================================
+    // 🔌 _loadAssPlugin: Carga dinámica del módulo ESM con cache
+    //
+    //   Técnica "blob import":
+    //     1. fetch() del .js remoto
+    //     2. Crear Blob URL del mismo origen
+    //     3. dynamic import() del blob (evita error "not a module" en algunos browsers)
+    //     4. Revocar blob inmediatamente (el módulo ya está en memoria del engine)
+    //     5. Cachear en _assPluginModule → todos los episodios usan la misma instancia
+    // ===========================================================
+    async _loadAssPlugin() {
+    if (_assPluginModule) return _assPluginModule;
+    if (_assPluginLoadPromise) return _assPluginLoadPromise;
 
-    if (DOM.searchInput) DOM.searchInput.value = '';
-    switchView(filter);
-}
+    _assPluginLoadPromise = new Promise((resolve) => {
+        // Script tag: los navegadores cargan scripts cross-origin
+        // sin restricción CORS, a diferencia de fetch().
+        // El build UMD expone window.artplayerPluginJassub como global.
+        const existing = document.querySelector(`script[src="${ASS_PLUGIN_CDN}"]`);
+        if (existing) {
+            // Ya fue inyectado antes (cambio de episodio rápido)
+            _assPluginModule = window.artplayerPluginJassub ?? null;
+            resolve(_assPluginModule);
+            return;
+        }
 
-function updateActiveNav(filter) {
-    if (filter === 'roulette') return;
+        const script = document.createElement('script');
+        script.src   = ASS_PLUGIN_CDN;
+        script.async = true;
 
-    document.querySelectorAll('a[data-filter]').forEach(link => {
-        link.classList.remove('active');
+        script.onload = () => {
+            _assPluginModule = window.artplayerPluginJassub ?? null;
+            if (!_assPluginModule) {
+            console.error('[CinePlayer] artplayer-plugin-jassub cargó pero no expuso window.artplayerPluginJassub');
+        }
+         resolve(_assPluginModule);
+        };
+
+        script.onerror = () => {
+            console.error('[CinePlayer] No se pudo cargar artplayer-plugin-jassub (self-hosted).');
+            _assPluginLoadPromise = null; // Permite reintento en el próximo episodio
+            resolve(null);
+        };
+
+        document.head.appendChild(script);
     });
-    
-    if (filter) {
-        const selector = `a[data-filter="${filter}"]`;
-        document.querySelectorAll(selector).forEach(link => link.classList.add('active'));
+
+    return _assPluginLoadPromise;
+}
+
+    // ===========================================================
+    // 🔍 _fetchAssContent: Fetch robusto con detección de errores
+    //
+    //   Detecta y reporta:
+    //     • CORS bloqueado (respuesta opaca / type !== 'cors')
+    //     • HTTP 403/404 del Worker o de Google Drive
+    //     • Worker devuelve HTML (página de error / redirect de auth)
+    //     • Archivo no es .ass válido (sin [Script Info] ni [Events])
+    //     • Error de red (offline, DNS, etc.)
+    //     • Header x-deny-reason del proxy de Cloudflare (red interna)
+    // ===========================================================
+    async _fetchAssContent(subUrl) {
+        try {
+            const resp = await fetch(subUrl, {
+                cache: 'no-store', // Los subs de Drive no se deben cachear con URL vieja
+            });
+
+            // ── CORS: respuesta opaca = el Worker no envía los headers correctos ─
+            if (resp.type === 'opaque') {
+                console.warn(
+                    '[CinePlayer] Subtítulo bloqueado por CORS (respuesta opaca).\n' +
+                    'Verifica que tu Cloudflare Worker incluya:\n' +
+                    "  'Access-Control-Allow-Origin': '*'\n" +
+                    'para requests de type=sub.'
+                );
+                return null;
+            }
+
+            // ── Errores HTTP ─────────────────────────────────────
+            if (!resp.ok) {
+                // x-deny-reason: header personalizado del Worker para diagnóstico
+                const denyReason = resp.headers.get('x-deny-reason') ?? '';
+                const detail     = denyReason ? ` (${denyReason})` : '';
+
+                if      (resp.status === 403) console.warn(`[CinePlayer] .ass denegado por el servidor${detail}. Verifica el permiso del archivo en Drive.`);
+                else if (resp.status === 404) console.warn(`[CinePlayer] .ass no encontrado${detail}. Verifica el ID en tu base de datos.`);
+                else if (resp.status === 429) console.warn(`[CinePlayer] Rate limit del Worker al cargar .ass${detail}. Reintenta en unos segundos.`);
+                else                          console.warn(`[CinePlayer] Error HTTP ${resp.status} al cargar .ass${detail}.`);
+                return null;
+            }
+
+            // ── Content-Type: Worker debe devolver text/plain para subs ────────
+            const ct = resp.headers.get('content-type') ?? '';
+            if (ct.includes('text/html')) {
+                console.warn(
+                    '[CinePlayer] El Worker devolvió HTML en lugar del .ass.\n' +
+                    'Causas probables:\n' +
+                    '  • Google Drive redirigió a página de login (archivo no público)\n' +
+                    '  • El Worker no tiene la ruta /?id=&type=sub implementada\n' +
+                    'Solución: asegúrate de que type=sub fuerza Content-Type: text/plain.'
+                );
+                return null;
+            }
+
+            const text = await resp.text();
+
+            // ── Validar que realmente es un archivo .ass ─────────
+            if (!text.includes('[Script Info]') && !text.includes('[Events]')) {
+                console.warn(
+                    '[CinePlayer] La respuesta no parece ser un archivo .ass válido.\n' +
+                    'Contenido recibido (primeros 200 chars):\n' +
+                    text.slice(0, 200)
+                );
+                return null;
+            }
+
+            return text;
+
+        } catch (err) {
+            // TypeError: "Failed to fetch" → CORS sin cabeceras, red offline, etc.
+            if (err.name === 'TypeError') {
+                console.warn(
+                    '[CinePlayer] Fetch del .ass falló (posible bloqueo CORS o red offline).\n' +
+                    'Error original:', err.message
+                );
+            } else {
+                console.warn('[CinePlayer] Error inesperado al cargar .ass:', err);
+            }
+            return null;
+        }
+    }
+
+    // ===========================================================
+    // 🔤 _extractFontsFromAss: Parsea fuentes del archivo .ass
+    //
+    //   Extrae de dos fuentes:
+    //     1. Sección [V4+ Styles] → campo FontName de cada estilo definido
+    //     2. Override tags inline  → \fn<nombre> dentro de los eventos
+    //
+    //   Luego mapea los nombres a URLs via ANIME_FONT_MAP.
+    //   Las fuentes de sistema (Arial, Impact, etc.) se ignoran (sin URL).
+    //
+    //   Para fuentes propietarias no listadas en ANIME_FONT_MAP:
+    //     → Pasa los Drive IDs en tu data como fontIds: ['1Abc...']
+    //     → El Worker los servirá como /?id=1Abc&type=font
+    //     → Agrégalos manualmente al array: fonts.push(buildWorkerUrl('font', id))
+    // ===========================================================
+    _extractFontsFromAss(assContent) {
+        // Map lowercase → nombre original del .ass (para preservar capitalización exacta)
+        const fontNames     = new Map();
+        const fontUrls      = [];
+        const availableFonts = {};  // { "Trebuchet MS": "https://cdn.../fira-sans.woff2", ... }
+
+        // ── Leer de [V4+ Styles] ─────────────────────────────────
+        // Formato de línea: Style: Name, Fontname, Fontsize, PrimaryColour, ...
+        const stylesBlock = assContent.match(/\[V4\+?\s*Styles\]([\s\S]*?)(?=\n\[|$)/i);
+        if (stylesBlock) {
+            for (const line of stylesBlock[1].split('\n')) {
+                const trimmed = line.trim();
+                if (trimmed.startsWith('Style:')) {
+                    const parts = trimmed.split(',');
+                    // parts[0] = "Style: StyleName"  → ignorar
+                    // parts[1] = FontName
+                    if (parts[1]) {
+                        const original = parts[1].trim();
+                        fontNames.set(original.toLowerCase(), original);
+                    }
+                }
+            }
+        }
+
+        // ── Leer fuentes de override tags inline: {\fnFuente} ────
+        const inlineRe = /\\fn([^\\{}\n]+)/g;
+        let match;
+        while ((match = inlineRe.exec(assContent)) !== null) {
+            const original = match[1].trim();
+            fontNames.set(original.toLowerCase(), original);
+        }
+
+        // ── Mapear nombres a URLs ─────────────────────────────────
+        // CRÍTICO: availableFonts debe usar claves en MINÚSCULA.
+        // JASSUB normaliza el nombre pedido por el .ass a lowercase antes de buscar
+        // en este objeto. Si la clave es "Trebuchet MS" y JASSUB busca "trebuchet ms",
+        // no hay match → "failed to find any fallback".
+        // Los valores deben ser arrays de URLs (string[] según el tipado de JASSUB).
+        for (const [lower, original] of fontNames) {
+            const url = ANIME_FONT_MAP[lower];
+            // url === undefined → fuente desconocida, no bloquear la carga
+            // url === ''        → fuente de sistema, no necesita URL
+            // url es string URL → agregarla
+            if (url && url.length > 0) {
+                // ✅ Clave en minúscula (lower) para que JASSUB la encuentre
+                // ✅ Valor como array [url] según el contrato de JASSUB
+                availableFonts[lower] = [url];
+                // fontUrls se mantiene para preloading eager opcional
+                fontUrls.push(url);
+            }
+        }   
+
+        // Log para debug (visible en DevTools cuando se analizan nuevos títulos)
+        if (fontNames.size > 0) {
+            const mapped    = fontUrls.length;
+            const unmapped  = fontNames.size - mapped;
+            const sysOrMiss = [...fontNames.keys()].filter(n => !ANIME_FONT_MAP[n] || ANIME_FONT_MAP[n] === '');
+            if (unmapped > 0) {
+                console.info(
+                    `[CinePlayer] Fuentes .ass: ${mapped} mapeadas a CDN, ${sysOrMiss.length} de sistema/desconocidas:`,
+                    sysOrMiss
+                );
+            }
+        }
+
+        const FALLBACK_URL = ['https://cdn.jsdelivr.net/npm/@fontsource/arimo/files/arimo-latin-400-normal.woff2'];
+        for (const genericName of ['arial', 'sans-serif', 'helvetica', 'default']) {
+            if (!availableFonts[genericName]) {
+                availableFonts[genericName] = FALLBACK_URL;
+            }
+        }
+
+            return { fontUrls, availableFonts };
+        }
+
+    _mountIframeFallback(videoId) {
+        let src = `https://streamtape.com/e/${videoId}/`;
+        if (/^\d+$/.test(videoId)) src = `https://ok.ru/videoembed/${videoId}?nochat=1`;
+        
+        this.container.innerHTML = `<iframe src="${src}" style="width:100%; height:100%; border:none;" allowfullscreen allow="autoplay; fullscreen; encrypted-media; picture-in-picture"></iframe>`;
+    }
+
+    async _pingWorker(url) {
+        try {
+            const resp = await fetch(url, { method: "HEAD", redirect: "manual" });
+            if (resp.ok || resp.status === 206 || (resp.status >= 300 && resp.status < 400)) return true;
+            if (resp.status === 405 || resp.status === 501) {
+                const r2 = await fetch(url, { redirect: "manual", headers: { Range: 'bytes=0-0' } });
+                return r2.ok || r2.status === 206 || r2.status === 416 || (r2.status >= 300 && r2.status < 400);
+            }
+            return false;
+        } catch {
+            return false;
+        }
+    }
+
+    _observeResize() {
+        if (this._resizeObserver) this._resizeObserver.disconnect();
+        this._resizeObserver = new ResizeObserver(() => { 
+            if (this.art && typeof this.art.resize === 'function') {
+                this.art.resize(); 
+            }
+        });
+        this._resizeObserver.observe(this.container);
+    }
+
+    showError(message) {
+        destroyPrevious(this.container);
+        this.container.innerHTML = buildErrorHTML(message);
+    }
+
+    destroy() {
+        // Incrementar _mountId cancela cualquier _mountAssPlugin pendiente
+        // (el check `myId !== this._mountId` lo detectará y abortará)
+        this._mountId++;
+        this._resizeObserver?.disconnect();
+        this._assPlugin = null;
+        // art.destroy() limpia automáticamente el canvas overlay del plugin
+        destroyPrevious(this.container);
+        this.container.innerHTML = "";
     }
 }
 
-async function switchView(filter) {
-    if (filter === 'roulette') {
-        const roulette = await getRouletteModule();
-        roulette.openRouletteModal();
-        return; 
+
+// ===========================================================
+// 🌐 HELPER: OBTENER TRACKS DE AUDIO DISPONIBLES DINÁMICAMENTE
+// ===========================================================
+function getLangTracks(data) {
+    const rawEn   = data.videoId_en?.trim()  || '';
+    const rawEs   = data.videoId_es?.trim()  || '';
+    const rawJp   = data.videoId_jp?.trim()  || data.videoId_alt?.trim() || '';
+    const rawMain = data.videoId?.trim()     || '';
+
+    const rawLang = (data.language || data.idioma || data.audio || '').trim();
+    const langParts = rawLang
+        .split(/[-;|]/)
+        .map(l => l.trim())
+        .filter(Boolean);
+
+    const SPANISH_LABELS = ['latino', 'español', 'castellano', 'doblado', 'esp'];
+    const isSpanish = l => SPANISH_LABELS.some(s => l.toLowerCase().includes(s));
+
+    const spanishLabel   = langParts.find(l => isSpanish(l)) || 'Latino';
+    const originalLabels = langParts.filter(l => !isSpanish(l));
+
+    const mainIsSpanish = langParts.length > 0 && langParts.every(l => isSpanish(l));
+
+    const tracks = [];
+
+    if (rawEn) {
+        tracks.push({ id: rawEn, lang: 'en', label: originalLabels[0] || 'Original' });
+    } else if (rawMain && !mainIsSpanish && !rawEs) {
+        tracks.push({ id: rawMain, lang: 'en', label: originalLabels[0] || 'Original' });
     }
 
-    console.log(`Switched to: ${filter}`);
-    appState.currentFilter = filter;
-    
-    updateActiveNav(filter);
+    if (rawJp) {
+        tracks.push({ id: rawJp, lang: 'jp', label: originalLabels[1] || 'Alt' });
+    }
 
-    const containers = [
-        document.getElementById('hero-section'),
-        document.getElementById('carousel-container'),
-        document.getElementById('full-grid-container'),
-        document.getElementById('my-list-container'),
-        document.getElementById('history-container'),
-        document.getElementById('profile-container'),
-        document.getElementById('settings-container'),
-        document.getElementById('profile-hub-container'),
-        document.getElementById('sagas-hub-container'),
-        document.getElementById('reviews-container'),
-        document.getElementById('reports-container'),
-        document.getElementById('live-tv-section'),
-        document.getElementById('iptv-section'),
-        document.getElementById('series-player-page')
+    if (rawEs) {
+        tracks.push({ id: rawEs, lang: 'es', label: spanishLabel });
+    } else if (rawMain && mainIsSpanish) {
+        tracks.push({ id: rawMain, lang: 'es', label: spanishLabel });
+    }
+
+    return tracks;
+}
+
+
+function buildLangButtonsHTML(tracks, activeLang, cssClass) {
+    if (tracks.length <= 1) return '';
+    return `<div class="movie-lang-selection">
+        ${tracks.map(t => `
+            <button class="${cssClass} ${t.lang === activeLang ? 'active' : ''}" data-lang="${t.lang}">
+                ${t.label}
+            </button>`).join('')}
+    </div>`;
+}
+
+// 🔥 BUSCADOR INTELIGENTE EN TODAS LAS SAGAS
+function findContentData(id) {
+    const content = shared.appState.content;
+
+    if (content.movies && content.movies[id]) return content.movies[id];
+    if (content.series && content.series[id]) return content.series[id];
+    if (content.ucm    && content.ucm[id])    return content.ucm[id];
+
+    if (content.sagas) {
+        for (const sagaKey in content.sagas) {
+            const sagaData = content.sagas[sagaKey];
+            if (sagaData && sagaData[id]) {
+                return sagaData[id];
+            }
+        }
+    }
+    return null;
+}
+
+function saveProgress(seriesId) {
+    try {
+        let allProgress = JSON.parse(localStorage.getItem('seriesProgress')) || {};
+        if (!allProgress[seriesId]) allProgress[seriesId] = {};
+        const currentState = shared.appState.player.state[seriesId];
+        allProgress[seriesId][currentState.season] = currentState.episodeIndex;
+        localStorage.setItem('seriesProgress', JSON.stringify(allProgress));
+    } catch (e) {
+        logError(e, 'Player: Save Progress', 'warning');
+    }
+}
+
+function loadProgress(seriesId, seasonNum) {
+    try {
+        const allProgress = JSON.parse(localStorage.getItem('seriesProgress'));
+        return allProgress?.[seriesId]?.[seasonNum] || 0;
+    } catch (e) { return 0; }
+}
+
+export function commitAndClearPendingSave() {
+    if (shared.appState.player.pendingHistorySave) {
+        try {
+            shared.addToHistoryIfLoggedIn(
+                shared.appState.player.pendingHistorySave.contentId,
+                shared.appState.player.pendingHistorySave.type,
+                shared.appState.player.pendingHistorySave.episodeInfo
+            );
+        } catch (e) {
+            logError(e, 'Player: History Commit');
+        }
+        shared.appState.player.pendingHistorySave = null;
+    }
+}
+
+function _openSeriesPlayerPage() {
+    const sections = [
+        'hero-section', 'carousel-container', 'full-grid-container',
+        'my-list-container', 'history-container', 'profile-container',
+        'settings-container', 'profile-hub-container', 'sagas-hub-container',
+        'reviews-container', 'reports-container', 'filter-controls',
+        'live-tv-section', 'iptv-section', 
+        'continue-watching-carousel', 'continue-watching-container'
     ];
-
-    containers.forEach(el => { 
-        if(el) el.style.display = 'none'; 
+    sections.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
     });
 
-    const filterControls = document.getElementById('filter-controls');
-    if (filterControls) filterControls.style.display = 'none';
-    document.body.classList.remove('has-saga-bg');
-    document.body.style.removeProperty('--saga-banner');
-
-    const ucmButtons = document.getElementById('ucm-sort-buttons');
-    if (ucmButtons) ucmButtons.style.display = 'none';
-
-    const backSagaBtn = document.getElementById('back-to-sagas-btn');
-    if (backSagaBtn) backSagaBtn.style.display = 'none';
-
-    const liveVideo = document.getElementById('embedded-live-video');
-    if (liveVideo) {
-        liveVideo.pause();
-        liveVideo.removeAttribute('src'); 
-        liveVideo.load();
-    }
-    if (window.hlsLiveInstance) {
-        window.hlsLiveInstance.destroy();
-        window.hlsLiveInstance = null;
-    }
-
-    if (filter === 'all') {
-        if(DOM.heroSection) DOM.heroSection.style.display = 'flex';
-        if(DOM.carouselContainer) DOM.carouselContainer.style.display = 'block';
+    const page = shared.DOM.seriesPlayerModal || document.getElementById('series-player-page');
+    if (!page) {
+        console.error('[Player] #series-player-page no encontrado en el DOM');
         return;
-    } 
+    }
+    shared.DOM.seriesPlayerModal = page;
+
+    page.style.display = 'block';
+    page.classList.add('active');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+export function closeSeriesPlayerModal() {
+    clearTimeout(shared.appState.player.episodeOpenTimer);
+    commitAndClearPendingSave();
+    const page = shared.DOM.seriesPlayerModal;
+    page.classList.remove('active', 'season-grid-view', 'player-layout-view');
+    page.style.display = 'none';
     
-    if (filter === 'sagas') {
-        const hub = document.getElementById('sagas-hub-container');
-        if (hub) {
-            hub.style.display = 'block';
-            getUniversesModule().then(m => m.renderUniversesHub());
-        }
-        return;
+    if (shared.appState.player.activeCineInstance) {
+        shared.appState.player.activeCineInstance.destroy();
+        shared.appState.player.activeCineInstance = null;
     }
 
-    const isDynamicSaga = appState.content.sagas && appState.content.sagas[filter];
+    shared.appState.player.activeSeriesId = null;
+    if (shared.switchView) shared.switchView(shared.appState.currentFilter || 'all');
+}
 
-    if (filter === 'movie' || filter === 'series' || isDynamicSaga) {
-        if(DOM.gridContainer) DOM.gridContainer.style.display = 'block';
-        if(filterControls) filterControls.style.display = 'flex';
-
-        if (isDynamicSaga) {
-            const sagaConfig = appState.content.sagasList.find(s => s.id === filter);
-            if (sagaConfig?.banner) {
-                document.body.style.setProperty('--saga-banner', `url(${sagaConfig.banner})`);
-                document.body.classList.add('has-saga-bg');
-            }
-        }
-
-        const backBtn = document.getElementById('back-to-sagas-btn');
-        if (backBtn) {
-            backBtn.style.display = isDynamicSaga ? 'flex' : 'none';
-            backBtn.onclick = () => switchView('sagas');
-        }
+export async function openSeriesPlayer(seriesId, forceSeasonGrid = false) {
+    try {
+        shared.closeAllModals();
         
-        appState.ui.activeSagaId = isDynamicSaga ? filter : null;
-
-        if (DOM.sortBy) DOM.sortBy.value = 'recent';
-        const sortText = document.getElementById('sort-text');
-        if (sortText) sortText.textContent = 'Recientes';
-        const requestFilterEl = document.getElementById('request-filter');
-        const requestTextEl = document.getElementById('request-text');
-        if (requestFilterEl) requestFilterEl.value = 'all';
-        if (requestTextEl) requestTextEl.textContent = 'Pedidos';
-        populateFilters(filter); 
-        applyAndDisplayFilters(filter);
-        return;
-    }
-    
-    if (filter === 'my-list') {
-        if(document.getElementById('my-list-container')) {
-            document.getElementById('my-list-container').style.display = 'block';
-            displayMyListView();
+        const seriesInfo = findContentData(seriesId); 
+        
+        if (!seriesInfo) {
+            console.warn(`Serie ID no encontrado: ${seriesId}`);
+            shared.ErrorHandler.show('content', 'No se encontró la serie.');
+            return;
         }
-        return;
-    } 
-    
-    if (filter === 'history') {
-        if(document.getElementById('history-container')) {
-            document.getElementById('history-container').style.display = 'block';
-            renderHistory();
-        }
-        return;
-    } 
-    
-    if (filter === 'reviews') {
-        const reviewsContainer = document.getElementById('reviews-container');
-        if(reviewsContainer) {
-            reviewsContainer.style.display = 'block';
-            reviewsContainer.style.marginTop = '0';
-            if (reviewsModule && reviewsModule.renderReviewsGrid) {
-                reviewsModule.renderReviewsGrid();
-            }
-        }
-        window.scrollTo({ top: 0, behavior: 'instant' });
-        return;
-    }
 
-    if (filter === 'reports') {
-        const rptContainer = document.getElementById('reports-container');
-        if (rptContainer) {
-            rptContainer.style.display = 'block';
-            rptContainer.style.padding = '30px clamp(15px, 4vw, 60px)';
-            rptContainer.innerHTML = `
-                <div class="reports-page-header">
-                    <h1 class="reports-page-title"><i class="fas fa-flag"></i> Reportes</h1>
-                    <p class="reports-page-subtitle">Problemas reportados por los usuarios</p>
-                </div>
-                <div id="reports-admin-body"></div>
-            `;
-            const rptBody = document.getElementById('reports-admin-body');
-            const rptMod = await getReportsModule();
-            await rptMod.renderAdminReports(rptBody);
-        }
-        window.scrollTo(0, 0);
-        return;
-    }
+        _openSeriesPlayerPage();
+        
+        shared.DOM.seriesPlayerModal.innerHTML = `
+            <div style="display: flex; align-items: center; justify-content: center; width: 100%; height: 100%;">
+                <div class="spinner"></div>
+            </div>`;
 
-    if (filter === 'profile-hub' || filter === 'profile' || filter === 'settings') {
-        const containerMap = {
-            'profile-hub': 'profile-hub-container',
-            'profile': 'profile-container',
-            'settings': 'settings-container'
-        };
-        const container = document.getElementById(containerMap[filter]);
-        if (container) {
-            container.style.display = 'block';
-            if (filter === 'profile') getProfileModule().then(m => m.renderProfile());
-            if (filter === 'settings') getProfileModule().then(m => m.renderSettings());
-        }
-        return;
-    }
+        const seriesEpisodes = shared.appState.content.seriesEpisodes[seriesId] || {};
+        const postersData    = shared.appState.content.seasonPosters[seriesId]  || {};
+        
+        const allSeasonsKeys = [...new Set([...Object.keys(seriesEpisodes), ...Object.keys(postersData)])];
 
-    if (filter === 'search') {
-        if(DOM.gridContainer) DOM.gridContainer.style.display = 'block';
-
-        const idsToHide = [
-            'filter-controls',
-            'genre-dropdown-visual',
-            'lang-dropdown-visual',
-            'sort-dropdown-visual',
-            'letter-dropdown-visual',
-            'request-dropdown-visual',
-            'ucm-sort-buttons',
-            'back-to-sagas-btn',
-            'pagination-controls'
-        ];
-
-        idsToHide.forEach(id => {
-            const el = document.getElementById(id);
-            if (el) el.style.setProperty('display', 'none', 'important');
-        });
-
-        return;
-    }
-
-    window.scrollTo(0, 0);
-}
-
-// ==========================================
-// FILTROS EN CASCADA
-// ==========================================
-function refreshDependentFilters(type, activeGenre, activeLang) {
-    let sourceData;
-    if (type === 'movie') sourceData = appState.content.movies;
-    else if (type === 'series') sourceData = appState.content.series;
-    else sourceData = appState.content.sagas?.[type];
-    if (!sourceData) return;
-
-    const sagaConfig = appState.content.sagasList?.find(s => s.id === type) || {};
-    const confGenres = (sagaConfig.genres_filter || 'si').toLowerCase().trim();
-
-    let filtered = Object.entries(sourceData);
-
-    if (confGenres !== 'no' && activeGenre && activeGenre !== 'all') {
-        const gVal = activeGenre.toLowerCase().trim();
-        filtered = filtered.filter(([, item]) => {
-            if (confGenres === 'fases') {
-                const fase = String(item.fase || '').trim();
-                if (gVal === 'saga_infinity') return ['1','2','3'].includes(fase);
-                if (gVal === 'saga_multiverse') return ['4','5','6'].includes(fase);
-                return fase === gVal;
-            }
-            const genresStr = String(item.genres || '').toLowerCase();
-            const titleStr  = String(item.title  || '').toLowerCase();
-            return genresStr.includes(gVal) || titleStr.includes(gVal);
-        });
-    }
-
-    let filteredByLang = filtered;
-    if (activeLang && activeLang !== 'all') {
-        const lVal = activeLang.toLowerCase().trim();
-        filteredByLang = filtered.filter(([, item]) => {
-            const lang = String(item.language || item.idioma || item.audio || '').toLowerCase();
-            return lang.includes(lVal);
-        });
-    }
-
-    const langList   = document.getElementById('lang-menu-list');
-    const langFilter = DOM.langFilter;
-    if (langList && langFilter) {
-        langList.innerHTML = '';
-        langFilter.innerHTML = '<option value="all">Todos</option>';
-        langList.appendChild(_makeFilterItem('all', 'Todos', 'lang'));
-
-        const langs = new Set();
-        filtered.forEach(([, item]) => {
-            const raw = item.language || item.idioma || item.audio || '';
-            String(raw).split(';').map(l => l.trim()).filter(Boolean).forEach(l => langs.add(l));
-        });
-        Array.from(langs).sort().forEach(lang => {
-            langList.appendChild(_makeFilterItem(lang, lang, 'lang'));
-            langFilter.innerHTML += `<option value="${lang}">${lang}</option>`;
-        });
-    }
-}
-
-function _makeFilterItem(value, label, menuType) {
-    const div = document.createElement('div');
-    div.className = 'dropdown-item';
-    if (value) div.dataset.value = value;
-    div.textContent = label;
-    div.onclick = (e) => {
-        e.stopPropagation();
-        const currentType = appState.ui.activeSagaId || appState.currentFilter || 'movie';
-        if (menuType === 'lang') {
-            document.getElementById('lang-text').textContent = label === 'Todos' ? 'Idioma' : label.split(' (')[0];
-            DOM.langFilter.value = value;
-            document.getElementById('lang-dropdown-visual')?.classList.remove('open');
-            applyAndDisplayFilters(currentType);
-        }
-    };
-    return div;
-}
-
-// ==========================================
-// FUNCIÓN: POPULAR FILTROS 
-// ==========================================
-function populateFilters(type) {
-    let sourceData;
-    if (type === 'movie') sourceData = appState.content.movies;
-    else if (type === 'series') sourceData = appState.content.series;
-    else sourceData = appState.content.sagas[type];
-
-    const sagaConfig = appState.content.sagasList.find(s => s.id === type) || {};
-    const confGenres = (sagaConfig.genres_filter || 'si').toLowerCase().trim();
-    const confSortBtn = (sagaConfig.sort_buttons || 'no').toLowerCase().trim();
-    const confLang = (sagaConfig.lang_filter || 'si').toLowerCase().trim();
-
-    const genreVisual = document.getElementById('genre-dropdown-visual');
-    const sortVisual  = document.getElementById('sort-dropdown-visual');
-    const langVisual  = document.getElementById('lang-dropdown-visual');
-    const letterVisual = document.getElementById('letter-dropdown-visual');
-
-    const genreList = document.getElementById('genre-menu-list');
-    const langList  = document.getElementById('lang-menu-list');
-    const letterList = document.getElementById('letter-menu-list');
-    const requestList = document.getElementById('request-menu-list');
-    
-    const letterSelect = document.getElementById('letter-filter');
-    const requestSelect = document.getElementById('request-filter');
-    const requestVisual = document.getElementById('request-dropdown-visual');
-
-    const controlsContainer = document.getElementById('filter-controls');
-    if (controlsContainer) controlsContainer.style.display = 'flex';
-
-    const createItem = (value, label, menuType, isGroup = false, imgUrl = null) => {
-        const div = document.createElement('div');
-        div.className = isGroup ? 'dropdown-group-title' : 'dropdown-item';
-        if (value) div.dataset.value = value; 
-
-        if (isGroup && imgUrl) {
-            div.innerHTML = `<img src="${imgUrl}" class="dropdown-group-logo" alt="${label}">`;
-            div.classList.add('has-logo');
+        let orderedKeys;
+        if (shared.appState.content.seasonOrder && shared.appState.content.seasonOrder[seriesId]) {
+            orderedKeys = shared.appState.content.seasonOrder[seriesId];
         } else {
-            div.textContent = label;
-        }
-
-        if (isGroup && value) div.style.cursor = "pointer";
-
-        div.onclick = (e) => {
-            e.stopPropagation();
-
-            if (menuType === 'genre') {
-                document.getElementById('genre-text').textContent = label === 'Todos' ? 'Géneros' : label.split(' (')[0];
-                DOM.genreFilter.value = value;
-                if (genreVisual) genreVisual.classList.remove('open');
-            } else if (menuType === 'lang') {
-                document.getElementById('lang-text').textContent = label === 'Todos' ? 'Idioma' : label.split(' (')[0];
-                DOM.langFilter.value = value;
-                if (langVisual) langVisual.classList.remove('open');
-            } else if (menuType === 'request') {
-                document.getElementById('request-text').textContent = label === 'Todos' ? 'Pedidos' : label.split(' (')[0];
-                if (requestSelect) requestSelect.value = value;
-                if (requestVisual) requestVisual.classList.remove('open');
-            } else {
-                document.getElementById('sort-text').textContent = label;
-                DOM.sortBy.value = value;
-                if (sortVisual) sortVisual.classList.remove('open');
-            }
-
-            if (menuType !== 'sort' && menuType !== 'letter') {
-                const activeGenre   = DOM.genreFilter?.value || 'all';
-                const activeLang    = DOM.langFilter?.value  || 'all';
-                const activeRequest = requestSelect?.value   || 'all';
-
-                const sub = (g, l, r) => {
-                    let items = Object.entries(sourceData);
-                    if (confGenres !== 'no' && g !== 'all') {
-                        const gv = g.toLowerCase().trim();
-                        items = items.filter(([, d]) => {
-                            if (confGenres === 'fases') {
-                                const f = String(d.fase||'').trim();
-                                if (gv==='saga_infinity')   return ['1','2','3'].includes(f);
-                                if (gv==='saga_multiverse') return ['4','5','6'].includes(f);
-                                return f === gv;
-                            }
-                            return String(d.genres||'').toLowerCase().includes(gv) ||
-                                   String(d.title ||'').toLowerCase().includes(gv);
-                        });
-                    }
-                    if (l !== 'all') {
-                        const lv = l.toLowerCase().trim();
-                        items = items.filter(([, d]) =>
-                            String(d.language||d.idioma||d.audio||'').toLowerCase().includes(lv));
-                    }
-                    if (r !== 'all') {
-                        items = items.filter(([, d]) => (d.pedido||'').trim() === r);
-                    }
-                    return items;
-                };
-
-                if (confLang === 'si' && langList && DOM.langFilter) {
-                    const langCounts = new Map();
-                    sub(activeGenre, 'all', activeRequest).forEach(([,d]) =>
-                        String(d.language||d.idioma||d.audio||'')
-                            .split(';').map(s=>s.trim()).filter(Boolean).forEach(l => {
-                                langCounts.set(l, (langCounts.get(l) || 0) + 1);
-                            })
-                    );
-                    langList.innerHTML = '';
-                    DOM.langFilter.innerHTML = '<option value="all">Todos</option>';
-                    langList.appendChild(createItem('all', 'Todos', 'lang'));
-                    [...langCounts.keys()].sort().forEach(l => {
-                        const lbl = `${l} (${langCounts.get(l)})`;
-                        langList.appendChild(createItem(l, lbl, 'lang'));
-                        DOM.langFilter.innerHTML += `<option value="${l}">${lbl}</option>`;
-                    });
-                    if (activeLang !== 'all' && !langCounts.has(activeLang)) {
-                        DOM.langFilter.value = 'all';
-                        document.getElementById('lang-text').textContent = 'Idioma';
-                    } else {
-                        DOM.langFilter.value = activeLang;
-                    }
-                }
-
-                if (requestList && requestSelect) {
-                    const requestCounts = new Map();
-                    sub(activeGenre, activeLang, 'all').forEach(([,d]) => {
-                        const p = d.pedido?.trim();
-                        if (p) requestCounts.set(p, (requestCounts.get(p) || 0) + 1);
-                    });
-                    requestList.innerHTML = '';
-                    requestSelect.innerHTML = '<option value="all">Todos</option>';
-                    requestList.appendChild(createItem('all', 'Todos', 'request'));
-                    [...requestCounts.keys()].sort().forEach(n => {
-                        const lbl = `${n} (${requestCounts.get(n)})`;
-                        requestList.appendChild(createItem(n, lbl, 'request'));
-                        requestSelect.innerHTML += `<option value="${n}">${lbl}</option>`;
-                    });
-                    if (requestVisual) requestVisual.style.display = requestCounts.size === 0 ? 'none' : 'block';
-                    if (activeRequest !== 'all' && !requestCounts.has(activeRequest)) {
-                        requestSelect.value = 'all';
-                        document.getElementById('request-text').textContent = 'Pedidos';
-                    } else {
-                        requestSelect.value = activeRequest;
-                    }
-                }
-
-                if ((type==='movie'||type==='series') && confGenres!=='no' && confGenres!=='fases' && genreList) {
-                    const genreCounts = new Map();
-                    sub('all', activeLang, activeRequest).forEach(([,d]) =>
-                        String(d.genres||'').split(';').map(s=>s.trim()).filter(Boolean).forEach(g => {
-                            genreCounts.set(g, (genreCounts.get(g) || 0) + 1);
-                        })
-                    );
-                    genreList.innerHTML = '';
-                    DOM.genreFilter.innerHTML = '<option value="all">Todos</option>';
-                    genreList.appendChild(createItem('all', 'Todos', 'genre'));
-                    [...genreCounts.keys()].sort().forEach(g => {
-                        const lbl = `${g} (${genreCounts.get(g)})`;
-                        genreList.appendChild(createItem(g, lbl, 'genre'));
-                        DOM.genreFilter.innerHTML += `<option value="${g}">${lbl}</option>`;
-                    });
-                    if (activeGenre !== 'all' && !genreCounts.has(activeGenre)) {
-                        DOM.genreFilter.value = 'all';
-                        document.getElementById('genre-text').textContent = 'Géneros';
-                    } else {
-                        DOM.genreFilter.value = activeGenre;
-                    }
-                }
-            }
-
-            applyAndDisplayFilters(type);
-        };
-        return div;
-    };
-
-    if (genreVisual) genreVisual.style.display = (confGenres !== 'no') ? 'block' : 'none';
-    if (langVisual) langVisual.style.display = (confLang === 'si') ? 'block' : 'none';
-    if (letterVisual) letterVisual.style.display = 'block';
-    if (requestVisual) requestVisual.style.display = (type === 'movie' || type === 'series') ? 'block' : 'none';
-    
-    const ucmButtons = document.getElementById('ucm-sort-buttons');
-    const isDynamicSaga = (type !== 'movie' && type !== 'series');
-
-    if (ucmButtons) {
-        ucmButtons.style.display = (confSortBtn === 'si') ? 'flex' : 'none';
-        if (sortVisual) {
-            if (confSortBtn === 'si') {
-                sortVisual.style.display = 'none';
-            } else if (isDynamicSaga && confSortBtn === 'no') {
-                sortVisual.style.display = 'none';
-            } else {
-                sortVisual.style.display = 'block';
-            }
-        }
-    } else {
-        if (sortVisual) {
-            sortVisual.style.display = (isDynamicSaga && confSortBtn === 'no') ? 'none' : 'block';
-        }
-    }
-
-    if (confGenres !== 'no') {
-        genreList.innerHTML = '';
-        DOM.genreFilter.innerHTML = `<option value="all">Todos</option>`; 
-        
-        if (confGenres === 'fases') {
-            genreList.appendChild(createItem('all', 'Todas las Fases', 'genre'));
-            document.getElementById('genre-text').textContent = "Todas las Fases";
-            
-            const estructuraSagas = [
-                { id: 'saga_infinity', titulo: "Saga del Infinito", img: "https://res.cloudinary.com/djhgmmdjx/image/upload/v1764056286/InfinitySaga2_t3ixis.svg", fases: ['1', '2', '3'] },
-                { id: 'saga_multiverse', titulo: "Saga del Multiverso", img: "https://res.cloudinary.com/djhgmmdjx/image/upload/v1764056259/MultiverseSaga2_waggse.svg", fases: ['4', '5', '6'] }
-            ];
-
-            const fasesDisponibles = new Set(Object.values(sourceData).map(i => String(i.fase || '').trim()).filter(Boolean));
-
-            estructuraSagas.forEach(saga => {
-                genreList.appendChild(createItem(saga.id, saga.titulo, 'genre', true, saga.img));
-                DOM.genreFilter.innerHTML += `<option value="${saga.id}">${saga.titulo}</option>`;
-                saga.fases.forEach(f => { 
-                    if(fasesDisponibles.has(f)) {
-                        genreList.appendChild(createItem(f, `Fase ${f}`, 'genre'));
-                        DOM.genreFilter.innerHTML += `<option value="${f}">Fase ${f}</option>`;
-                    }
-                });
+            orderedKeys = [...allSeasonsKeys].sort((a, b) => {
+                const posterA = postersData[a];
+                const posterB = postersData[b];
+                const ordenA = posterA && typeof posterA === 'object' && posterA.orden !== undefined && posterA.orden !== ''
+                    ? Number(posterA.orden) : null;
+                const ordenB = posterB && typeof posterB === 'object' && posterB.orden !== undefined && posterB.orden !== ''
+                    ? Number(posterB.orden) : null;
+                if (ordenA !== null && ordenB !== null) return ordenA - ordenB;
+                if (ordenA !== null) return -1;
+                if (ordenB !== null) return 1;
+                const isNumericA = !isNaN(Number(a)) && String(a).trim() !== '';
+                const isNumericB = !isNaN(Number(b)) && String(b).trim() !== '';
+                if (isNumericA && isNumericB) return Number(a) - Number(b);
+                if (isNumericA) return -1;
+                if (isNumericB) return 1;
+                return 0;
             });
+        }
 
-        } else if (confGenres === 'sagas') {
-            genreList.appendChild(createItem('all', 'Todas las Sagas', 'genre'));
-            document.getElementById('genre-text').textContent = "Todas las Sagas";
+        const seasonsMapped = orderedKeys
+            .filter(k => allSeasonsKeys.includes(k))
+            .map(k => ({ key: k, num: !isNaN(k) ? Number(k) : 0 }));
+
+        if (forceSeasonGrid && seasonsMapped.length > 1) {
+            renderSeasonGrid(seriesId);
+            return;
+        }
+
+        let targetSeasonKey = null;
+
+        for (const s of seasonsMapped) {
+            const seasonKey = s.key;
             
-            genreList.appendChild(createItem('Harry Potter', 'Harry Potter', 'genre'));
-            genreList.appendChild(createItem('Animales Fantásticos', 'Animales Fantásticos', 'genre'));
-            DOM.genreFilter.innerHTML += `<option value="Harry Potter">Harry Potter</option>`;
-            DOM.genreFilter.innerHTML += `<option value="Animales Fantásticos">Animales Fantásticos</option>`;
+            const posterEntry = postersData[seasonKey];
+            let seasonStatus = '';
+            if (posterEntry && typeof posterEntry === 'object') {
+                seasonStatus = String(posterEntry.estado || '').toLowerCase().trim();
+            }
 
-        } else if (confGenres === 'eras') {
-            genreList.appendChild(createItem('all', 'Todas las Eras', 'genre'));
-            document.getElementById('genre-text').textContent = "Todas las Eras";
-            
-            const eras = [{ id: 'republic', label: 'La República' }, { id: 'empire', label: 'El Imperio' }, { id: 'rebellion', label: 'La Rebelión' }];
-            eras.forEach(e => {
-                genreList.appendChild(createItem(e.id, e.label, 'genre'));
-                DOM.genreFilter.innerHTML += `<option value="${e.id}">${e.label}</option>`;
-            });
+            const eps = seriesEpisodes[seasonKey];
+            const hasEpisodes = eps && (Array.isArray(eps) ? eps.length > 0 : Object.keys(eps).length > 0);
 
+            const isManuallyLocked = seasonStatus !== '' && seasonStatus !== 'disponible';
+            const isLocked = isManuallyLocked || (!hasEpisodes && seasonStatus !== 'disponible');
+
+            if (!isLocked) {
+                targetSeasonKey = seasonKey;
+                break; 
+            }
+        }
+
+        if (targetSeasonKey) {
+            const user = shared.auth.currentUser;
+            let lastWatchedEpisode = 0;
+
+            if (user) {
+                const savedIndex = loadProgress(seriesId, targetSeasonKey);
+                if (savedIndex > 0) lastWatchedEpisode = savedIndex;
+            }
+
+            renderEpisodePlayer(seriesId, targetSeasonKey, lastWatchedEpisode);
         } else {
-            const genreCounts = new Map();
-            Object.values(sourceData).forEach(item => {
-                String(item.genres||'').split(';').map(g=>g.trim()).filter(Boolean).forEach(g => {
-                    genreCounts.set(g, (genreCounts.get(g)||0) + 1);
-                });
-            });
-            genreList.appendChild(createItem('all', 'Todos', 'genre'));
-            document.getElementById('genre-text').textContent = "Géneros";
-
-            [...genreCounts.keys()].sort().forEach(g => {
-                const lbl = `${g} (${genreCounts.get(g)})`;
-                genreList.appendChild(createItem(g, lbl, 'genre'));
-                DOM.genreFilter.innerHTML += `<option value="${g}">${lbl}</option>`;
-            });
-        }
-    }
-
-    if (confLang === 'si' && langList) {
-        langList.innerHTML = '';
-        DOM.langFilter.innerHTML = `<option value="all">Todos</option>`;
-    
-    langList.appendChild(createItem('all', 'Todos', 'lang'));
-    document.getElementById('lang-text').textContent = "Idioma";
-    
-    const langCounts = new Map();
-    Object.values(sourceData).forEach(item => {
-        const rawLang = item.language || item.idioma || item.audio || "";
-        if (rawLang && String(rawLang).trim() !== "") {
-            String(rawLang).split(';').map(l => l.trim()).filter(Boolean).forEach(lang => {
-                langCounts.set(lang, (langCounts.get(lang) || 0) + 1);
-            });
-        }
-    });
-
-    [...langCounts.keys()].sort().forEach(lang => {
-        const lbl = `${lang} (${langCounts.get(lang)})`;
-        langList.appendChild(createItem(lang, lbl, 'lang'));
-        DOM.langFilter.innerHTML += `<option value="${lang}">${lbl}</option>`;
-    });
-    }
-
-    const sortList = document.getElementById('sort-menu-list');
-    
-    if (confSortBtn === 'si') {
-        const btnRelease = document.querySelector('.sort-btn[data-sort="release"]');
-        const btnChrono = document.querySelector('.sort-btn[data-sort="chronological"]');
-        
-        if (btnRelease && btnChrono) {
-            document.querySelectorAll('.sort-btn').forEach(b => b.classList.remove('active'));
-            btnRelease.classList.add('active');
-            
-            if (DOM.sortBy) DOM.sortBy.value = 'release';
-        }
-    }
-
-    if (confSortBtn === 'no' && sortList) {
-        sortList.innerHTML = '';
-
-        if (DOM.sortBy) DOM.sortBy.innerHTML = ''; 
-        
-        const sortOptions = [
-            {val:'recent', label:'Recientes'},
-            {val:'title-asc', label:'Título (A-Z)'}, 
-            {val:'title-desc', label:'Título (Z-A)'},
-            {val:'year-desc', label:'Año (Desc.)'}, 
-            {val:'year-asc', label:'Año (Asc.)'}
-        ];
-
-        if (type !== 'series') {
-            sortOptions.push(
-                {val:'duration-asc', label:'- Duración'}, 
-                {val:'duration-desc', label:'+ Duración'}
-            );
-        }
-
-        sortOptions.push(
-            {val:'rating-desc', label:'★ Mayor Reseña'},
-            {val:'rating-asc',  label:'★ Menor Reseña'}
-        );
-        
-        sortOptions.forEach(o => {
-            sortList.appendChild(createItem(o.val, o.label, 'sort'));
-
-            if (DOM.sortBy) {
-                const option = document.createElement('option');
-                option.value = o.val;
-                option.textContent = o.label;
-                DOM.sortBy.appendChild(option);
-            }
-        });
-    }
-
-    if (letterList && letterSelect) {
-        letterList.innerHTML = '';
-        letterSelect.innerHTML = `<option value="all">Todas</option>`;
-        
-        letterList.appendChild(createItem('all', 'Todas', 'letter'));
-        
-        const firstLetters = new Set();
-        let hasNumbers = false;
-        
-        Object.values(sourceData).forEach(item => {
-            if (item.title) {
-                const firstChar = String(item.title).trim().charAt(0).toUpperCase();
-                if (firstChar) {
-                    if (!isNaN(parseInt(firstChar))) {
-                        hasNumbers = true;
-                    } else if (/[A-Z]/.test(firstChar)) {
-                        firstLetters.add(firstChar);
-                    }
-                }
-            }
-        });
-        
-        if (hasNumbers) {
-            letterList.appendChild(createItem('#', '0-9', 'letter'));
-            letterSelect.innerHTML += `<option value="#">0-9</option>`;
-        }
-        
-        Array.from(firstLetters).sort().forEach(letter => {
-            letterList.appendChild(createItem(letter, letter, 'letter'));
-            letterSelect.innerHTML += `<option value="${letter}">${letter}</option>`;
-        });
-    }
-
-    if (requestList && requestSelect) {
-        document.getElementById('request-text').textContent = 'Pedidos';
-        requestList.innerHTML = '';
-        requestSelect.innerHTML = '<option value="all">Todos</option>';
-        requestList.appendChild(createItem('all', 'Todos', 'request'));
-
-        const requestCounts = new Map();
-        Object.values(sourceData).forEach(item => {
-            const p = item.pedido?.trim();
-            if (p) requestCounts.set(p, (requestCounts.get(p) || 0) + 1);
-        });
-
-        [...requestCounts.keys()].sort().forEach(name => {
-            const lbl = `${name} (${requestCounts.get(name)})`;
-            requestList.appendChild(createItem(name, lbl, 'request'));
-            requestSelect.innerHTML += `<option value="${name}">${lbl}</option>`;
-        });
-
-        if (requestVisual) requestVisual.style.display = requestCounts.size === 0 ? 'none' : 'block';
-    }
-
-    const configDropdown = (trigger, visual) => {
-        if (!trigger) return;
-        const newTrigger = trigger.cloneNode(true);
-        trigger.parentNode.replaceChild(newTrigger, trigger);
-        newTrigger.onclick = (e) => { 
-            e.stopPropagation(); 
-            [genreVisual, sortVisual, langVisual, letterVisual, requestVisual].forEach(v => {
-                if(v && v !== visual) v.classList.remove('open');
-            });
-            visual.classList.toggle('open'); 
-        };
-    };
-
-    if(document.getElementById('genre-trigger')) configDropdown(document.getElementById('genre-trigger'), genreVisual);
-    if(document.getElementById('sort-trigger')) configDropdown(document.getElementById('sort-trigger'), sortVisual);
-    if(document.getElementById('lang-trigger')) configDropdown(document.getElementById('lang-trigger'), langVisual); 
-    if(document.getElementById('letter-trigger')) configDropdown(document.getElementById('letter-trigger'), letterVisual);
-    if(document.getElementById('request-trigger')) configDropdown(document.getElementById('request-trigger'), requestVisual);
-}
-
-// ==========================================
-// FUNCIÓN: APLICAR Y MOSTRAR
-// ==========================================
-async function applyAndDisplayFilters(type) {
-    let sourceData;
-    if (type === 'movie') sourceData = appState.content.movies;
-    else if (type === 'series') sourceData = appState.content.series;
-    else sourceData = appState.content.sagas[type]; 
-
-    const gridEl = DOM.gridContainer.querySelector('.grid');
-    if (!gridEl || !sourceData) return;
-
-    const sagaConfig = appState.content.sagasList.find(s => s.id === type) || {};
-    const confGenres = (sagaConfig.genres_filter || 'si').toLowerCase().trim();
-    const confSortBtn = (sagaConfig.sort_buttons || 'no').toLowerCase().trim();
-    const confLang   = (sagaConfig.lang_filter || 'si').toLowerCase().trim();
-
-    let sortByValue = (confSortBtn === 'si') ? 
-        (document.querySelector('.sort-btn.active')?.dataset.sort || 'release') : 
-        (DOM.sortBy.value || 'recent');
-        
-    const letterFilterVal = document.getElementById('letter-filter')?.value || 'all';
-    const requestFilterVal = document.getElementById('request-filter')?.value || 'all';
-
-    gridEl.innerHTML = `<div style="width:100%;height:60vh;display:flex;justify-content:center;align-items:center;grid-column:1/-1;"><p class="loading-text">Cargando...</p></div>`;
-
-    let content = Object.entries(sourceData);
-    const isDynamicSaga = (type !== 'movie' && type !== 'series');
-    
-    if (isDynamicSaga) content.reverse();
-    
-    content.forEach((item, index) => { item[1]._originalIndex = index; });
-
-    if (confGenres !== 'no' && DOM.genreFilter.value !== 'all') {
-        const filterVal = DOM.genreFilter.value.toLowerCase().trim();
-        
-        content = content.filter(([id, item]) => {
-            if (confGenres === 'fases') {
-                const fase = String(item.fase || '').trim();
-                if (filterVal === 'saga_infinity') return ['1','2','3'].includes(fase);
-                if (filterVal === 'saga_multiverse') return ['4','5','6'].includes(fase);
-                return fase === filterVal;
-            }
-            const genresStr = String(item.genres || '').toLowerCase();
-            const titleStr = String(item.title || '').toLowerCase();
-            return genresStr.includes(filterVal) || titleStr.includes(filterVal);
-        });
-    }
-
-    if (confLang === 'si' && DOM.langFilter && DOM.langFilter.value !== 'all') {
-    const langVal = DOM.langFilter.value.toLowerCase().trim();
-    content = content.filter(([id, item]) => {
-            const itemLang = String(item.language || item.idioma || item.audio || '').toLowerCase();
-            return itemLang.includes(langVal);
-        });
-    }
-
-    if (letterFilterVal !== 'all') {
-        content = content.filter(([id, item]) => {
-            const firstChar = String(item.title || '').trim().charAt(0).toUpperCase();
-            if (letterFilterVal === '#') return !isNaN(parseInt(firstChar));
-            return firstChar === letterFilterVal;
-        });
-    }
-
-    if (requestFilterVal !== 'all') {
-        content = content.filter(([, item]) => (item.pedido || '').trim() === requestFilterVal);
-    }
-
-    if (sortByValue === 'rating-desc' || sortByValue === 'rating-asc') {
-        content = content.filter(([id]) => {
-            const rating = parseFloat(appState.content.averages[id]);
-            return rating > 0;
-        });
-    }
-
-    content.sort((a, b) => {
-        const idA = a[0]; const idB = b[0];
-        const aData = a[1]; const bData = b[1];
-
-        let result = 0; 
-
-        if (isDynamicSaga) {
-            const getOrderValue = (data) => {
-                const orderVal = data.order || data.number || data.id || data.stage || data.episode;
-                if (orderVal !== undefined) {
-                    const numVal = Number(orderVal);
-                    if (!isNaN(numVal)) return numVal;
-                }
-                return data._originalIndex || 0;
-            };
-            
-            result = getOrderValue(aData) - getOrderValue(bData);
-            
-            if (result !== 0) return result;
-        }
-
-        if (sortByValue === 'recent' || sortByValue === 'release') {
-            
-            const typeA = (aData.type === 'series' || appState.content.series[idA]) ? 'series' : 'movie';
-            const typeB = (bData.type === 'series' || appState.content.series[idB]) ? 'series' : 'movie';
-
-            const timeA = getLatestUpdateTimestamp(idA, aData, typeA);
-            const timeB = getLatestUpdateTimestamp(idB, bData, typeB);
-
-            if (timeA !== timeB) {
-                result = timeB - timeA; 
-            }
-
-            else if (timeA > 0) { 
-                const getScore = (id, data, t) => {
-                    if (isDateRecent(data.date_added)) return 3; 
-                    if (t === 'series' && hasRecentSeasonFromPosters(id)) return 2; 
-                    if (t === 'series' && hasRecentEpisodes(id)) return 1; 
-                    return 0;
-                };
-                result = getScore(idB, bData, typeB) - getScore(idA, aData, typeA);
-            }
-
-            else {
-                result = (Number(bData.tr) || 0) - (Number(aData.tr) || 0);
-            }
-        }
-
-        else if (sortByValue === 'chronological') {
-            result = (Number(aData.cronologia) || 9999) - (Number(bData.cronologia) || 9999);
-        }
-        else if (sortByValue === 'year-asc') {
-            result = (Number(aData.year) || 9999) - (Number(bData.year) || 9999);
-        }
-        else if (sortByValue === 'year-desc') {
-            result = (Number(bData.year) || 0) - (Number(aData.year) || 0);
-        }
-        else if (sortByValue === 'title-asc') {
-            result = (aData.title || '').localeCompare(bData.title || '');
-        }
-        else if (sortByValue === 'title-desc') {
-            result = (bData.title || '').localeCompare(aData.title || '');
-        }
-        else if (sortByValue === 'duration-asc' || sortByValue === 'duration-desc') {
-            const getMinutes = (item) => {
-                const d = String(item.duration || item.duracion || '').toLowerCase().trim();
-                if (!d) return 0;
-
-                let minutes = 0;
-                const h = d.match(/(\d+)\s*h/);
-                const m = d.match(/(\d+)\s*m/);
-                if (h) minutes += parseInt(h[1]) * 60;
-                if (m) minutes += parseInt(m[1]);
-
-                if (!h && !m) {
-                    const num = parseInt(d.replace(/\D/g, '')); 
-                    if (!isNaN(num)) minutes = num;
-                }
-                return minutes;
-            };
-
-            const minA = getMinutes(aData);
-            const minB = getMinutes(bData);
-
-            if (sortByValue === 'duration-asc') result = minA - minB; 
-            if (sortByValue === 'duration-desc') result = minB - minA; 
-        }
-        else if (sortByValue === 'rating-desc' || sortByValue === 'rating-asc') {
-            const ratingA = parseFloat(appState.content.averages[idA]) || 0;
-            const ratingB = parseFloat(appState.content.averages[idB]) || 0;
-            const hasA = ratingA > 0;
-            const hasB = ratingB > 0;
-            if (!hasA && !hasB) result = 0;
-            else if (!hasA) result = 1;
-            else if (!hasB) result = -1;
-            else if (sortByValue === 'rating-desc') result = ratingB - ratingA;
-            else result = ratingA - ratingB;
-        }
-
-        return result;
-    });
-
-    if (sortByValue === 'chronological') {
-        const expandedContent = [];
-        
-        content.forEach(([id, item]) => {
-            const multiChrono = item.cronologiaMulti || item.cronologia_multi; 
-            
-            if (multiChrono) {
-                const seriesPosters = appState.content.seasonPosters[id] || {};
-
-                const getSeasonPoster = (num) => {
-                    const p = seriesPosters[num];
-                    if (!p) return item.poster; 
-                    return (typeof p === 'object') ? p.posterUrl : p;
-                };
-
-                const t1 = { 
-                    ...item, 
-                    title: `${item.title} (T1)`,
-                    poster: getSeasonPoster(1) 
-                };
-                expandedContent.push([id, t1]); 
-
-                String(multiChrono).split(',').map(c => c.trim()).forEach((chronoVal, index) => {
-                    const sNum = index + 2; 
-                    const tNext = { 
-                        ...item, 
-                        title: `${item.title} (T${sNum})`, 
-                        cronologia: chronoVal,
-                        poster: getSeasonPoster(sNum) 
-                    };
-                    expandedContent.push([id, tNext]); 
-                });
-
-            } else { 
-                expandedContent.push([id, item]); 
-            }
-        });
-
-        expandedContent.sort((a, b) => (Number(a[1].cronologia)||99999) - (Number(b[1].cronologia)||99999));
-        content = expandedContent;
-    }
-
-    appState.ui.contentToDisplay = content;
-    appState.ui.currentIndex = 0; 
-    setupPaginationControls();
-
-    const firstPageItems = content.slice(0, UI.ITEMS_PER_LOAD);
-    const imagePromises = firstPageItems.map(([id, item]) => preloadImage(item.poster));
-
-    try { await Promise.race([Promise.all(imagePromises), new Promise(r => setTimeout(r, 1000))]); } catch (e) {}
-
-    renderCurrentPage();
-}
-
-function setupEventListeners() {
-    console.log('⚙️ Configurando Event Listeners...');
-    document.addEventListener('click', handleGlobalClick);
-
-    const navLinks = document.querySelectorAll('.main-nav a, .bottom-nav .nav-link, .profile-hub-menu-item');
-    
-    navLinks.forEach(link => {
-        link.addEventListener('click', (e) => {
-            e.preventDefault();
-            
-            const filter = link.dataset.filter;
-            
-            switchView(filter);
-            
-            const dropdown = document.getElementById('user-menu-dropdown');
-            if (dropdown && dropdown.classList.contains('show')) {
-                dropdown.classList.remove('show');
-            }
-        });
-    });
-
-    const mobileRouletteBtn = document.querySelector('.mobile-roulette-btn');
-    if (mobileRouletteBtn) {
-        mobileRouletteBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            switchView('roulette');
-        });
-    }
-
-    DOM.searchInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') {
-            DOM.searchInput.value = '';
-            DOM.searchInput.blur();
-            const currentFilter = document.querySelector('.main-nav a.active')?.dataset.filter || 'all';
-            switchView(currentFilter);
-        }
-    });
-
-    document.addEventListener('click', (e) => {
-        const trigger = e.target.closest('.dropdown-trigger');
-        const dropdown = e.target.closest('.custom-dropdown');
-        
-        if (trigger) {
-            e.stopPropagation(); 
-            const menu = dropdown.querySelector('.dropdown-menu');
-            
-            document.querySelectorAll('.dropdown-menu.show').forEach(m => {
-                if (m !== menu) m.classList.remove('show');
-            });
-            
-            if (menu) menu.classList.toggle('show');
-        } else {
-            document.querySelectorAll('.dropdown-menu.show').forEach(m => {
-                m.classList.remove('show');
-            });
-        }
-    });
-
-    document.addEventListener('click', (e) => {
-        const item = e.target.closest('.dropdown-item');
-        if (!item) return;
-
-        const dropdown = item.closest('.custom-dropdown');
-        if (!dropdown) return;
-
-        let selectId = '';
-        let triggerTextId = '';
-
-        if (dropdown.id === 'genre-dropdown-visual') {
-            selectId = 'genre-filter';
-            triggerTextId = 'genre-text';
-        } else if (dropdown.id === 'lang-dropdown-visual') {
-            selectId = 'lang-filter';
-            triggerTextId = 'lang-text';
-        } else if (dropdown.id === 'sort-dropdown-visual') {
-            selectId = 'sort-by';
-            triggerTextId = 'sort-text';
-        }
-
-        if (!selectId) return;
-
-        dropdown.querySelectorAll('.dropdown-item').forEach(i => i.classList.remove('selected'));
-        item.classList.add('selected');
-        
-        const triggerText = document.getElementById(triggerTextId);
-        if (triggerText) triggerText.textContent = item.textContent;
-
-        const hiddenSelect = document.getElementById(selectId);
-        if (hiddenSelect) {
-            hiddenSelect.value = item.dataset.value;
-            
-            const currentType = appState.ui.activeSagaId || 'movie'; 
-            let sourceData = null;
-
-            if (currentType === 'movie') sourceData = appState.content.movies;
-            else if (currentType === 'series') sourceData = appState.content.series;
-            else if (currentType === 'ucm') sourceData = appState.content.ucm;
-            else if (appState.content.sagas[currentType]) sourceData = appState.content.sagas[currentType];
-
-            if (sourceData) {
-                applyAndDisplayFilters(currentType);
-            }
-        }
-    });
-
-    const backSagaBtn = document.getElementById('back-to-sagas-btn');
-    if (backSagaBtn) {
-        backSagaBtn.addEventListener('click', () => switchView('sagas'));
-    }
-
-    document.querySelectorAll('.close-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            if (btn.closest('#review-form-modal')) {
-                e.preventDefault();
-                e.stopPropagation();
-                const reviewModal = document.getElementById('review-form-modal');
-                if (reviewModal) reviewModal.classList.remove('show');
-                const cinemaOpen = document.getElementById('cinema')?.classList.contains('show');
-                const seriesOpen = document.getElementById('series-player-modal')?.classList.contains('show');
-                if (!cinemaOpen && !seriesOpen) document.body.classList.remove('modal-open');
-                return;
-            }
-
-            ModalManager.closeAll();
-            const cinema = document.getElementById('cinema');
-            if (cinema) {
-                const iframe = cinema.querySelector('iframe');
-                if (iframe) iframe.src = '';
-                const video = cinema.querySelector('video');
-                if (video) video.pause();
-                
-                // 🔥 Destruir ArtPlayer
-                if (appState?.player?.activeCineInstance) {
-                    appState.player.activeCineInstance.destroy();
-                    appState.player.activeCineInstance = null;
-                }
-            }
-        });
-    });
-
-    window.addEventListener('click', (e) => {
-        if (e.target.classList.contains('modal')) {
-            if (e.target.id === 'review-form-modal') {
-                e.target.classList.remove('show');
-                const cinemaOpen = document.getElementById('cinema')?.classList.contains('show');
-                const seriesOpen = document.getElementById('series-player-modal')?.classList.contains('show');
-                if (!cinemaOpen && !seriesOpen) document.body.classList.remove('modal-open');
-                return;
-            }
-
-            if (e.target.id === 'series-player-page') return;
-
-            ModalManager.closeAll();
-        }
-    });
-
-    const loginHeader = document.getElementById('login-btn-header');
-    const regHeader = document.getElementById('register-btn-header');
-
-    if (loginHeader) {
-        loginHeader.addEventListener('click', (e) => {
-            e.preventDefault();
-            if (window.openAuthModal) window.openAuthModal(true);
-        });
-    }
-    if (regHeader) {
-        regHeader.addEventListener('click', (e) => {
-            e.preventDefault();
-            if (window.openAuthModal) window.openAuthModal(false);
-        });
-    }
-
-    const loginBtnHub = document.getElementById('login-btn-hub');
-    if (loginBtnHub) {
-        loginBtnHub.addEventListener('click', (e) => {
-            e.preventDefault();
-            if (window.openAuthModal) window.openAuthModal(true);
-        });
-    }
-
-    const registerBtnHub = document.getElementById('register-btn-hub');
-    if (registerBtnHub) {
-        registerBtnHub.addEventListener('click', (e) => {
-            e.preventDefault();
-            if (window.openAuthModal) window.openAuthModal(false);
-        });
-    }
-
-    document.addEventListener('click', (e) => {
-        const header = e.target.closest('.accordion-header');
-        if (header) {
-            const item = header.parentElement;
-            const isActive = item.classList.contains('active');
-            
-            const parentAccordion = item.closest('.schedule-accordion');
-            if (parentAccordion) {
-                parentAccordion.querySelectorAll('.accordion-item').forEach(el => {
-                    el.classList.remove('active');
-                });
-            }
-            
-            if (!isActive) {
-                item.classList.add('active');
-            }
-        }
-    });
-
-    window.addEventListener('scroll', () => {
-        if (DOM.header) {
-            if (window.scrollY > 50) {
-                DOM.header.classList.add('scrolled');
+            if (seasonsMapped.length > 0) {
+                renderSeasonGrid(seriesId);
             } else {
-                DOM.header.classList.remove('scrolled');
+                shared.DOM.seriesPlayerModal.innerHTML = `
+                    <button class="close-btn streaming-back-btn"><i class="fas fa-arrow-left"></i> Volver</button>
+                    <div style="text-align:center; padding: 20px; color: white;">
+                        <h2>${seriesInfo.title}</h2>
+                        <p>Próximamente disponible.</p>
+                    </div>`;
+                shared.DOM.seriesPlayerModal.querySelector('.close-btn').onclick = closeSeriesPlayerModal;
             }
         }
-    });
 
-    const sortButtons = document.querySelectorAll('.sort-btn');
-    if (sortButtons.length > 0) {
-        sortButtons.forEach(btn => {
-            btn.addEventListener('click', () => {
-                sortButtons.forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-
-                const currentSagaId = appState.ui.activeSagaId; 
-                
-                if (currentSagaId) {
-                    const sagaData = appState.content.sagas[currentSagaId] || appState.content.ucm;
-                    if (sagaData) {
-                        applyAndDisplayFilters(currentSagaId);
-                    }
-                }
-            });
-        });
+    } catch (error) {
+        logError(error, 'Player: Critical Crash');
+        shared.ErrorHandler.show('unknown', 'Error al abrir el reproductor de series.');
     }
 }
 
-function handleFullscreenChange() {
-    const lockOrientation = async () => {
-        try {
-            if (screen.orientation && typeof screen.orientation.lock === 'function') {
-                await screen.orientation.lock('landscape');
-            }
-        } catch (err) { 
-            console.error('No se pudo bloquear la orientación:', err); 
-        }
-    };
-    const unlockOrientation = () => {
-        if (screen.orientation && typeof screen.orientation.unlock === 'function') {
-            screen.orientation.unlock();
-        }
-    };
-    if (document.fullscreenElement) {
-        lockOrientation();
-    } else {
-        unlockOrientation();
-    }
+function renderSeasonGrid(seriesId) {
+    const seriesInfo = findContentData(seriesId); 
+    if (!seriesInfo) return;
 
-    let _lastColumns = UI.getColumns();
-    let _resizeTimer;
-    window.addEventListener('resize', () => {
-        clearTimeout(_resizeTimer);
-        _resizeTimer = setTimeout(() => {
-            const newCols = UI.getColumns();
-            if (newCols !== _lastColumns) {
-                _lastColumns = newCols;
-                if (appState.ui.contentToDisplay && appState.ui.contentToDisplay.length > 0) {
-                    appState.ui.currentIndex = 0;
-                    setupPaginationControls();
-                    renderCurrentPage();
-                }
-            }
-        }, 250);
-    });
-}
-
-function setupPaginationControls() {
-    let paginationContainer = document.getElementById('pagination-controls');
+    shared.DOM.seriesPlayerModal.className = 'series-player-page active season-grid-view';
     
-    if (!paginationContainer) {
-        paginationContainer = document.createElement('div');
-        paginationContainer.id = 'pagination-controls';
-        paginationContainer.className = 'pagination-container';
-        DOM.gridContainer.appendChild(paginationContainer);
-    }
-
-    paginationContainer.innerHTML = `
-        <button id="prev-page-btn" class="pagination-btn"><i class="fas fa-chevron-left"></i> Anterior</button>
-        <span id="page-info" class="pagination-info">Página 1 de 1</span>
-        <button id="next-page-btn" class="pagination-btn">Siguiente <i class="fas fa-chevron-right"></i></button>
+    shared.DOM.seriesPlayerModal.innerHTML = `
+        <button class="close-btn streaming-back-btn"><i class="fas fa-arrow-left"></i> Volver</button>
+        <div class="season-grid-container">
+            <h2 class="player-title">${seriesInfo.title}</h2>
+            <div id="season-grid" class="season-grid"></div>
+        </div>
     `;
-
-    document.getElementById('prev-page-btn').onclick = () => changePage(-1);
-    document.getElementById('next-page-btn').onclick = () => changePage(1);
+    
+    shared.DOM.seriesPlayerModal.querySelector('.close-btn').onclick = closeSeriesPlayerModal;
+    populateSeasonGrid(seriesId);
+    shared.appState.player.activeSeriesId = null;
 }
 
-async function changePage(direction) {
-    const totalPages = Math.ceil(appState.ui.contentToDisplay.length / UI.ITEMS_PER_LOAD);
-    const newPage = appState.ui.currentIndex + direction;
+function populateSeasonGrid(seriesId) {
+    const container = shared.DOM.seriesPlayerModal.querySelector('#season-grid');
+    
+    function formatSeasonName(seasonKey, seasonNum, customLabel = null) {
+        if (customLabel && customLabel.trim()) return customLabel.trim();
 
-    if (newPage >= 0 && newPage < totalPages) {
-        appState.ui.currentIndex = newPage;
-
-        const headerOffset = 80; 
-        const elementPosition = DOM.gridContainer.getBoundingClientRect().top;
-        const offsetPosition = elementPosition + window.pageYOffset - headerOffset;
-        window.scrollTo({ top: offsetPosition, behavior: "smooth" });
-
-        const gridEl = DOM.gridContainer.querySelector('.grid');
-        if (gridEl) {
-            gridEl.innerHTML = `
-                <div style="
-                    width: 100%; 
-                    height: 60vh; 
-                    display: flex; 
-                    justify-content: center; 
-                    align-items: center; 
-                    grid-column: 1 / -1; 
-                ">
-                    <div class="loading-text">Cargando...</div>
-                </div>`;
-        }
-
-        const start = appState.ui.currentIndex * UI.ITEMS_PER_LOAD;
-        const end = start + UI.ITEMS_PER_LOAD;
-        const nextItems = appState.ui.contentToDisplay.slice(start, end);
-
-        const imagePromises = nextItems.map(([id, item]) => preloadImage(item.poster));
+        const keyLower = String(seasonKey).toLowerCase();
         
-        try {
-            await Promise.race([
-                Promise.all(imagePromises),
-                new Promise(r => setTimeout(r, 3000))
-            ]);
-        } catch (e) { console.warn("Tardó mucho en cargar página"); }
-
-        renderCurrentPage();
+        if (keyLower.includes('pelicula') || keyLower.includes('película') || keyLower === 'pelicula') return 'Película';
+        if (keyLower.includes('especial') || keyLower === 'especial') return 'Especial';
+        if (keyLower.includes('ova')      || keyLower === 'ova')      return 'OVA';
+        if (keyLower.includes('movie')    || keyLower === 'movie')    return 'Película';
+        if (keyLower.includes('special')  || keyLower === 'special')  return 'Especial';
+        
+        return `Temporada ${seasonNum}`;
     }
-}
-
-function renderCurrentPage() {
-    const gridEl = DOM.gridContainer.querySelector('.grid');
-    if (!gridEl) return;
-
-    gridEl.innerHTML = '';
-
-    const start = appState.ui.currentIndex * UI.ITEMS_PER_LOAD;
-    const end = start + UI.ITEMS_PER_LOAD;
-    const itemsPage = appState.ui.contentToDisplay.slice(start, end);
-
-    const activeFilter = document.querySelector('.main-nav a.active, .mobile-nav a.active')?.dataset.filter;
-
-    itemsPage.forEach(([id, item], index) => {
-        let type = 'movie'; 
-
-        if (activeFilter === 'series') {
-            type = 'series';
-        } else if (activeFilter === 'ucm') {
-            if (item.type === 'series' || appState.content.seriesEpisodes[id]) {
-                type = 'series';
-            } else {
-                type = 'movie';
-            }
-        } else {
-            if (appState.content.series[id] || item.type === 'series' || item.type === 'serie') {
-                type = 'series';
-            }
-        }
-
-        const card = createMovieCardElement(id, item, type, 'grid', false); 
-        
-        const delay = index * 40; 
-        card.style.animationDelay = `${delay}ms`;
-
-        gridEl.appendChild(card);
-    });
-
-    updatePaginationUI();
-}
-
-function updatePaginationUI() {
-    const totalPages = Math.ceil(appState.ui.contentToDisplay.length / UI.ITEMS_PER_LOAD);
-    const currentPage = appState.ui.currentIndex + 1; 
     
-    const prevBtn = document.getElementById('prev-page-btn');
-    const nextBtn = document.getElementById('next-page-btn');
-    const pageInfo = document.getElementById('page-info');
-
-    if (pageInfo) pageInfo.textContent = `Página ${currentPage} de ${totalPages}`;
-    if (prevBtn) prevBtn.disabled = (currentPage === 1);
-    if (nextBtn) nextBtn.disabled = (currentPage === totalPages || totalPages === 0);
+    const episodesData = shared.appState.content.seriesEpisodes[seriesId] || {};
+    const postersData  = shared.appState.content.seasonPosters[seriesId]  || {};
+    const seriesInfo   = findContentData(seriesId); 
     
-    const container = document.getElementById('pagination-controls');
-    if (container) {
-        container.style.display = (totalPages <= 1) ? 'none' : 'flex';
-    }
-}
-
-function handleGlobalClick(event) {
-    const profileContainer = document.getElementById('user-profile-container');
-    const dropdown = document.getElementById('user-menu-dropdown');
-    
-    if (dropdown && dropdown.classList.contains('show')) {
-        if (!profileContainer.contains(event.target)) {
-            dropdown.classList.remove('show');
-        }
-    }
-
-    const searchContainer = document.getElementById('search-container');
-    const searchInput = document.getElementById('search-input');
-
-    const removeHistoryBtn = event.target.closest('.btn-remove-history');
-    
-    if (removeHistoryBtn) {
-        event.preventDefault();
-        event.stopPropagation();
-        
-        const entryKey = removeHistoryBtn.dataset.key;
-        
-        if (entryKey) {
-            openConfirmationModal(
-                'Borrar del Historial',
-                '¿Quieres eliminar este título de tu historial de reproducción?',
-                () => removeFromHistory(entryKey)
-            );
-        }
+    if (!seriesInfo) {
+        console.error("No se encontró info para la serie:", seriesId);
         return;
     }
-}
 
-function preloadHeroImages(movieIds) {
-    movieIds.forEach((movieId) => {
-        const movieData = appState.content.movies[movieId];
-        if (!movieData) return;
-        const imagesToPreload = [
-            { type: 'banner', url: movieData.banner },
-            { type: 'poster', url: movieData.poster }
-        ];
-        imagesToPreload.forEach(({ type, url }) => {
-            if (!url) return;
-            const img = new Image();
-            img.onload = () => {
-                const key = `${movieId}_${type}`;
-                appState.hero.preloadedImages.set(key, url);
-            };
-            img.src = url;
-        });
-    });
-}
-
-function setupHero() {
-    clearInterval(appState.ui.heroInterval);
-    if (!DOM.heroSection) return;
-    
-    DOM.heroSection.innerHTML = `<div class="hero-content"><div id="hero-title-container"></div><p id="hero-synopsis"></p><div class="hero-buttons"></div></div><div class="guirnalda-container"></div>`;
-    
-    const getHeroScore = (id, item, type) => {
-        const tr = Number(item.tr) || 0;
-        
-        const lastUpdate = getLatestUpdateTimestamp(id, item, type);
-        const now = Date.now();
-        const diffDays = (now - lastUpdate) / (1000 * 60 * 60 * 24);
-        
-        if (diffDays <= 7 && diffDays >= 0) {
-            return tr + 100000; 
-        }
-        return tr; 
-    };
-
-    const topMovies = Object.entries(appState.content.movies)
-        .map(([id, item]) => ({ 
-            id, 
-            type: 'movie', 
-            score: getHeroScore(id, item, 'movie') 
-        }))
-        .sort((a, b) => b.score - a.score); 
-
-    const topSeries = Object.entries(appState.content.series)
-        .map(([id, item]) => ({ 
-            id, 
-            type: 'series', 
-            score: getHeroScore(id, item, 'series') 
-        }))
-        .sort((a, b) => b.score - a.score);
-
-    const mixedHeroItems = [];
-    const itemsPerCategory = 8; 
-    
-    for (let i = 0; i < itemsPerCategory; i++) {
-        if (topMovies[i]) mixedHeroItems.push(topMovies[i]);
-        if (topSeries[i]) mixedHeroItems.push(topSeries[i]);
-    }
-
-    appState.ui.heroItems = mixedHeroItems;
-
-    if (mixedHeroItems.length > 0) {
-        preloadHeroImages(mixedHeroItems);
-        changeHeroMovie(mixedHeroItems[0]); 
-        startHeroInterval(); 
-    } else {
-       DOM.heroSection.style.display = 'none'; 
-    }
-}
-
-function startHeroInterval() {
-    clearInterval(appState.ui.heroInterval);
-    let currentHeroIndex = 0;
-    if (!appState.ui.heroItems || appState.ui.heroItems.length === 0) return;
-    
-    appState.ui.heroInterval = setInterval(() => {
-        if (window._heroEditPaused) return; 
-        currentHeroIndex = (currentHeroIndex + 1) % appState.ui.heroItems.length;
-        appState.ui.currentHeroIndex = currentHeroIndex;
-        changeHeroMovie(appState.ui.heroItems[currentHeroIndex]);
-    }, 8000); 
-}
-
-function changeHeroMovie(itemObj) {
-    if (appState.hero.isTransitioning || !itemObj) return;
-    
-    const { id, type } = itemObj; 
-    const heroContent = DOM.heroSection.querySelector('.hero-content');
-    
-    let data = null;
-    if (type === 'movie') data = appState.content.movies[id];
-    else if (type === 'series') data = appState.content.series[id];
-
-    if (!heroContent || !data) return;
-
-    appState.hero.isTransitioning = true;
-    heroContent.classList.add('hero-fading');
-
-    setTimeout(() => {
-        const isMobile = window.innerWidth < 992;
-        const imageType = isMobile ? 'poster' : 'banner';
-        const cacheKey = `${id}_${imageType}`;
-        
-        const imageUrl = appState.hero.preloadedImages.get(cacheKey) || 
-                        (isMobile ? data.poster : data.banner);
-        
-        DOM.heroSection.style.backgroundImage = `url(${imageUrl})`;
-        
-        heroContent.style.opacity = '0';
-        heroContent.style.transition = 'opacity 0.3s ease';
-
-        const heroTitleContainer = heroContent.querySelector('#hero-title-container');
-        if (data.logoUrl) {
-            heroTitleContainer.innerHTML = `<div class="hero-logo-container"><img src="${data.logoUrl}" alt="${data.title}" class="hero-logo-img"></div>`;
-            const heroLogoContainer = heroTitleContainer.querySelector('.hero-logo-container');
-            const heroSlot = getLogoSlot('hero');
-            loadLogoSettings(id, heroLogoContainer, () => {
-                heroContent.style.opacity = '1';
-                const user = auth.currentUser;
-                if (user && user.email === 'baquezadat@gmail.com') {
-                    initLogoEditor(id, heroLogoContainer, heroSlot);
-                }
-            }, heroSlot);
-        } else {
-            heroTitleContainer.innerHTML = `<h1 class="hero-title-text">${data.title}</h1>`;
-            heroContent.style.opacity = '1';
-        }
-        heroContent.querySelector('#hero-synopsis').textContent = data.synopsis;
-
-        const heroButtons = heroContent.querySelector('.hero-buttons');
-        heroButtons.innerHTML = ''; 
-
-        const playButton = document.createElement('button');
-        playButton.className = 'btn btn-play';
-        playButton.innerHTML = `<i class="fas fa-play"></i> ${isMobile ? 'Ver' : 'Ver Ahora'}`;
-        playButton.onclick = async () => { 
-            const player = await getPlayerModule();
-            if (type === 'series') {
-                player.openSeriesPlayer(id);
-            } else {
-                player.openPlayerModal(id, data.title.replace(/'/g, "\\'"));
-            }
-        };
-
-        const infoButton = document.createElement('button');
-        infoButton.className = 'btn btn-info';
-        infoButton.textContent = isMobile ? 'Más Info' : 'Más Información';
-        infoButton.onclick = () => openDetailsModal(id, type);
-
-        heroButtons.appendChild(playButton);
-        heroButtons.appendChild(infoButton);
-
-        const user = auth.currentUser;
-        if (user) { 
-            const listBtn = document.createElement('button');
-            const isInList = appState.user.watchlist.has(id);
-            const iconClass = isInList ? 'fa-check' : 'fa-plus';
-            
-            listBtn.className = isInList ? 'btn-watchlist in-list' : 'btn-watchlist';
-            listBtn.setAttribute('data-content-id', id);
-            listBtn.title = "Añadir a Mi Lista";
-            listBtn.innerHTML = `<i class="fas ${iconClass}"></i>`;
-            
-            listBtn.onclick = (e) => {
-                e.stopPropagation(); 
-                handleWatchlistClick(listBtn);
-            };
-
-            heroButtons.appendChild(listBtn);
-        }
-
-        heroContent.classList.remove('hero-fading');
-        appState.hero.isTransitioning = false;
-    }, 300);
-}
-
-function generateCarousels() {
-    const container = DOM.carouselContainer;
+    if (!container) return;
     container.innerHTML = '';
 
-    createCarouselSection('Películas Nuevas', appState.content.movies);
-    createCarouselSection('Series Nuevas', appState.content.series);
-}
+    let allSeasons;
 
-function createCarouselSection(title, dataSource) {
-    if (!dataSource || Object.keys(dataSource).length === 0) return;
-
-    const section = document.createElement('section');
-    section.classList.add('carousel');
-
-    const titleEl = document.createElement('h2');
-    titleEl.classList.add('carousel-title');
-    titleEl.textContent = title;
-    section.appendChild(titleEl);
-
-    const track = document.createElement('div');
-    track.classList.add('carousel-track');
-
-    let entries = Object.entries(dataSource);
-
-    entries.sort((a, b) => {
-        const idA = a[0]; const idB = b[0];
-        const aData = a[1]; const bData = b[1];
-        
-        const typeA = title.toLowerCase().includes('serie') ? 'series' : 'movie';
-        const typeB = typeA;
-
-        const timeA = getLatestUpdateTimestamp(idA, aData, typeA);
-        const timeB = getLatestUpdateTimestamp(idB, bData, typeB);
-
-        if (timeA !== timeB) return timeB - timeA;
-
-        if (timeA > 0) {
-             const getScore = (id, data) => {
-                if (isDateRecent(data.date_added)) return 3;
-                if (hasRecentSeasonFromPosters(id)) return 2;
-                if (hasRecentEpisodes(id)) return 1;
-                return 0;
-            };
-            return getScore(idB, bData) - getScore(idA, aData);
-        }
-
-        return (Number(bData.tr) || 0) - (Number(aData.tr) || 0);
-    });
-
-    entries.slice(0, 8).forEach(([id, item]) => {
-        const type = title.includes('Serie') ? 'series' : 'movie';
-        const card = createMovieCardElement(id, item, type, 'carousel', false);
-        track.appendChild(card);
-    });
-
-    section.appendChild(track);
-    DOM.carouselContainer.appendChild(section);
-}
-
-function setupSearch() {
-    if (!DOM.searchInput) return;
-    let isSearchActive = false;
-
-    const norm = str => String(str || '')
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '') 
-        .replace(/[^a-z0-9\s]/g, '');    
-
-    DOM.searchInput.addEventListener('input', () => {
-        const searchTerm = norm(DOM.searchInput.value.trim());
-        if (searchTerm === '') {
-            const gridEl = DOM.gridContainer.querySelector('.grid');
-            if (gridEl) {
-                gridEl.style.display = '';
-                gridEl.style.justifyContent = '';
-                gridEl.style.alignItems = '';
-            }
-
-            if (isSearchActive) {
-                const activeNav = document.querySelector('.main-nav a.active, .mobile-nav a.active');
-                switchView(activeNav ? activeNav.dataset.filter : 'all');
-                isSearchActive = false;
-            }
-            return;
-        }
-        isSearchActive = true;
-        
-        let allContent = { ...appState.content.movies, ...appState.content.series };
-
-        if (appState.content.sagas) {
-            Object.values(appState.content.sagas).forEach(sagaItems => {
-                if (sagaItems) {
-                    Object.assign(allContent, sagaItems);
-                }
-            });
-        }
-
-        if (appState.content.ucm) Object.assign(allContent, appState.content.ucm);
-
-        const filtered = Object.entries(allContent).filter(([id, item]) => {
-            if (norm(item.title || '').includes(searchTerm)) return true;
-            const isSerie = !!appState.content.series[id] || item.type === 'series' || item.type === 'serie';
-            if (isSerie) return norm(item.secondTitle || '').includes(searchTerm);
-            return norm(id).includes(searchTerm);
-        });
-
-        const seenTitles = new Set();
-        const results = filtered.filter(([id, item]) => {
-        const titleKey = norm(item.title).trim();
-            if (seenTitles.has(titleKey)) return false;
-                seenTitles.add(titleKey);
-            return true;
-        });
-
-    displaySearchResults(results);
-        });
-    }
-
-function displaySearchResults(results) {
-    switchView('search');
-    const gridEl = DOM.gridContainer.querySelector('.grid');
-    
-    if (DOM.gridContainer) DOM.gridContainer.style.display = 'block';
-    
-    if (!gridEl) return;
-    gridEl.innerHTML = '';
-    
-    if (results.length > 0) {
-        gridEl.style.display = 'grid';
-        results.forEach(([id, item]) => {
-            const type = appState.content.series[id] ? 'series' : 'movie';
-            gridEl.appendChild(createMovieCardElement(id, item, type, 'grid', false));
-        });
+    if (shared.appState.content.seasonOrder && shared.appState.content.seasonOrder[seriesId]) {
+        allSeasons = shared.appState.content.seasonOrder[seriesId];
     } else {
-        gridEl.style.display = 'flex';
-        gridEl.style.justifyContent = 'center';
-        gridEl.style.alignItems = 'center';
-        gridEl.innerHTML = `<p style="color: var(--text-muted); text-align: center;">No se encontraron resultados.</p>`;
-    }
-}
-
-function generateContinueWatchingCarousel(snapshot) {
-    const user = auth.currentUser;
-    
-    const existingCarousel = document.getElementById('continue-watching-carousel');
-    if (existingCarousel) {
-        existingCarousel.remove();
+        const episodeSeasons = Object.keys(episodesData);
+        const posterSeasons  = Object.keys(postersData);
+        allSeasons = [...new Set([...episodeSeasons, ...posterSeasons])];
     }
 
-    const carouselContainer = document.getElementById('carousel-container');
-    
-    if (!user || !carouselContainer || !snapshot.exists()) {
-        return;
-    }
+    const seasonsMapped  = allSeasons.map((key) => ({ key, num: !isNaN(key) ? Number(key) : 0 }));
+    const totalSeasons   = seasonsMapped.length;
 
-    let historyItems = [];
-    snapshot.forEach(child => {
-        const item = child.val();
-        historyItems.push({
-            key: child.key,
-            ...item
-        });
-    });
-    
-    historyItems.reverse();
-    
-    const SPECIAL_KEYWORDS = ['pelicula', 'película', 'especial', 'tespecial', 'movie', 'special', 'ova'];
-    const isSpecialSeason = (season) => {
-        if (season == null) return false;
-        const s = String(season).toLowerCase();
-        return SPECIAL_KEYWORDS.some(kw => s.includes(kw));
-    };
-    const seriesOnly = historyItems.filter(item =>
-        item.type === 'series' && !isSpecialSeason(item.season)
-    );
-    
-    const seriesToShow = seriesOnly.slice(0, 15);
-    
-    if (seriesToShow.length === 0) {
-        return;
-    }
+    let columns = 5; 
+    if      (totalSeasons <= 5)                        columns = totalSeasons;
+    else if (totalSeasons === 6)                       columns = 3;
+    else if (totalSeasons === 7 || totalSeasons === 8) columns = 4;
+    else                                               columns = 5;
 
-    const carouselEl = document.createElement('div');
-    carouselEl.id = 'continue-watching-carousel';
-    carouselEl.className = 'carousel'; 
-    
-    carouselEl.innerHTML = `
-        <h3 class="carousel-title">Continuar Viendo</h3>
-        <div class="carousel-track"></div>
-    `;
-    
-    const track = carouselEl.querySelector('.carousel-track');
-    
-    seriesToShow.forEach(historyItem => {
-        let seriesData = findContentData(historyItem.contentId);
+    container.style.gridTemplateColumns = `repeat(${columns}, 200px)`;
+    container.style.justifyContent      = 'center';
+    container.style.maxWidth            = `${columns * 200 + (columns - 1) * 20}px`; 
+
+    seasonsMapped.forEach(({ key: seasonKey, num: seasonNum }) => {
+        const rawEpisodes = episodesData[seasonKey];
+        const episodes    = rawEpisodes ? (Array.isArray(rawEpisodes) ? rawEpisodes : Object.values(rawEpisodes)) : [];
         
-        if (!seriesData) {
-            return;
-        }
-        
-        let episodeData = null;
-        let episodeThumbnail = null;
-        let episodeTitle = null;
-        
-        if (historyItem.season != null && historyItem.lastEpisode != null) {
-            const seriesEpisodes = appState.content.seriesEpisodes[historyItem.contentId];
-            if (seriesEpisodes && seriesEpisodes[historyItem.season]) {
-                const episodes = seriesEpisodes[historyItem.season];
-                if (episodes && episodes[historyItem.lastEpisode]) {
-                    episodeData = episodes[historyItem.lastEpisode];
-                    episodeThumbnail = episodeData.thumbnail || episodeData.poster;
-                    episodeTitle = episodeData.title;
-                }
-            }
-        }
-        
-        const totalSeasons = Object.keys(appState.content.seriesEpisodes[historyItem.contentId] || {}).length;
-        const card = createMovieCardElement(
-            historyItem.contentId, 
-            seriesData, 
-            'series', 
-            'carousel', 
-            false, 
-            {
-                source: 'continuar-viendo',
-                season: historyItem.season,
-                lastEpisode: historyItem.lastEpisode,
-                episodeThumbnail: episodeThumbnail,
-                episodeTitle: episodeTitle,
-                seriesTitle: seriesData.title, 
-                historyKey: historyItem.key,
-                totalSeasons: totalSeasons     
-            }
-        );
-        
-        track.appendChild(card);
-    });
-    
-    carouselContainer.prepend(carouselEl);
-}
+        let posterUrl         = seriesInfo.poster || '';
+        let seasonStatus      = ''; 
+        let seasonStatusRaw   = ''; 
+        let seasonCustomLabel = ''; 
 
-window.generateContinueWatchingCarousel = generateContinueWatchingCarousel;
-
-function createContinueWatchingCard(itemData) {
-    const card = document.createElement('div');
-    card.className = 'continue-watching-card';
-    card.onclick = async () => { 
-        const player = await getPlayerModule();
-        player.openPlayerToEpisode(itemData.contentId, itemData.season, itemData.episodeIndexToOpen);
-    };
-    card.innerHTML = `
-        <img src="${itemData.thumbnail}" class="cw-card-thumbnail" alt="">
-        <div class="cw-card-overlay"></div>
-        <div class="cw-card-info">
-            <h4 class="cw-card-title">${itemData.title}</h4>
-            <p class="cw-card-subtitle">${itemData.subtitle}</p>
-        </div>
-        <div class="cw-card-play-icon"><i class="fas fa-play"></i></div>
-    `;
-    return card;
-}
-
-function closeAllModals() {
-    const seriesPage = document.getElementById('series-player-page');
-    if (seriesPage && seriesPage.classList.contains('active')) {
-        seriesPage.classList.remove('active', 'season-grid-view', 'player-layout-view');
-        seriesPage.style.display = 'none';
-        if (appState?.player) appState.player.activeSeriesId = null;
-        if (typeof switchView === 'function') switchView(appState?.currentFilter || 'all');
-    }
-
-    document.querySelectorAll('.modal.show').forEach(modal => {
-        modal.classList.remove('show');
-        const iframe = modal.querySelector('iframe');
-        if (iframe) iframe.src = '';
-        
-        // 🔥 Destruir ArtPlayer globalmente
-        if (appState?.player?.activeCineInstance) {
-            appState.player.activeCineInstance.destroy();
-            appState.player.activeCineInstance = null;
-        }
-    });
-    document.body.classList.remove('modal-open');
-
-    if (typeof shared !== 'undefined' && shared.appState && shared.appState.player) {
-        shared.appState.player.activeSeriesId = null;
-        if (shared.appState.player.movieHistoryTimer) {
-            clearTimeout(shared.appState.player.movieHistoryTimer);
-            shared.appState.player.movieHistoryTimer = null;
-        }
-    }
-
-    if (localStorage.getItem('pending_reload') === 'true') {
-        localStorage.removeItem('pending_reload');
-        safeClearStorage();
-        
-        setTimeout(() => {
-            const url = new URL(window.location.href);
-            url.searchParams.set('force_update', Date.now());
-            window.location.href = url.toString();
-        }, 300);
-    }
-}
-
-async function openDetailsModal(id, type, triggerElement = null) {
-    try {
-        const modal = DOM.detailsModal;
-        const panel = modal.querySelector('.details-panel'); 
-        const detailsButtons = document.getElementById('details-buttons');
-        const posterImg = document.getElementById('details-poster-img');
-
-        let data = findContentData(id);
-
-        if (!data) {
-            if (appState.content.movies[id]) data = appState.content.movies[id];
-            else if (appState.content.series[id]) data = appState.content.series[id];
-            
-            if (!data) {
-                ErrorHandler.show('content', 'No se pudo cargar la información del título.');
-                return;
-            }
-        }
-        
-        if (appState.content.series[id]) {
-            data = { ...data, ...appState.content.series[id] };
-        }
-
-        const isSeries = (type === 'series' || !!appState.content.series[id] || data.type === 'series' || data.type === 'serie');
-        
-        const detailsTitleEl = document.getElementById('details-title');
-        let logoSettingsPromise = Promise.resolve();
-        if (data.logoUrl) {
-            detailsTitleEl.innerHTML = `<div class="details-logo-container"><img src="${data.logoUrl}" alt="${data.title || ''}" class="details-logo-img"></div>`;
-            const logoContainer = detailsTitleEl.querySelector('.details-logo-container');
-            const modalSlot = getLogoSlot('modal');
-            logoSettingsPromise = new Promise(resolve => {
-                loadLogoSettings(id, logoContainer, resolve, modalSlot);
-            });
-        } else {
-            detailsTitleEl.textContent = data.title || '';
-        }
-        
-        let fullSynopsis = data.synopsis || 'Sin descripción.';
-        
-        if (!isSeries) {
-            const maxChars = 280; 
-            if (fullSynopsis.length > maxChars) {
-                fullSynopsis = fullSynopsis.substring(0, maxChars).trim() + "...";
-            }
-        }
-
-        document.getElementById('details-synopsis').textContent = fullSynopsis;
-        
-        const isVetada = !isSeries && data.estado && data.estado.toLowerCase() === 'vetada';
-        if (posterImg) {
-            posterImg.src = data.poster || '';
-            if (isVetada) {
-                posterImg.style.filter = 'grayscale(100%)';
+        const posterEntry = postersData[seasonKey];
+        if (posterEntry) {
+            if (typeof posterEntry === 'object') {
+                posterUrl         = posterEntry.posterUrl || posterEntry.poster || posterUrl;
+                seasonStatusRaw   = String(posterEntry.estado   || '').trim();
+                seasonStatus      = seasonStatusRaw.toLowerCase();
+                seasonCustomLabel = String(posterEntry.etiqueta || '').trim(); 
             } else {
-                posterImg.style.filter = 'none';
+                posterUrl = posterEntry;
             }
         }
-
-        const detailsMeta = modal.querySelector('.details-meta');
         
-        if (detailsMeta) {
-            detailsMeta.innerHTML = ''; 
+        const totalEpisodes    = episodes.length;
+        const isManuallyLocked = seasonStatus !== '' && seasonStatus !== 'disponible';
+        const isEmpty          = (totalEpisodes === 0);
+        const isLocked         = isManuallyLocked || (isEmpty && seasonStatus !== 'disponible');
+        const seasonLabel      = formatSeasonName(seasonKey, seasonNum, seasonCustomLabel);
 
-            const modalRating = appState.content.averages[id];
-            if (modalRating) {
-                const ratingBadge = document.createElement('span');
-                ratingBadge.className = 'modal-rating-badge';
-                if (reviewsModule && reviewsModule.getStarsHTML) {
-                    ratingBadge.innerHTML = reviewsModule.getStarsHTML(modalRating, false);
-                } else {
-                    ratingBadge.innerHTML = `<i class="fas fa-star" style="color:#ffd700"></i> ${modalRating}`;
-                }
-                detailsMeta.appendChild(ratingBadge);
-
-                const reviewCount = appState.content.reviewCounts && appState.content.reviewCounts[id];
-                if (reviewCount) {
-                    const countBadge = document.createElement('button');
-                    countBadge.className = 'modal-review-count';
-                    countBadge.innerHTML = `<i class="fas fa-comment-dots" style="margin-right:5px; color:#a78bfa;"></i>${reviewCount} ${reviewCount === 1 ? 'reseña' : 'reseñas'}`;
-                    countBadge.title = 'Ver todas las reseñas';
-                    countBadge.addEventListener('click', () => {
-                        const contentTitle = data.title || '';
-                        if (reviewsModule && reviewsModule.openContentReviews) {
-                            reviewsModule.openContentReviews(id, contentTitle);
-                        }
-                    });
-                    detailsMeta.appendChild(countBadge);
-                }
-            }
-
-            const isProximamente = !isSeries && data.estado && data.estado.toLowerCase() !== 'vetada' && data.estado.toLowerCase() !== 'mantenimiento' && data.estado.trim() !== '';
-            if (isSeries || isVetada || isProximamente) {
-                if (data.year) {
-                    const yearPill = document.createElement('span');
-                    yearPill.className = 'meta-pill';
-                    yearPill.textContent = data.year;
-                    detailsMeta.appendChild(yearPill);
-                }
-            }
-
-            const langVal = data.language || data.idioma || data.audio;
-
-            let genresVal = null;
-            if (data.genres) {
-                if (Array.isArray(data.genres)) {
-                    genresVal = data.genres.join(', ');
-                } else if (typeof data.genres === 'string') {
-                    genresVal = data.genres.replace(/;/g, ', ');
-                }
-            }
-
-            const normStr = s => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\s]/g, '');
-            const rawAltTitle = isSeries ? (data.secondTitle || '') : id;
-            const originalTitle = rawAltTitle && normStr(rawAltTitle) !== normStr(data.title || '') ? rawAltTitle : null;
-
-            const metaItems = [
-                { val: langVal, class: 'meta-pill' },
-                { val: genresVal, class: 'meta-pill' }
-            ];
-
-            if (originalTitle) {
-                const origSpan = document.createElement('span');
-                origSpan.className = 'meta-pill original-title-pill';
-                origSpan.title = 'Título original';
-                origSpan.innerHTML = `<i class="fas fa-film" style="margin-right:5px;opacity:0.7;"></i>${originalTitle}`;
-                detailsMeta.insertBefore(origSpan, detailsMeta.firstChild);
-            }
-
-            metaItems.forEach(item => {
-                if(item.val) {
-                    const span = document.createElement('span');
-                    span.className = item.class;
-                    span.textContent = item.val;
-                    detailsMeta.appendChild(span);
-                }
-            });
-        }
-
-        const _bannerUrl = (data.banner && data.banner.length > 5) ? data.banner : null;
-        if (panel) {
-            panel.style.backgroundImage = 'none';
-            panel.style.backgroundColor = '#1a1a1a';
-        }
-
-        if (detailsButtons) {
-            detailsButtons.innerHTML = '';
-
-            const getProximamenteLabel = (estado) => {
-                if (!estado) return null;
-                const val = estado.trim();
-                const lower = val.toLowerCase();
-                if (lower === 'vetada') return null;
-                if (lower === 'mantenimiento') return null; 
-                if (lower === 'proximamente' || lower === 'próximamente') return 'Próximamente';
-                if (/\d/.test(val)) return `Próximamente el ${val}`;
-                return `Próximamente en ${val}`;
-            };
-
-            const isMantenimiento = !isSeries && data.estado && data.estado.toLowerCase() === 'mantenimiento';
-            const proximamenteLabel = !isSeries && data.estado ? getProximamenteLabel(data.estado) : null;
-
-            if (isVetada) {
-                const vetadaMsg = document.createElement('div');
-                vetadaMsg.className = 'vetada-message';
-                vetadaMsg.innerHTML = `
-                    <i class="fas fa-lock"></i>
-                    <span>No disponible</span>
-                `;
-                detailsButtons.appendChild(vetadaMsg);
-                
-                vetadaMsg.style.cssText = `
-                    background: linear-gradient(135deg, #1a1a1a, #4a0000);
-                    border: 2px solid #ff4444;
-                    color: #ff4444;
-                    padding: 15px 25px;
-                    border-radius: 8px;
-                    font-size: 1rem;
-                    font-weight: 700;
-                    display: flex;
-                    align-items: center;
-                    gap: 12px;
-                    text-shadow: 0 0 10px rgba(255, 68, 68, 0.5);
-                    cursor: not-allowed;
-                `;
-            } else if (proximamenteLabel) {
-                const proxMsg = document.createElement('div');
-                proxMsg.className = 'vetada-message proximamente-message';
-                proxMsg.innerHTML = `
-                    <i class="fas fa-clock"></i>
-                    <span>${proximamenteLabel}</span>
-                `;
-                proxMsg.style.cssText = `
-                    background: linear-gradient(135deg, #0d1b2a, #1a3a5c);
-                    border: 2px solid #4a9eff;
-                    color: #4a9eff;
-                    padding: 15px 25px;
-                    border-radius: 8px;
-                    font-size: 1rem;
-                    font-weight: 700;
-                    display: flex;
-                    align-items: center;
-                    gap: 12px;
-                    cursor: not-allowed;
-                    width: 100%;
-                    justify-content: center;
-                `;
-                detailsButtons.appendChild(proxMsg);
-            } else if (isMantenimiento) {
-                const mantMsg = document.createElement('div');
-                mantMsg.className = 'vetada-message mantenimiento-message';
-                mantMsg.innerHTML = `<i class="fas fa-wrench"></i><span>En mantenimiento</span>`;
-                mantMsg.style.cssText = `
-                    background: linear-gradient(135deg, #1a1500, #3a2e00);
-                    border: 2px solid #f5a623;
-                    color: #f5a623;
-                    padding: 15px 25px;
-                    border-radius: 8px;
-                    font-size: 1rem;
-                    font-weight: 700;
-                    display: flex;
-                    align-items: center;
-                    gap: 12px;
-                    cursor: not-allowed;
-                    width: 100%;
-                    justify-content: center;
-                `;
-                detailsButtons.appendChild(mantMsg);
+        const card = document.createElement('div');
+        card.className = `season-poster-card ${isLocked ? 'locked' : ''} ${seasonStatus === 'mantenimiento' ? 'en-mantenimiento' : ''}`;
+        
+        card.onclick = () => {
+            if (isLocked) {
+                shared.ErrorHandler.show('content', 'Temporada no disponible aún.');
             } else {
-                const playBtn = document.createElement('button');
-                playBtn.className = 'btn btn-play';
-                playBtn.innerHTML = `<i class="fas fa-play"></i> Ver ahora`;
-                playBtn.onclick = async () => {
-                    ModalManager.closeAll();
-                    const player = await getPlayerModule();
-                    
-                    if (isSeries) {
-                        player.openSeriesPlayer(id);
-                    } else {
-                        player.openPlayerModal(id, data.title);
-                    }
-                };
-                detailsButtons.appendChild(playBtn);
-
-            if (isSeries) {
-                const episodes = appState.content.seriesEpisodes[id] || {};
-                
-                const randomVal = String(data.randomValue || data.random || '').trim().toLowerCase();
-                const isRandomEnabled = ['si', 'sí', 'yes', 'true', '1'].includes(randomVal);
-                
-                if (isRandomEnabled) {
-                    const randomBtn = document.createElement('button');
-                    randomBtn.className = 'btn btn-random';
-                    randomBtn.innerHTML = `<i class="fas fa-random"></i> Aleatorio`;
-                    randomBtn.onclick = async () => {
-                        const allEpisodes = [];
-                        const episodesData = appState.content.seriesEpisodes[id] || {};
-                        
-                        Object.keys(episodesData).forEach(seasonKey => {
-                            const episodesArray = episodesData[seasonKey];
-                            if (Array.isArray(episodesArray)) {
-                                episodesArray.forEach((episode, index) => {
-                                    if (episode && episode.videoId) {
-                                        allEpisodes.push({
-                                            season: seasonKey,
-                                            episodeIndex: index,
-                                            episodeNum: index + 1,
-                                            data: episode
-                                        });
-                                    }
-                                });
-                            }
-                        });
-
-                        if (allEpisodes.length === 0) {
-                            ErrorHandler.show('content', 'No hay episodios disponibles.');
-                            return;
-                        }
-
-                        const randomIndex = Math.floor(Math.random() * allEpisodes.length);
-                        const selected = allEpisodes[randomIndex];
-
-                        ModalManager.closeAll();
-                        const player = await getPlayerModule();
-                        player.openPlayerToEpisode(id, selected.season, selected.episodeIndex);
-                    };
-                    detailsButtons.appendChild(randomBtn);
-                }
-                
-                if (Object.keys(episodes).length > 1) {
-                    const infoBtn = document.createElement('button');
-                    infoBtn.className = 'btn btn-info';
-                    infoBtn.innerHTML = `<i class="fas fa-list"></i> Temporadas`;
-                    infoBtn.onclick = async () => {
-                        ModalManager.closeAll();
-                        const player = await getPlayerModule();
-                        player.openSeriesPlayer(id, true);
-                    };
-                    detailsButtons.appendChild(infoBtn);
-                }
+                renderEpisodePlayer(seriesId, seasonKey);
             }
-
-            if (auth.currentUser) {
-                const inList = appState.user.watchlist.has(id);
-                const listBtn = document.createElement('button');
-                listBtn.className = `btn btn-watchlist ${inList ? 'in-list' : ''}`;
-                listBtn.innerHTML = `<i class="fas ${inList ? 'fa-check' : 'fa-plus'}"></i>`;
-                listBtn.dataset.contentId = id;
-                
-                listBtn.onclick = (e) => {
-                    e.stopPropagation();
-                    handleWatchlistClick(listBtn);
-                };
-                detailsButtons.appendChild(listBtn);
-            }
-            } 
-
-            const reviewBtn = document.createElement('button');
-            reviewBtn.className = 'btn btn-review btn-icon-only';
-            reviewBtn.innerHTML = `<i class="fas fa-star"></i>`;
-            reviewBtn.title = 'Reseñar'; 
-            
-            reviewBtn.onclick = async () => {
-                if (!auth.currentUser) {
-                    openConfirmationModal("Inicia Sesión", "Necesitas cuenta para reseñar.", () => openAuthModal(true));
-                    return;
-                }
-
-                const reviews = await getReviewsModule();
-
-                ModalManager.closeAll();
-
-                setTimeout(() => {
-                    reviews.openReviewModal(true, {
-                        contentId: id,
-                        contentTitle: data.title,
-                        contentType: isSeries ? 'series' : 'movie'
-                    });
-                }, 100);
-            };
-            detailsButtons.appendChild(reviewBtn);
-
-            if (!isSeries && auth.currentUser) {
-                const roulette = await getRouletteModule();
-                const isWatched = roulette.isMovieWatched ? roulette.isMovieWatched(id) : false;
-                const eyeBtn = document.createElement('button');
-                eyeBtn.className = `btn btn-icon-only btn-roulette-eye ${isWatched ? 'is-watched' : ''}`;
-                eyeBtn.innerHTML = `<i class="fas ${isWatched ? 'fa-eye' : 'fa-eye-slash'}"></i>`;
-                eyeBtn.title = isWatched ? 'Quitar de vistas (volverá a la ruleta)' : 'Marcar como vista (no saldrá en la ruleta)';
-                eyeBtn.onclick = async () => {
-                    const nowWatched = eyeBtn.classList.contains('is-watched');
-                    if (nowWatched) {
-                        await roulette.unmarkMovieFromRoulette(id);
-                        eyeBtn.classList.remove('is-watched');
-                        eyeBtn.innerHTML = `<i class="fas fa-eye-slash"></i>`;
-                        eyeBtn.title = 'Marcar como vista (no saldrá en la ruleta)';
-                    } else {
-                        await roulette.markMovieAsWatched(id);
-                        eyeBtn.classList.add('is-watched');
-                        eyeBtn.innerHTML = `<i class="fas fa-eye"></i>`;
-                        eyeBtn.title = 'Quitar de vistas (volverá a la ruleta)';
-                    }
-                };
-                detailsButtons.appendChild(eyeBtn);
-            }
-
-            const adminUser = auth.currentUser;
-            if (adminUser && adminUser.email === 'baquezadat@gmail.com') {
-                const logoContainer = document.getElementById('details-title')
-                    ?.querySelector('.details-logo-container');
-                if (logoContainer && !logoContainer.dataset.editorActive) {
-                    initLogoEditor(id, logoContainer, getLogoSlot('modal'));
-                }
-            }
-        } 
-
-        const _showModal = () => {
-            if (panel && _bannerUrl) {
-                panel.style.backgroundImage = `url(${_bannerUrl})`;
-            }
-            modal.classList.add('show');
-            document.body.classList.add('modal-open');
         };
 
-        const bannerPromise = _bannerUrl
-            ? new Promise(resolve => {
-                const preload = new Image();
-                const timeout = setTimeout(resolve, 1500); 
-                preload.onload  = () => { clearTimeout(timeout); resolve(); };
-                preload.onerror = () => { clearTimeout(timeout); resolve(); };
-                preload.src = _bannerUrl;
-            })
-            : Promise.resolve();
-
-        Promise.all([bannerPromise, logoSettingsPromise]).then(_showModal);
-
-    } catch (e) {
-        console.error("Error abriendo detalles:", e);
-        if (window.logError) window.logError(e, 'Open Details');
-    }
-}
-
-// ===========================================================
-// 6. AUTENTICACIÓN Y DATOS DE USUARIO
-// ===========================================================
-function setupAuthListeners() {
-    const setupPasswordToggle = (inputId, iconId) => {
-        const input = document.getElementById(inputId);
-        const icon = document.getElementById(iconId);
-        if (input && icon) {
-            const newIcon = icon.cloneNode(true);
-            icon.parentNode.replaceChild(newIcon, icon);
-            
-            newIcon.addEventListener('click', () => {
-                const isPassword = input.type === 'password';
-                input.type = isPassword ? 'text' : 'password';
-                newIcon.classList.toggle('fa-eye');
-                newIcon.classList.toggle('fa-eye-slash');
-            });
-        }
-    };
-    setupPasswordToggle('login-password', 'toggle-login-pass');
-    setupPasswordToggle('register-password', 'toggle-register-pass');
-
-    const loginForm = document.getElementById('login-form');
-    const registerForm = document.getElementById('register-form');
-    const recoveryForm = document.getElementById('recovery-form');
-    const authSwitch = document.querySelector('.auth-switch');
-
-    const forgotLink = document.getElementById('forgot-password-link');
-    if (forgotLink) {
-        forgotLink.onclick = (e) => {
-            e.preventDefault();
-            loginForm.style.display = 'none';
-            registerForm.style.display = 'none';
-            recoveryForm.style.display = 'flex'; 
-            recoveryForm.style.flexDirection = 'column';
-            if (authSwitch) authSwitch.style.display = 'none';
-        };
-    }
-
-    const backToLogin = document.getElementById('back-to-login-link');
-    if (backToLogin) {
-        backToLogin.onclick = (e) => {
-            e.preventDefault();
-            recoveryForm.style.display = 'none';
-            loginForm.style.display = 'flex';
-            if (authSwitch) authSwitch.style.display = 'block';
-        };
-    }
-
-    if (DOM.loginBtnHeader) DOM.loginBtnHeader.onclick = (e) => { e.preventDefault(); openAuthModal(true); };
-    if (DOM.registerBtnHeader) DOM.registerBtnHeader.onclick = (e) => { e.preventDefault(); openAuthModal(false); };
-    
-    if (DOM.switchAuthModeLink) {
-        DOM.switchAuthModeLink.onclick = (e) => {
-            e.preventDefault();
-            const isLogin = loginForm.style.display !== 'none';
-            openAuthModal(!isLogin);
-        };
-    }
-
-    if (DOM.loginForm) {
-    DOM.loginForm.onsubmit = (e) => {
-        e.preventDefault();
-        const email = document.getElementById('login-email').value;
-        const pass = document.getElementById('login-password').value;
-        
-        const errorEl = document.getElementById('login-error'); 
-        
-        auth.signInWithEmailAndPassword(email, pass)
-            .then(() => { 
-                ModalManager.closeAll(); 
-                DOM.loginForm.reset(); 
-            })
-            .catch(() => { 
-                errorEl.textContent = "Credenciales incorrectas."; 
-                errorEl.style.display = 'block'; 
-            });
-        };
-    }
-
-    if (DOM.registerForm) {
-        DOM.registerForm.addEventListener('submit', (e) => {
-            e.preventDefault(); 
-            const username = document.getElementById('register-username').value;
-            const email = document.getElementById('register-email').value;
-            const password = document.getElementById('register-password').value;
-            
-            const errorEl = document.getElementById('register-error');
-
-            if (errorEl) {
-                errorEl.style.display = 'none';
-                errorEl.textContent = '';
-            }
-
-            auth.createUserWithEmailAndPassword(email, password)
-                .then((userCredential) => userCredential.user.updateProfile({ displayName: username }))
-                .then(() => { 
-                    ModalManager.closeAll(); 
-                    DOM.registerForm.reset(); 
-                    ErrorHandler.show('auth', '¡Cuenta creada con éxito!', 3000);
-                })
-                .catch((err) => { 
-                    if (errorEl) {
-                        errorEl.textContent = err.message;
-                        errorEl.style.display = 'block'; 
-                    }
-                });
-        });
-    }
-
-    if (recoveryForm) {
-        recoveryForm.addEventListener('submit', (e) => {
-            e.preventDefault();
-            const email = document.getElementById('recovery-email-input').value;
-            const msgElement = document.getElementById('recovery-message');
-            
-            if(msgElement) {
-                msgElement.style.display = 'none';
-                msgElement.textContent = '';
-            }
-            
-            auth.sendPasswordResetEmail(email)
-                .then(() => {
-                    if (msgElement) {
-                        msgElement.style.color = '#4cd137'; 
-                        msgElement.textContent = `Enlace enviado a ${email}`;
-                        msgElement.style.display = 'block'; 
-                    }
-                })
-                .catch((error) => {
-                    if (msgElement) {
-                        msgElement.style.color = '#ff4d4d'; 
-                        if (error.code === 'auth/user-not-found') {
-                            msgElement.textContent = "Correo no registrado.";
-                        } else {
-                            msgElement.textContent = "Error al enviar. Intenta nuevamente.";
-                        }
-                        msgElement.style.display = 'block'; 
-                    }
-                });
-        });
-    }
-
-    auth.onAuthStateChanged(updateUIAfterAuthStateChange);
-    
-    const handleLogout = (e) => { e.preventDefault(); auth.signOut().then(() => location.reload()); };
-    const btnLogout = document.getElementById('logout-btn');
-    if (btnLogout) { btnLogout.parentNode.replaceChild(btnLogout.cloneNode(true), btnLogout).addEventListener('click', handleLogout); }
-}
-
-function openAuthModal(isLogin) {
-    const loginForm = document.getElementById('login-form');
-    const registerForm = document.getElementById('register-form');
-    const recoveryForm = document.getElementById('recovery-form');
-    const authSwitch = document.querySelector('.auth-switch');
-    const switchLink = document.getElementById('switch-auth-mode');
-    const modal = document.getElementById('auth-modal');
-
-    if (recoveryForm) recoveryForm.style.display = 'none';
-    if (authSwitch) authSwitch.style.display = 'block';
-
-    if (loginForm) loginForm.style.display = isLogin ? 'flex' : 'none';
-    if (registerForm) registerForm.style.display = isLogin ? 'none' : 'flex';
-
-    if (switchLink) {
-        switchLink.textContent = isLogin ? '¿No tienes cuenta? Regístrate' : '¿Ya tienes cuenta? Inicia Sesión';
-    }
-
-    ['login-error', 'register-error', 'recovery-message'].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) {
-            el.textContent = '';
-            el.style.display = 'none';
-        }
-    });
-    
-    document.querySelectorAll('.toggle-password').forEach(icon => {
-        icon.classList.add('fa-eye');
-        icon.classList.remove('fa-eye-slash');
-    });
-
-    if (modal) modal.classList.add('show');
-    document.body.classList.add('modal-open');
-}
-
-window.openAuthModal = openAuthModal;
-
-function updateUIAfterAuthStateChange(user) {
-    const loggedInElements = [DOM.userProfileContainer, DOM.myListNavLink, DOM.historyNavLink, DOM.myListNavLinkMobile, DOM.historyNavLinkMobile];
-    const loggedOutElements = [DOM.authButtons];
-
-    const hubLoggedIn = document.getElementById('hub-logged-in-content');
-    const hubGuest = document.getElementById('hub-guest-content');
-    const hubEmail = document.getElementById('profile-hub-email');
-
-    const resetNavigationActiveState = () => {
-        document.querySelectorAll('.main-nav a, .bottom-nav .nav-link').forEach(l => l.classList.remove('active'));
-        document.querySelectorAll('a[data-filter="all"]').forEach(l => l.classList.add('active'));
-    };
-
-    if (user) {
-        loggedInElements.forEach(el => el && (el.style.display = 'flex'));
-        loggedOutElements.forEach(el => el && (el.style.display = 'none'));
-        
-        const userName = user.displayName || user.email.split('@')[0];
-        if (DOM.userGreetingBtn) DOM.userGreetingBtn.textContent = `Hola, ${userName}`;
-        
-        if (hubLoggedIn) hubLoggedIn.style.display = 'block';
-        if (hubGuest) hubGuest.style.display = 'none';
-        if (hubEmail) hubEmail.textContent = user.email;
-
-        db.ref(`users/${user.uid}/watchlist`).once('value', snapshot => {
-            appState.user.watchlist = snapshot.exists() ? new Set(Object.keys(snapshot.val())) : new Set();
-        });
-
-        setupRealtimeHistoryListener(user);
-        getProfileModule();
-
-
-        const ADMIN_EMAIL_REPORTS = 'baquezadat@gmail.com';
-        const reportsNavLink = document.getElementById('reports-nav-link');
-        if (reportsNavLink) {
-            if (user.email === ADMIN_EMAIL_REPORTS) {
-                reportsNavLink.style.display = 'flex';
-                firebase.database().ref('reports').orderByChild('status').equalTo('pending').on('value', snap => {
-                    const badge = document.getElementById('reports-badge');
-                    if (badge) {
-                        const count = snap.numChildren();
-                        if (count > 0) {
-                            badge.textContent = count;
-                            badge.style.display = 'inline-flex';
-                        } else {
-                            badge.style.display = 'none';
-                        }
-                    }
-                });
-
+        let overlayText = '';
+        if (isLocked) {
+            if (seasonStatus === 'mantenimiento') {
+                overlayText = 'Mantenimiento';
+            } else if (seasonStatus === 'proximamente' || seasonStatus === 'próximamente') {
+                overlayText = 'PRÓXIMAMENTE';
+            } else if (/\d/.test(seasonStatusRaw)) {
+                overlayText = `Próx. ${seasonStatusRaw}`;
+            } else if (seasonStatusRaw) {
+                overlayText = `Próx. en ${seasonStatusRaw}`;
             } else {
-                reportsNavLink.style.display = 'none';
+                overlayText = 'PRÓXIMAMENTE';
             }
+        } else if (!isNaN(seasonKey)) {
+            overlayText = `${totalEpisodes} episodios`;
         }
 
-        resetNavigationActiveState(); 
-        switchView('all'); 
-
-    } else {
-        loggedInElements.forEach(el => el && (el.style.display = 'none'));
-        loggedOutElements.forEach(el => el && (el.style.display = 'flex'));
-
-        const reportsNavLinkOut = document.getElementById('reports-nav-link');
-        if (reportsNavLinkOut) reportsNavLinkOut.style.display = 'none';
-        
-        if (hubLoggedIn) hubLoggedIn.style.display = 'none';
-        if (hubGuest) hubGuest.style.display = 'block';
-        if (hubEmail) hubEmail.textContent = 'Visitante';
-        
-        appState.user.watchlist.clear();
-        
-        if (appState.user.historyListenerRef) {
-            appState.user.historyListenerRef.off('value');
-            appState.user.historyListenerRef = null;
-        }
-        
-        const continueWatchingCarousel = document.getElementById('continue-watching-carousel');
-        if (continueWatchingCarousel) continueWatchingCarousel.remove();
-
-        resetNavigationActiveState(); 
-        switchView('all');
-    }
-}
-
-function addToHistoryIfLoggedIn(contentId, type, episodeInfo = {}) {
-    const user = auth.currentUser;
-    if (!user) return;
-
-    let itemData = null;
-    if (typeof findContentData === 'function') {
-        itemData = findContentData(contentId);
-    } 
-    if (!itemData && appState.content.series[contentId]) {
-        itemData = appState.content.series[contentId];
-    }
-    if (!itemData && appState.content.movies[contentId]) {
-        itemData = appState.content.movies[contentId];
-    }
-    if (!itemData) return;
-
-    let posterUrl = itemData.poster;
-    const isSeries = type === 'series' || type === 'serie';
-
-    if (isSeries && episodeInfo.season) {
-        const seasonPosterEntry = appState.content.seasonPosters[contentId]?.[episodeInfo.season];
-        if (seasonPosterEntry) {
-            posterUrl = (typeof seasonPosterEntry === 'object') ? seasonPosterEntry.posterUrl : seasonPosterEntry;
-        }
-    }
-
-    const historyKey = contentId; 
-
-    const totalSeasonsForTitle = Object.keys(appState.content.seriesEpisodes[contentId] || {}).length;
-    const historyTitle = isSeries
-        ? (totalSeasonsForTitle > 1 ? `${itemData.title}: T${episodeInfo.season}` : itemData.title)
-        : itemData.title;
-
-    const historyEntry = {
-        type: isSeries ? 'series' : 'movie',
-        contentId: contentId,
-        title: historyTitle,
-        poster: posterUrl,
-        viewedAt: firebase.database.ServerValue.TIMESTAMP, 
-        season: isSeries ? episodeInfo.season : null,       
-        lastEpisode: isSeries ? episodeInfo.index : null    
-    };
-
-    db.ref(`users/${user.uid}/history/${historyKey}`).set(historyEntry);
-}
-
-// ===========================================================
-// FUNCIÓN PARA BORRAR DEL HISTORIAL (ANIMACIÓN SUAVE)
-// ===========================================================
-async function removeFromHistory(entryKey) {
-    const user = auth.currentUser;
-    if (!user) return;
-
-    await Promise.all([
-        db.ref(`users/${user.uid}/history/${entryKey}`).remove(),
-        db.ref(`users/${user.uid}/roulette_watched/${entryKey}`).remove()
-    ]);
-    try {
-        const roulette = await getRouletteModule();
-        if (roulette.unmarkMovieFromRoulette) await roulette.unmarkMovieFromRoulette(entryKey);
-    } catch(e) {}
-
-    const historyGrid = DOM.historyContainer.querySelector('.grid');
-    
-    const btnPressed = historyGrid.querySelector(`.btn-remove-history[data-key="${entryKey}"]`);
-    
-    if (btnPressed) {
-        const cardToRemove = btnPressed.closest('.movie-card');
-        
-        if (cardToRemove) {
-            cardToRemove.style.pointerEvents = 'none';
-            
-            cardToRemove.style.transition = 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)';
-            cardToRemove.style.opacity = '0';
-            cardToRemove.style.transform = 'scale(0.8) translateY(20px)';
-            
-            setTimeout(() => {
-                if (cardToRemove.parentNode) cardToRemove.remove();
-                
-                if (historyGrid.children.length === 0) {
-                    historyGrid.innerHTML = `<p class="empty-message" style="opacity:0; transition: opacity 0.5s;">Tu historial está vacío.</p>`;
-                    requestAnimationFrame(() => {
-                        const msg = historyGrid.querySelector('.empty-message');
-                        if(msg) msg.style.opacity = '1';
-                    });
-                }
-            }, 400); 
-        }
-    } else {
-        renderHistory();
-    }
-}
-
-function handleWatchlistClick(button) {
-    const user = auth.currentUser;
-    if (!user) {
-        openConfirmationModal(
-            "Acción Requerida",
-            "Debes iniciar sesión para usar esta función.",
-            () => openAuthModal(true)
-        );
-        return;
-    }
-    
-    const contentId = button.dataset.contentId;
-    const isInList = appState.user.watchlist.has(contentId);
-
-    if (isInList) {
-        openConfirmationModal(
-            'Eliminar de Mi Lista',
-            '¿Estás seguro de que quieres eliminar este item de tu lista?',
-            () => removeFromWatchlist(contentId)
-        );
-    } else {
-        addToWatchlist(contentId);
-    }
-}
-
-async function addToWatchlist(contentId) {
-    const user = auth.currentUser;
-    if (!user) return;
-
-    await ErrorHandler.firebaseOperation(async () => {
-        await db.ref(`users/${user.uid}/watchlist/${contentId}`).set(true);
-        appState.user.watchlist.add(contentId);
-        
-        document.querySelectorAll(`.btn-watchlist[data-content-id="${contentId}"]`).forEach(button => {
-            button.classList.add('in-list');
-            button.innerHTML = '<i class="fas fa-check"></i>';
-        });
-    });
-}
-
-async function removeFromWatchlist(contentId) {
-    const user = auth.currentUser;
-    if (!user) return;
-    
-    const safeId = String(contentId);
-
-    await ErrorHandler.firebaseOperation(async () => {
-        await db.ref(`users/${user.uid}/watchlist/${safeId}`).remove();
-        appState.user.watchlist.delete(safeId);
-        
-        document.querySelectorAll(`.btn-watchlist[data-content-id="${safeId}"]`).forEach(button => {
-            button.classList.remove('in-list');
-            button.innerHTML = '<i class="fas fa-plus"></i>';
-        });
-        
-        const myListContainer = document.getElementById('my-list-container');
-        
-        if (myListContainer && myListContainer.style.display !== 'none') {
-            
-            const cardToRemove = myListContainer.querySelector(`.movie-card[data-content-id="${safeId}"]`);
-            
-            if (cardToRemove) {
-                cardToRemove.style.pointerEvents = 'none';
-                
-                cardToRemove.style.transition = 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)';
-                cardToRemove.style.opacity = '0';
-                cardToRemove.style.transform = 'scale(0.8) translateY(20px)';
-                
-                setTimeout(() => {
-                    if (cardToRemove.parentNode) {
-                        cardToRemove.parentNode.removeChild(cardToRemove);
-                    }
-                    
-                    if (appState.user.watchlist.size === 0) {
-                        const grid = myListContainer.querySelector('.grid');
-                        if (grid) {
-                            grid.innerHTML = `<p class="empty-message" style="opacity:0; transition: opacity 0.5s;">Tu lista está vacía.</p>`;
-                            requestAnimationFrame(() => {
-                                const msg = grid.querySelector('.empty-message');
-                                if(msg) msg.style.opacity = '1';
-                            });
-                        }
-                    }
-                }, 400); 
-            } else {
-                console.warn("Tarjeta no encontrada en el DOM, forzando repintado...");
-                displayMyListView();
-            }
-        }
-    });
-}
-
-// ===========================================================
-// 📝 MI LISTA INTELIGENTE 
-// ===========================================================
-let myListDataCache = [];
-let myListRenderedCount = 0;
-
-function displayMyListView() {
-    const user = auth.currentUser;
-    const myListGrid = DOM.myListContainer.querySelector('.grid');
-    
-    const existingBtn = document.getElementById('mylist-load-more-btn');
-    if (existingBtn) existingBtn.remove();
-    
-    if (!user) {
-        myListGrid.innerHTML = `<p class="empty-message">Debes iniciar sesión para ver tu lista.</p>`;
-        return;
-    }
-    
-    if (!appState.user.watchlist || appState.user.watchlist.size === 0) {
-        myListGrid.innerHTML = `<p class="empty-message">Tu lista está vacía. Agrega contenido para verlo aquí.</p>`;
-        return;
-    }
-    
-    myListGrid.innerHTML = `<div class="spinner" style="margin: 50px auto;"></div>`;
-
-    let allContent = { 
-        ...appState.content.movies, 
-        ...appState.content.series 
-    };
-    
-    if (appState.content.sagas) {
-        Object.values(appState.content.sagas).forEach(sagaItems => {
-            if (sagaItems) {
-                Object.assign(allContent, sagaItems);
-            }
-        });
-    }
-
-    myListDataCache = [];
-    
-    const watchlistIDs = Array.from(appState.user.watchlist).reverse();
-
-    watchlistIDs.forEach(contentId => {
-        const data = allContent[contentId];
-        if (data) {
-            let type = 'movie';
-            if (appState.content.series[contentId] || data.type === 'series' || appState.content.seriesEpisodes[contentId]) {
-                type = 'series';
-            }
-            
-            myListDataCache.push({ id: contentId, data: data, type: type });
-        }
-    });
-
-    myListGrid.innerHTML = '';
-    myListRenderedCount = 0;
-
-    if (myListDataCache.length === 0) {
-        myListGrid.innerHTML = `<p class="empty-message">No se encontraron datos (¿Quizás los items ya no existen?).</p>`;
-        return;
-    }
-
-    appendMyListBatch();
-}
-
-function appendMyListBatch() {
-    const myListGrid = DOM.myListContainer.querySelector('.grid');
-    const BATCH_SIZE = UI.ITEMS_PER_LOAD || 24;
-    
-    const nextBatch = myListDataCache.slice(myListRenderedCount, myListRenderedCount + BATCH_SIZE);
-    
-    if (nextBatch.length === 0) return;
-
-    const fragment = document.createDocumentFragment();
-
-    nextBatch.forEach((item) => {
-        const card = createMovieCardElement(item.id, item.data, item.type, 'grid', false, { source: 'my-list' });
-        fragment.appendChild(card);
-    });
-
-    myListGrid.appendChild(fragment);
-    myListRenderedCount += nextBatch.length;
-
-    let loadBtn = document.getElementById('mylist-load-more-btn');
-    
-    if (myListRenderedCount < myListDataCache.length) {
-        if (!loadBtn) {
-            loadBtn = document.createElement('button');
-            loadBtn.id = 'mylist-load-more-btn';
-            loadBtn.className = 'btn btn-primary'; 
-            loadBtn.innerHTML = 'Cargar más <i class="fas fa-chevron-down"></i>';
-            loadBtn.style.cssText = "display: block; margin: 30px auto; min-width: 200px;";
-            loadBtn.onclick = appendMyListBatch; 
-            DOM.myListContainer.appendChild(loadBtn);
-        } else {
-            DOM.myListContainer.appendChild(loadBtn);
-        }
-    } else {
-        if (loadBtn) loadBtn.remove();
-    }
-}
-
-// ===========================================================
-// 🧠 HISTORIAL INTELIGENTE 
-// ===========================================================
-let historyDataCache = [];
-let historyRenderedCount = 0;
-
-function renderHistory() {
-    const user = auth.currentUser;
-    const historyGrid = DOM.historyContainer.querySelector('.grid');
-    
-    const existingBtn = document.getElementById('history-load-more-btn');
-    if (existingBtn) existingBtn.remove();
-    
-    if (!user) {
-        historyGrid.innerHTML = `<p class="empty-message">Debes iniciar sesión para ver tu historial.</p>`;
-        return;
-    }
-    
-    historyGrid.innerHTML = `<div class="spinner" style="margin: 50px auto;"></div>`;
-
-    db.ref(`users/${user.uid}/history`).orderByChild('viewedAt').once('value', snapshot => {
-        if (!snapshot.exists()) {
-            historyGrid.innerHTML = `<p class="empty-message">Tu historial está vacío.</p>`;
-            return;
-        }
-
-        historyDataCache = [];
-        snapshot.forEach(child => {
-            const item = child.val();
-            item.key = child.key; 
-            historyDataCache.push(item);
-        });
-        
-        historyDataCache.reverse(); 
-        
-        historyGrid.innerHTML = '';
-        historyRenderedCount = 0;
-
-        appendHistoryBatch();
-    });
-}
-
-function appendHistoryBatch() {
-    const historyGrid = DOM.historyContainer.querySelector('.grid');
-    const BATCH_SIZE = 24; 
-    
-    const nextBatch = historyDataCache.slice(historyRenderedCount, historyRenderedCount + BATCH_SIZE);
-    
-    if (nextBatch.length === 0) return;
-
-    const fragment = document.createDocumentFragment();
-
-    nextBatch.forEach((item) => {
-        const options = {
-            source: 'history',
-            season: item.season
-        };
-        const card = createMovieCardElement(item.contentId, item, item.type, 'grid', false, options);
-        
-        const removeButton = document.createElement('button');
-        removeButton.className = 'btn-remove-history';
-        removeButton.dataset.key = item.key;
-        removeButton.innerHTML = `<i class="fas fa-times"></i>`;
-        card.appendChild(removeButton);
-
-        const infoOverlay = document.createElement('div');
-        infoOverlay.className = 'history-item-overlay';
-        const dateStr = item.viewedAt ? new Date(item.viewedAt).toLocaleDateString() : 'Reciente';
-        infoOverlay.innerHTML = `<h4 class="history-item-title">${item.title}</h4><p class="history-item-date">Visto: ${dateStr}</p>`;
-        card.appendChild(infoOverlay);
-
-        fragment.appendChild(card);
-    });
-
-    historyGrid.appendChild(fragment);
-    historyRenderedCount += nextBatch.length;
-
-    let loadBtn = document.getElementById('history-load-more-btn');
-    
-    if (historyRenderedCount < historyDataCache.length) {
-        if (!loadBtn) {
-            loadBtn = document.createElement('button');
-            loadBtn.id = 'history-load-more-btn';
-            loadBtn.className = 'btn btn-primary'; 
-            loadBtn.innerHTML = 'Cargar más <i class="fas fa-chevron-down"></i>';
-            loadBtn.style.cssText = "display: block; margin: 30px auto; min-width: 200px;";
-            loadBtn.onclick = appendHistoryBatch; 
-            DOM.historyContainer.appendChild(loadBtn);
-        } else {
-            DOM.historyContainer.appendChild(loadBtn);
-        }
-    } else {
-        if (loadBtn) loadBtn.remove();
-    }
-}
-
-function setupRealtimeHistoryListener(user) {
-    if (appState.user.historyListenerRef) {
-        appState.user.historyListenerRef.off('value');
-    }
-
-    if (user) {
-        appState.user.historyListenerRef = db.ref(`users/${user.uid}/history`).orderByChild('viewedAt');
-        
-        appState.user.historyListenerRef.on('value', (snapshot) => {
-            console.log('🔔 Historial actualizado - Regenerando carrusel...');
-            clearTimeout(appState.player.historyUpdateDebounceTimer);
-
-            appState.player.historyUpdateDebounceTimer = setTimeout(() => {
-                console.log('📺 Items en historial:', snapshot.numChildren());
-                generateContinueWatchingCarousel(snapshot);
-                if (DOM.historyContainer && DOM.historyContainer.style.display === 'block') {
-                    renderHistory();
-                }
-            }, 250);
-        });
-    }
-}
-
-// ===========================================================
-// 7. MODAL DE CONFIRMACIÓN
-// ===========================================================
-document.addEventListener('DOMContentLoaded', () => {
-    if (DOM.confirmDeleteBtn && DOM.cancelDeleteBtn && DOM.confirmationModal) {
-        DOM.confirmDeleteBtn.addEventListener('click', () => {
-            if (typeof DOM.confirmationModal.onConfirm === 'function') {
-                DOM.confirmationModal.onConfirm();
-                hideConfirmationModal();
-            }
-        });
-
-        DOM.cancelDeleteBtn.addEventListener('click', () => hideConfirmationModal());
-    }
-});
-
-function hideConfirmationModal() {
-    DOM.confirmationModal.classList.remove('show');
-    DOM.confirmationModal.onConfirm = null;
-    document.getElementById('confirm-delete-btn').textContent = "Confirmar";
-    if (!document.querySelector('.modal.show')) {
-        document.body.classList.remove('modal-open');
-    }
-}
-
-function openConfirmationModal(title, message, onConfirm) {
-    const modal = document.getElementById('confirmation-modal');
-    if (!modal) return;
-
-    const titleEl = modal.querySelector('h2');
-    const messageEl = modal.querySelector('p');
-
-    if (titleEl) titleEl.textContent = title;
-    if (messageEl) messageEl.textContent = message;
-
-    DOM.confirmationModal.onConfirm = onConfirm;
-
-    modal.classList.add('show');
-    document.body.classList.add('modal-open');
-}
-
-function getLatestSeriesDate(seriesId) {
-    const allEpisodes = appState.content.seriesEpisodes[seriesId];
-    if (!allEpisodes) return 0;
-
-    let flatEpisodes = [];
-    if (Array.isArray(allEpisodes)) {
-        flatEpisodes = allEpisodes;
-    } else {
-        flatEpisodes = Object.values(allEpisodes).flat();
-    }
-
-    let maxDate = 0;
-    const now = new Date();
-    const DAYS_THRESHOLD = 5; 
-
-    flatEpisodes.forEach(ep => {
-        if (!ep.releaseDate) return;
-        const rDate = new Date(ep.releaseDate);
-        if (isNaN(rDate.getTime())) return;
-
-        const diffTime = now - rDate;
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-        if (diffDays <= DAYS_THRESHOLD && diffDays >= 0 && rDate.getTime() > maxDate) {
-            maxDate = rDate.getTime();
-        }
-    });
-
-    return maxDate;
-}
-
-function isDateRecent(dateString) {
-    if (!dateString) return false;
-    const date = new Date(dateString);
-    if (isNaN(date.getTime())) return false; 
-    
-    const now = new Date();
-    const diffTime = now - date;
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    
-    return diffDays <= 5 && diffDays >= 0; 
-}
-
-function hasRecentSeasonFromPosters(seriesId) {
-    const posters = appState.content.seasonPosters[seriesId];
-    if (!posters) return false;
-
-    return Object.values(posters).some(seasonData => {
-        const date = (typeof seasonData === 'object') ? seasonData.date_added : null;
-        return isDateRecent(date);
-    });
-}
-
-function hasRecentEpisodes(seriesId) {
-    const allEpisodes = appState.content.seriesEpisodes[seriesId];
-    if (!allEpisodes) return false;
-
-    let flatEpisodes = [];
-    if (Array.isArray(allEpisodes)) {
-        flatEpisodes = allEpisodes;
-    } else {
-        flatEpisodes = Object.values(allEpisodes).flat();
-    }
-
-    return flatEpisodes.some(ep => isDateRecent(ep.releaseDate));
-}
-
-// -----------------------------------------------------------
-// 2. FUNCIÓN DE CREACIÓN DE TARJETAS (ACTUALIZADA)
-// -----------------------------------------------------------
-function createMovieCardElement(id, data, type, layout = 'carousel', lazy = false, options = {}) {
-    const card = document.createElement('div');
-    card.className = `movie-card ${layout === 'carousel' ? 'carousel-card' : ''}`;
-    card.dataset.contentId = id;
-
-    let badgesAccumulator = ''; 
-    const isNewContent = isDateRecent(data.date_added);
-
-    if (options.source !== 'continuar-viendo') {
-        if (type === 'series') {
-            const hasNewSeason = hasRecentSeasonFromPosters(id); 
-            const hasNewEp = hasRecentEpisodes(id);              
-            
-            if (isNewContent) badgesAccumulator += `<div class="new-episode-badge badge-estreno">ESTRENO</div>`;
-            if (hasNewSeason) badgesAccumulator += `<div class="new-episode-badge badge-season">NUEVA TEMP</div>`;
-            
-            if (hasNewEp && !hasNewSeason) badgesAccumulator += `<div class="new-episode-badge badge-episode">NUEVO CAP</div>`;
-        } else {
-            if (data.estado && data.estado.toLowerCase() === 'vetada') {
-                badgesAccumulator += `<div class="new-episode-badge badge-vetada">VETADA</div>`;
-            }
-            else if (data.estado && data.estado.toLowerCase() === 'mantenimiento') {
-                badgesAccumulator += `<div class="new-episode-badge badge-mantenimiento">MANT.</div>`;
-            }
-            else if (data.estado && data.estado.trim() !== '') {
-                badgesAccumulator += `<div class="new-episode-badge badge-proximamente">PRÓXIMO</div>`;
-            }
-            else if (isNewContent) {
-                badgesAccumulator += `<div class="new-episode-badge badge-estreno">ESTRENO</div>`;
-            }
-        }
-    }
-
-    let ribbonHTML = badgesAccumulator !== '' ? `<div class="badges-container">${badgesAccumulator}</div>` : '';
-
-    card.onclick = (e) => {
-        if (e.target.closest('.btn-watchlist') || e.target.closest('.btn-remove-history') || e.target.closest('.btn-remove-continue-watching')) return;
-        
-        const seasonMatch = data.title.match(/\(T(\d+)\)$/);
-        if (seasonMatch) {
-            (async () => { const player = await getPlayerModule(); player.openSeriesPlayerDirectlyToSeason(id, seasonMatch[1]); })();
-        } else if (options.source === 'continuar-viendo' && type === 'series' && options.season != null && options.lastEpisode != null) {
-            (async () => { const player = await getPlayerModule(); player.openPlayerToEpisode(id, options.season, options.lastEpisode); })();
-        } else if (options.source === 'history' && type === 'series' && options.season) {
-            (async () => { const player = await getPlayerModule(); player.openSeriesPlayerDirectlyToSeason(id, options.season); })();
-        } else {
-            openDetailsModal(id, type);
-        }
-    };
-    
-    let watchlistBtnHTML = '';
-    
-    if (options.source === 'continuar-viendo' && options.historyKey) {
-        watchlistBtnHTML = `<button class="btn-remove-continue-watching" data-history-key="${options.historyKey}"><i class="fas fa-times"></i></button>`;
-    } else if(auth.currentUser && options.source !== 'history'){
-        const isInList = appState.user.watchlist.has(id);
-        
-        let iconClass = isInList ? 'fa-check' : 'fa-plus';
-        if (options.source === 'my-list') iconClass = 'fa-times'; 
-
-        const inListClass = isInList ? 'in-list' : '';
-        
-        watchlistBtnHTML = `<button class="btn-watchlist ${inListClass}" data-content-id="${id}"><i class="fas ${iconClass}"></i></button>`;
-    }
-
-    let imageUrl = data.poster;
-    
-    if (options.source === 'continuar-viendo' && options.episodeThumbnail) {
-        imageUrl = options.episodeThumbnail;
-    }
-    
-    if (typeof imageUrl === 'object' && imageUrl?.posterUrl) imageUrl = imageUrl.posterUrl;
-    if (!imageUrl) imageUrl = data.banner || '';
-
-    const img = new Image();
-    img.onload = () => {
-        const placeholder = card.querySelector('.img-container-placeholder');
-        if(placeholder) placeholder.replaceWith(img);
-        card.classList.add('img-loaded');
-        
-        const isVetada = type === 'movie' && data.estado && data.estado.toLowerCase() === 'vetada';
-        if (isVetada) {
-            img.style.filter = 'grayscale(100%)';
-        }
-    };
-    img.src = imageUrl; 
-    img.alt = data.title;
-
-    const ratingHTML = reviewsModule && reviewsModule.getStarsHTML
-        ? `<div class="card-rating-container">${reviewsModule.getStarsHTML(appState.content.averages[id], true)}</div>`
-        : '<div class="card-rating-container"></div>';
-
-    card.innerHTML = `${ribbonHTML}<div class="img-container-placeholder"></div>${ratingHTML}${watchlistBtnHTML}`;
-
-    if (options.source === 'continuar-viendo' && (options.episodeTitle || options.seriesTitle)) {
-        const overlay = document.createElement('div');
-        overlay.className = 'continue-watching-overlay';
-        
-        let episodeInfo = '';
-        if (options.season != null && options.lastEpisode != null) {
-            const episodeNum = parseInt(options.lastEpisode) + 1; 
-            episodeInfo = (options.totalSeasons > 1)
-                ? `T${options.season} E${episodeNum}`
-                : `Episodio ${episodeNum}`;
-        }
-        
-        overlay.innerHTML = `
-            <div class="cw-overlay-content">
-                <p class="cw-series-title">${options.seriesTitle || data.title}</p>
-                <p class="cw-episode-number">${episodeInfo}</p>
-                ${options.episodeTitle ? `<p class="cw-episode-title">${options.episodeTitle}</p>` : ''}
+        card.innerHTML = `
+            <img src="${posterUrl}" alt="${seasonLabel}">
+            <div class="overlay">
+                <h3>${seasonLabel}</h3>
+                <p>${overlayText}</p>
             </div>
         `;
-        card.appendChild(overlay);
-    }
-
-    const watchBtn = card.querySelector('.btn-watchlist');
-    if (watchBtn) {
-        watchBtn.onclick = (e) => {
-            e.preventDefault();
-            e.stopPropagation(); 
-            handleWatchlistClick(watchBtn);
-        };
-    }
-    
-    const removeBtn = card.querySelector('.btn-remove-continue-watching');
-    if (removeBtn) {
-        removeBtn.onclick = (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            
-            const seriesTitle = options.seriesTitle || data.title;
-            openConfirmationModal(
-                'Eliminar de Continuar Viendo',
-                `¿Estás seguro de que quieres eliminar "${seriesTitle}" de tu historial?`,
-                () => removeFromContinueWatching(removeBtn.dataset.historyKey, card)
-            );
-        };
-    }
-
-    return card;
-}
-
-async function removeFromContinueWatching(historyKey, cardElement) {
-    const user = auth.currentUser;
-    if (!user || !historyKey) return;
-    
-    try {
-        cardElement.style.transition = 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)';
-        cardElement.style.opacity = '0';
-        cardElement.style.transform = 'scale(0.8) translateY(20px)';
-        
-        await db.ref(`users/${user.uid}/history/${historyKey}`).remove();
-        
-        setTimeout(() => {
-            if (cardElement.parentNode) {
-                cardElement.remove();
-            }
-            
-            const carousel = document.getElementById('continue-watching-carousel');
-            if (carousel) {
-                const track = carousel.querySelector('.carousel-track');
-                if (track && track.children.length === 0) {
-                    carousel.remove();
-                }
-            }
-        }, 400);
-        
-        console.log('✅ Removido de Continuar Viendo:', historyKey);
-    } catch (error) {
-        console.error('❌ Error al remover de Continuar Viendo:', error);
-    }
-}
-
-function getLatestUpdateTimestamp(id, data, type) {
-    let maxTimestamp = 0;
-
-    if (data.date_added) {
-        const d = new Date(data.date_added); 
-        if (!isNaN(d.getTime()) && isDateRecent(data.date_added)) {
-            maxTimestamp = Math.max(maxTimestamp, d.getTime());
-        }
-    }
-
-    if (type === 'movie') return maxTimestamp;
-
-    const posters = appState.content.seasonPosters[id];
-    if (posters) {
-        Object.values(posters).forEach(p => {
-            if (typeof p === 'object' && p.date_added) {
-                const d = new Date(p.date_added);
-                if (!isNaN(d.getTime()) && isDateRecent(p.date_added)) {
-                    maxTimestamp = Math.max(maxTimestamp, d.getTime());
-                }
-            }
-        });
-    }
-
-    const allEpisodes = appState.content.seriesEpisodes[id];
-    if (allEpisodes) {
-        const flatEpisodes = Array.isArray(allEpisodes) ? allEpisodes : Object.values(allEpisodes).flat();
-        flatEpisodes.forEach(ep => {
-            if (ep.releaseDate) {
-                const d = new Date(ep.releaseDate);
-                if (!isNaN(d.getTime()) && isDateRecent(ep.releaseDate)) {
-                    maxTimestamp = Math.max(maxTimestamp, d.getTime());
-                }
-            }
-        });
-    }
-
-    return maxTimestamp;
-}
-
-function shuffleArray(array) {
-    for (let i = array.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [array[i], array[j]] = [array[j], array[i]];
-    }
-}
-
-// ===========================================================
-// 10. 🎯 EXPORTAR PARA USO GLOBAL 
-// ===========================================================
-window.ErrorHandler = ErrorHandler;
-window.cacheManager = cacheManager;
-window.lazyLoader = lazyLoader;
-window.showCacheStats = () => {
-    const stats = {
-        itemCount: localStorage.length,
-        version: cacheManager.version,
-        contentCached: !!cacheManager.get(cacheManager.keys.content),
-        metadataCached: !!cacheManager.get(cacheManager.keys.metadata)
-    };
-    console.table(stats);
-    return stats;
-};
-
-function setupPageVisibilityHandler() {
-    document.addEventListener('visibilitychange', () => {
-        if (document.hidden) {
-            clearInterval(appState.ui.heroInterval);
-            document.body.classList.add('tab-inactive');
-            
-        } else {
-            document.body.classList.remove('tab-inactive');
-            
-            setTimeout(() => {
-                startHeroInterval();
-                
-                if (DOM.heroSection) {
-                    DOM.heroSection.style.transform = 'translateZ(0)'; 
-                }
-            }, 1000); 
-        }
-    });
-}
-
-window.closeAllModals = closeAllModals;
-
-
-function setupRatingsListener() {
-    console.log('ℹ️ setupRatingsListener: Ya configurado en el módulo de reviews');
-}
-
-function getStarsHTML(rating, isSmall = true) {
-    if (reviewsModule && reviewsModule.getStarsHTML) {
-        return reviewsModule.getStarsHTML(rating, isSmall);
-    }
-    if (!rating || rating === "0.0" || rating === 0) return '';
-    return `
-        <div class="star-rating-display ${isSmall ? 'small' : 'large'}" 
-             title="${rating} de 5 estrellas">
-            <i class="fas fa-star"></i>
-            <span class="rating-number">${rating}</span>
-        </div>
-    `;
-}
-
-function updateVisibleRatings() {
-    document.querySelectorAll('.movie-card').forEach(card => {
-        const contentId = card.dataset.contentId;
-        const ratingContainer = card.querySelector('.card-rating-container');
-        
-        if (ratingContainer && contentId && appState.content.averages) {
-            const rating = appState.content.averages[contentId];
-            ratingContainer.innerHTML = getStarsHTML(rating, true);
-        }
-    });
-}
-
-window.showNotification = function(message, type = 'success') {
-    const container = document.getElementById('toast-container');
-    if (!container) return;
-
-    const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
-    
-    const icon = type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle';
-    const color = type === 'success' ? '#2ecc71' : '#e74c3c';
-
-    toast.innerHTML = `
-        <i class="fas ${icon} toast-icon" style="color: ${color}"></i>
-        <span class="toast-message">${message}</span>
-    `;
-
-    container.appendChild(toast);
-
-    setTimeout(() => {
-        toast.style.animation = 'fadeOutToast 0.5s ease forwards';
-        setTimeout(() => toast.remove(), 500);
-    }, 3000);
-};
-
-window.openSmartReviewModal = async (contentId, type, title) => {
-    if (!firebase.auth().currentUser) {
-        if (window.openConfirmationModal) {
-            window.openConfirmationModal(
-                "Inicia Sesión", 
-                "Necesitas una cuenta para escribir reseñas.", 
-                () => window.openAuthModal(true)
-            );
-        }
-        return;
-    }
-
-    const module = await import('./features/reviews.js?v=8');
-    
-    module.initReviews({ appState, DOM, auth, db, ErrorHandler: window.ErrorHandler, ModalManager: window.ModalManager }); 
-    
-    setTimeout(() => {
-        module.openReviewModal(true, {
-            contentId: contentId,
-            contentTitle: title,
-            contentType: type
-        });
-    }, 50);
-};
-
-// ===========================================================
-// 🚪 LOGOUT 
-// ===========================================================
-
-function mostrarModalLogout() {
-    console.log('🚀 Mostrando modal de logout');
-    
-    const confirmModal = document.getElementById('confirmation-modal');
-    if (!confirmModal) {
-        console.error('❌ Modal no encontrado');
-        if (confirm('¿Cerrar sesión?')) {
-            ejecutarLogout();
-        }
-        return;
-    }
-
-    const confirmTitle = confirmModal.querySelector('h2');
-    const confirmText = confirmModal.querySelector('p');
-    const confirmBtn = document.getElementById('confirm-delete-btn');
-    const cancelBtn = document.getElementById('cancel-delete-btn');
-    const modalContent = confirmModal.querySelector('.confirmation-modal-content');
-
-    if (confirmTitle) confirmTitle.textContent = '¿Cerrar sesión?';
-    if (confirmText) confirmText.textContent = 'Se cerrará tu sesión y volverás al modo invitado.';
-    if (confirmBtn) confirmBtn.textContent = 'Cerrar Sesión';
-    
-    if (modalContent) {
-        modalContent.onclick = (e) => {
-            e.stopPropagation();
-        };
-    }
-    
-    confirmModal.style.display = 'flex';
-    confirmModal.style.zIndex = '99999';
-    confirmModal.style.pointerEvents = 'auto';
-    
-    setTimeout(() => {
-        document.body.classList.add('modal-open');
-        confirmModal.classList.add('show');
-    }, 10);
-
-    if (confirmBtn) {
-        const newConfirmBtn = confirmBtn.cloneNode(true);
-        confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
-        
-        let confirmExecuted = false;
-        
-        const executeConfirm = (e) => {
-            if (confirmExecuted) return;
-            confirmExecuted = true;
-            
-            e.preventDefault();
-            e.stopPropagation();
-            e.stopImmediatePropagation();
-            
-            console.log('✅ Logout confirmado - EJECUTANDO');
-            cerrarModal(confirmModal);
-            ejecutarLogout();
-        };
-        
-        newConfirmBtn.addEventListener('touchstart', executeConfirm, { passive: false });
-        newConfirmBtn.addEventListener('click', executeConfirm, true);
-        newConfirmBtn.onclick = executeConfirm;
-    }
-
-    if (cancelBtn) {
-        const newCancelBtn = cancelBtn.cloneNode(true);
-        cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn);
-        
-        let cancelExecuted = false;
-        
-        const executeCancel = (e) => {
-            if (cancelExecuted) return;
-            cancelExecuted = true;
-            
-            e.preventDefault();
-            e.stopPropagation();
-            e.stopImmediatePropagation();
-            
-            console.log('❌ Logout cancelado - EJECUTANDO');
-            cerrarModal(confirmModal);
-        };
-        
-        newCancelBtn.addEventListener('touchstart', executeCancel, { passive: false });
-        newCancelBtn.addEventListener('click', executeCancel, true);
-        newCancelBtn.onclick = executeCancel;
-    }
-    
-    confirmModal.onclick = (e) => {
-        if (e.target === confirmModal) {
-            console.log('🖱️ Click en fondo - cerrando');
-            cerrarModal(confirmModal);
-        }
-    };
-}
-
-function cerrarModal(confirmModal) {
-    if (!confirmModal) return;
-    
-    confirmModal.classList.remove('show');
-    document.body.classList.remove('modal-open');
-    
-    setTimeout(() => {
-        confirmModal.style.display = 'none';
-        confirmModal.style.pointerEvents = 'none';
-    }, 300);
-}
-
-function ejecutarLogout() {
-    console.log('🔓 Ejecutando logout');
-    
-    if (typeof auth === 'undefined' || !auth) {
-        console.warn('⚠️ Auth no disponible, limpiando solo localStorage');
-        localStorage.removeItem('cineCornetoUser');
-        window.location.reload();
-        return;
-    }
-    
-    auth.signOut().then(() => {
-        console.log('✅ Sesión cerrada en Firebase');
-        localStorage.removeItem('cineCornetoUser');
-        
-        if (typeof appState !== 'undefined') {
-            appState.user = {
-                watchlist: new Set(),
-                historyListenerRef: null
-            };
-            
-            if (appState.user.historyListenerRef) {
-                appState.user.historyListenerRef.off();
-                appState.user.historyListenerRef = null;
-            }
-        }
-        
-        const profileHubEmail = document.getElementById('profile-hub-email');
-        if (profileHubEmail) profileHubEmail.textContent = 'Visitante';
-        
-        const hubLoggedIn = document.getElementById('hub-logged-in-content');
-        const hubGuest = document.getElementById('hub-guest-content');
-        if (hubLoggedIn) hubLoggedIn.style.display = 'none';
-        if (hubGuest) hubGuest.style.display = 'block';
-        
-        setTimeout(() => window.location.reload(), 500);
-        
-    }).catch((error) => {
-        console.error('❌ Error:', error);
-        localStorage.removeItem('cineCornetoUser');
-        window.location.reload();
-    });
-}
-
-document.addEventListener('click', function(e) {
-    const target = e.target;
-    
-    const logoutBtn = target.closest('#logout-btn') || 
-                      target.closest('#logout-btn-hub') || 
-                      target.closest('#mobile-logout-btn') ||
-                      target.closest('.logout-action') ||
-                      target.closest('a[href="#"][id*="logout"]') ||
-                      target.closest('.profile-hub-menu-item.logout');
-    
-    if (logoutBtn) {
-        e.preventDefault();
-        e.stopPropagation();
-        mostrarModalLogout();
-        return;
-    }
-    
-}, true);
-
-function attachDirectListeners() {
-    const ids = ['logout-btn', 'logout-btn-hub', 'mobile-logout-btn'];
-    
-    ids.forEach(id => {
-        const btn = document.getElementById(id);
-        if (btn) {
-            btn.removeEventListener('click', handleLogoutClick);
-            btn.addEventListener('click', handleLogoutClick, true);
-            
-            btn.removeEventListener('touchstart', handleLogoutClick);
-            btn.addEventListener('touchstart', handleLogoutClick, { passive: false });
-        }
-    });
-    
-    const logoutLinks = document.querySelectorAll('.profile-hub-menu-item.logout');
-    logoutLinks.forEach(link => {
-        link.removeEventListener('click', handleLogoutClick);
-        link.addEventListener('click', handleLogoutClick, true);
-        
-        link.removeEventListener('touchstart', handleLogoutClick);
-        link.addEventListener('touchstart', handleLogoutClick, { passive: false });
-    });
-}
-
-function handleLogoutClick(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    e.stopImmediatePropagation();
-    mostrarModalLogout();
-}
-
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', attachDirectListeners);
-} else {
-    attachDirectListeners();
-}
-
-setTimeout(attachDirectListeners, 1000);
-
-const observer = new MutationObserver((mutations) => {
-    mutations.forEach((mutation) => {
-        mutation.addedNodes.forEach((node) => {
-            if (node.nodeType === 1) {
-                if (node.id === 'logout-btn-hub' || 
-                    node.id === 'logout-btn' || 
-                    node.classList?.contains('logout')) {
-                    attachDirectListeners();
-                }
-                const logoutBtns = node.querySelectorAll?.('#logout-btn, #logout-btn-hub, .logout');
-                if (logoutBtns?.length > 0) {
-                    attachDirectListeners();
-                }
-            }
-        });
-    });
-});
-
-observer.observe(document.body, {
-    childList: true,
-    subtree: true
-});
-
-// ===========================================================
-// LOGO SETTINGS 
-// ===========================================================
-window._heroEditPaused = false;
-
-function getLogoSlot(base) {
-    const device = window.innerWidth <= 768 ? 'mobile' : 'desktop';
-    return base + '-' + device;
-}
-
-function loadLogoSettings(id, container, callback, slot = 'modal-desktop') {
-    const slotRef  = db.ref('logoSettings/' + id + '/' + slot);
-    const legacyRef = db.ref('logoSettings/' + id);
-
-    slotRef.once('value').then(snap => {
-        const s = snap.val();
-        if (s && (s.x !== undefined || s.scale !== undefined)) {
-            applyLogoTransform(container, s);
-            if (callback) callback();
-        } else {
-            legacyRef.once('value').then(legacySnap => {
-                const legacy = legacySnap.val();
-                if (legacy && legacy.x !== undefined) {
-                    const slots = ['hero-desktop', 'hero-mobile', 'modal-desktop', 'modal-mobile'];
-                    const updates = {};
-                    slots.forEach(k => { updates[k] = legacy; });
-                    db.ref('logoSettings/' + id).update(updates).catch(() => {});
-                    applyLogoTransform(container, legacy);
-                }
-                if (callback) callback();
-            }).catch(() => { if (callback) callback(); });
-        }
-    }).catch(() => { if (callback) callback(); });
-}
-
-function applyLogoTransform(container, s) {
-    const { x = 0, y = 0, scale = 1, zIndex = 0 } = s;
-    const img = container.querySelector('.details-logo-img, .hero-logo-img');
-    if (img) {
-        img.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
-        img.style.transformOrigin = 'left bottom';
-    }
-    container.style.position = 'relative';
-    container.style.zIndex = zIndex !== 0 ? zIndex : '';
-}
-
-function initLogoEditor(id, container, slot = 'modal') {
-    if (container.dataset.editorActive) return;
-    container.dataset.editorActive = 'true';
-
-    let state = { x: 0, y: 0, scale: 1, zIndex: 0 };
-    const img = container.querySelector('.details-logo-img, .hero-logo-img');
-
-    const readState = () => {
-        try {
-            const t = img.style.transform || '';
-            const tMatch = t.match(/translate\(([^,]+)px,\s*([^)]+)px\)/);
-            const sMatch = t.match(/scale\(([^)]+)\)/);
-            if (tMatch) { state.x = parseFloat(tMatch[1]); state.y = parseFloat(tMatch[2]); }
-            if (sMatch) state.scale = parseFloat(sMatch[1]);
-            state.zIndex = parseInt(container.style.zIndex) || 0;
-        } catch(e) {}
-    };
-    readState();
-
-    const editToggle = document.createElement('button');
-    editToggle.className = 'logo-edit-toggle';
-    editToggle.title = 'Editar logo';
-    editToggle.innerHTML = '<i class="fas fa-pen"></i>';
-
-    const heroButtons = document.querySelector('.hero-buttons');
-    const detailsButtonsRow = document.getElementById('details-buttons');
-    if (slot && slot.includes('hero') && heroButtons) {
-        heroButtons.appendChild(editToggle);
-    } else if (detailsButtonsRow) {
-        detailsButtonsRow.appendChild(editToggle);
-    } else {
-        container.appendChild(editToggle);
-    }
-
-    const panel = document.createElement('div');
-    panel.className = 'logo-editor-panel';
-    panel.innerHTML = `
-        <div class="lep-header">
-            <span class="lep-slot-label">${slot.includes('hero') ? '🖼' : '🎬'} ${slot.includes('hero') ? 'Hero' : 'Modal'} · ${slot.includes('mobile') ? '📱 Móvil' : '🖥 PC'}</span>
-            <button class="lep-close-btn" title="Cerrar editor">✕</button>
-        </div>
-        <div class="lep-grid">
-            <span class="lep-label">Escala</span>
-            <button class="lep-btn" data-action="scale-down">−</button>
-            <span class="lep-value" id="lep-scale">${state.scale.toFixed(2)}</span>
-            <button class="lep-btn" data-action="scale-up">+</button>
-
-            <span class="lep-label">X</span>
-            <button class="lep-btn" data-action="x-left">←</button>
-            <span class="lep-value" id="lep-x">${Math.round(state.x)}</span>
-            <button class="lep-btn" data-action="x-right">→</button>
-
-            <span class="lep-label">Y</span>
-            <button class="lep-btn" data-action="y-up">↑</button>
-            <span class="lep-value" id="lep-y">${Math.round(state.y)}</span>
-            <button class="lep-btn" data-action="y-down">↓</button>
-
-            <span class="lep-label">Capa</span>
-            <button class="lep-btn" data-action="z-down">−</button>
-            <span class="lep-value" id="lep-z">${state.zIndex}</span>
-            <button class="lep-btn" data-action="z-up">+</button>
-        </div>
-        <div class="lep-actions">
-            <button class="lep-reset-btn">↺ Reset</button>
-            <button class="lep-save-btn">Guardar</button>
-        </div>
-    `;
-    document.body.appendChild(panel);
-
-    const updateDisplay = () => {
-        panel.querySelector('#lep-scale').textContent = state.scale.toFixed(2);
-        panel.querySelector('#lep-x').textContent = Math.round(state.x);
-        panel.querySelector('#lep-z').textContent = state.zIndex;
-        panel.querySelector('#lep-y').textContent = Math.round(state.y);
-        applyLogoTransform(container, state);
-    };
-
-    let editMode = false;
-    editToggle.addEventListener('click', e => {
-        e.stopPropagation();
-        editMode = !editMode;
-        readState();
-        panel.classList.toggle('lep-visible', editMode);
-        img.classList.toggle('logo-editing', editMode);
-        editToggle.classList.toggle('lep-active', editMode);
-        editToggle.innerHTML = editMode ? '✕' : '<i class="fas fa-pen"></i>';
-        updateDisplay();
-
-        if (slot.includes('hero')) {
-            window._heroEditPaused = editMode;
-            if (!editMode) {
-                clearInterval(appState.ui.heroInterval);
-                appState.ui.heroInterval = setInterval(() => {
-                    if (window._heroEditPaused) return;
-                    const items = appState.ui.heroItems;
-                    if (!items || items.length === 0) return;
-                    appState.ui.currentHeroIndex = ((appState.ui.currentHeroIndex || 0) + 1) % items.length;
-                    changeHeroMovie(items[appState.ui.currentHeroIndex]);
-                }, 8000);
-            }
-        }
-    });
-
-    const STEP = 5;
-    panel.addEventListener('click', e => {
-        e.stopPropagation();
-        const action = e.target.closest('[data-action]')?.dataset.action;
-        if (!action) return;
-        if (action === 'scale-up')   state.scale = Math.min(4, +(state.scale + 0.05).toFixed(2));
-        if (action === 'scale-down') state.scale = Math.max(0.1, +(state.scale - 0.05).toFixed(2));
-        if (action === 'x-right') state.x += STEP;
-        if (action === 'x-left')  state.x -= STEP;
-        if (action === 'y-down')  state.y += STEP;
-        if (action === 'y-up')    state.y -= STEP;
-        if (action === 'z-up')    state.zIndex = Math.min(5, state.zIndex + 1);
-        if (action === 'z-down')  state.zIndex = Math.max(-5, state.zIndex - 1);
-        updateDisplay();
-    });
-
-    let isDragging = false, dragSX, dragSY, dragOX, dragOY;
-    img.addEventListener('mousedown', e => {
-        if (!editMode) return;
-        isDragging = true;
-        dragSX = e.clientX; dragSY = e.clientY;
-        dragOX = state.x;   dragOY = state.y;
-        img.style.cursor = 'grabbing';
-        e.preventDefault();
-    });
-    document.addEventListener('mousemove', e => {
-        if (!isDragging) return;
-        state.x = dragOX + (e.clientX - dragSX);
-        state.y = dragOY + (e.clientY - dragSY);
-        updateDisplay();
-    });
-    document.addEventListener('mouseup', () => {
-        if (isDragging) { isDragging = false; img.style.cursor = editMode ? 'grab' : ''; }
-    });
-
-    panel.querySelector('.lep-reset-btn').addEventListener('click', e => {
-        e.stopPropagation();
-        state = { x: 0, y: 0, scale: 1, zIndex: 0 };
-        updateDisplay();
-    });
-
-    panel.querySelector('.lep-close-btn').addEventListener('click', e => {
-        e.stopPropagation();
-        editToggle.click();
-    });
-
-    const saveBtn = panel.querySelector('.lep-save-btn');
-    saveBtn.addEventListener('click', e => {
-        e.stopPropagation();
-        saveBtn.disabled = true;
-        saveBtn.textContent = '...';
-        db.ref('logoSettings/' + id + '/' + slot).set(state).then(() => {
-            saveBtn.textContent = '✓ Guardado';
-            saveBtn.classList.add('lep-saved');
-            setTimeout(() => {
-                saveBtn.textContent = 'Guardar';
-                saveBtn.classList.remove('lep-saved');
-                saveBtn.disabled = false;
-            }, 2000);
-        }).catch(() => {
-            saveBtn.textContent = 'Error';
-            saveBtn.disabled = false;
-        });
-    });
-
-    const cleanup = () => {
-        editToggle.remove();
-        panel.remove();
-        container.style.zIndex = '';
-        container.style.position = '';
-        window._heroEditPaused = false;
-        delete container.dataset.editorActive;
-    };
-
-    const modalEl = container.closest('.modal');
-    if (modalEl) {
-        const modalObserver = new MutationObserver(() => {
-            if (!modalEl.classList.contains('show')) {
-                cleanup();
-                modalObserver.disconnect();
-            }
-        });
-        modalObserver.observe(modalEl, { attributes: true, attributeFilter: ['class'] });
-    } else {
-        const heroObserver = new MutationObserver(() => {
-            if (!document.body.contains(container) || !container.querySelector('.hero-logo-img')) {
-                cleanup();
-                heroObserver.disconnect();
-            }
-        });
-        heroObserver.observe(document.body, { childList: true, subtree: true });
-    }
-}
-
-function renderSagasHub() {
-    const container = document.getElementById('sagas-grid-dynamic');
-    if (!container) return;
-    const sagas = Object.values(appState.content.sagasList || {});
-    sagas.sort((a, b) => (Number(a.order) || 99) - (Number(b.order) || 99));
-    container.innerHTML = '';
-    sagas.forEach(saga => {
-        const card = document.createElement('div');
-        card.className = 'saga-card';
-        card.style.setProperty('--hover-color', saga.color || '#fff');
-        if (saga.banner) card.style.backgroundImage = `url('${saga.banner}')`;
-        card.onclick = () => switchView(saga.id);
-        card.innerHTML = `<img src="${saga.logo}" alt="${saga.title}" class="saga-logo">`;
         container.appendChild(card);
     });
 }
 
-export function findContentData(id) {
-    // 🔥 Usamos el nuevo gestor de contenido centralizado!
-    return ContentManager.findById(id, appState);
-}
-
-window.adminForceUpdate = () => { safeClearStorage(); location.reload(); };
-
-window.adminLocalRefresh = async () => {
-    const btn = document.getElementById('admin-local-refresh-btn');
-    if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
-    }
+// 5. REPRODUCTOR DE EPISODIOS
+export async function renderEpisodePlayer(seriesId, seasonNum, startAtIndex = null) {
     try {
-        const [series, episodes, allMovies, posters, sagasListData] = await Promise.all([
-            ErrorHandler.fetchOperation(`${API_URL.BASE_URL}?data=series`),
-            ErrorHandler.fetchOperation(`${API_URL.BASE_URL}?data=episodes`),
-            ErrorHandler.fetchOperation(`${API_URL.BASE_URL}?data=allMovies&order=desc`),
-            ErrorHandler.fetchOperation(`${API_URL.BASE_URL}?data=PostersTemporadas`),
-            ErrorHandler.fetchOperation(`${API_URL.BASE_URL}?data=sagas_list`)
-        ]);
-
-        const sagasArray = Object.values(sagasListData || {});
-        const sagasResults = await Promise.all(
-            sagasArray.map(saga =>
-                ErrorHandler.fetchOperation(`${API_URL.BASE_URL}?data=${saga.id}`)
-                .then(data => ({ id: saga.id, data }))
-            )
-        );
-
-        const freshContent = { allMovies, series, episodes, posters, sagas_list: sagasListData };
-        sagasResults.forEach(item => { freshContent[item.id] = item.data; });
-
-        processDataPublic(freshContent);
-        cacheManager.set(cacheManager.keys.content, freshContent);
-
-        const activeNav = document.querySelector('[data-filter].active');
-        const currentFilter = activeNav?.dataset.filter || 'all';
-        switchView(currentFilter);
-
-        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-sync-alt"></i>'; }
-        ErrorHandler.show('content', '✓ Datos actualizados localmente', 2000);
-        console.log('✓ Refresh local completado');
-    } catch(e) {
-        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-sync-alt"></i>'; }
-        console.error('Error en refresh local:', e);
-    }
-};
-
-function safeClearStorage() {
-    const preserve = [];
-    const saved = {};
-    preserve.forEach(k => { try { saved[k] = localStorage.getItem(k); } catch {} });
-    localStorage.clear();
-    preserve.forEach(k => { if (saved[k] != null) localStorage.setItem(k, saved[k]); });
-}
-window.safeClearStorage = safeClearStorage;
-
-function checkResetPasswordMode() {
-    const urlParams = new URLSearchParams(window.location.search);
-    const mode = urlParams.get('mode');      
-    const actionCode = urlParams.get('oobCode'); 
-
-    if (mode === 'resetPassword' && actionCode) {
+        shared.appState.player.activeSeriesId = seriesId;
+        const savedEpisodeIndex   = loadProgress(seriesId, seasonNum);
+        const initialEpisodeIndex = startAtIndex !== null ? startAtIndex : savedEpisodeIndex;
         
-        window.history.replaceState({}, document.title, window.location.pathname);
-
-        const modal = document.getElementById('new-password-modal');
-        if (modal) {
-            modal.classList.add('show');
-            document.body.classList.add('modal-open');
+        const episodes    = shared.appState.content.seriesEpisodes[seriesId]?.[seasonNum] || [];
+        const firstEpisode = episodes[0];
+        
+        if (!firstEpisode) {
+            console.error("No hay episodios para renderizar.");
+            return;
         }
-
-        const toggleIcon = document.getElementById('toggle-new-pass');
-        const inputPass = document.getElementById('new-password-input');
+ 
+        const seriesTracks   = getLangTracks(firstEpisode);
+        const hasLangOptions = seriesTracks.length > 1;
         
-        if(toggleIcon && inputPass) {
-            const newToggle = toggleIcon.cloneNode(true);
-            toggleIcon.parentNode.replaceChild(newToggle, toggleIcon);
+        let savedLang = null;
+        try {
+            const prefs = JSON.parse(localStorage.getItem('seriesLangPrefs')) || {};
+            savedLang = prefs[seriesId];
+        } catch(e) {}
+
+        let initialLang = seriesTracks[0]?.lang || 'en';
+        if (!hasLangOptions && seriesTracks[0]?.lang === 'es') initialLang = 'es';
+        
+        if (savedLang && seriesTracks.some(t => t.lang === savedLang)) {
+            initialLang = savedLang;
+        }
+ 
+        shared.appState.player.state[seriesId] = { 
+            season:       seasonNum, 
+            episodeIndex: initialEpisodeIndex, 
+            lang:         initialLang 
+        };
+ 
+        const seasonLower = String(seasonNum).toLowerCase();
+        const isSpecialContent = seasonLower.includes('pelicula')  || 
+                                 seasonLower.includes('película')  || 
+                                 seasonLower.includes('especial')  || 
+                                 seasonLower.includes('ova')       || 
+                                 seasonLower.includes('movie')     || 
+                                 seasonLower.includes('special');
+        
+        const isSingleMovie = isSpecialContent && episodes.length === 1;
+ 
+        const postersData = shared.appState.content.seasonPosters[seriesId]?.[seasonNum] || {};
+        const seriesInfo  = findContentData(seriesId) || {};
+ 
+        const movieYear      = postersData.year      || postersData.anio     || '';
+        const movieDuration  = postersData.duration  || postersData.duracion || '';
+        const movieRequester = postersData.pedido    || postersData.pedidoPor || '';
+        
+        let specificPoster = postersData.poster || postersData.posterUrl;
+        if (!specificPoster) specificPoster = seriesInfo.poster; 
+ 
+        const movieSynopsis  = postersData.sinopsis || firstEpisode.description || "Sinopsis no disponible.";
+        
+        const displayTitle = isSpecialContent && firstEpisode.title 
+            ? firstEpisode.title 
+            : seriesInfo.title || firstEpisode.title || 'Sin título';
+
+        const seasonDisplayName = postersData.etiqueta ? postersData.etiqueta : (isSpecialContent ? 'Especial / Película' : `Temporada ${seasonNum}`);
+
+        let seasonWordPlural = 'Temporadas';
+        if (seasonDisplayName.toLowerCase().includes('parte')) {
+            seasonWordPlural = 'Partes';
+        } else if (isSpecialContent) {
+            seasonWordPlural = 'Especiales';
+        }
+        
+        const seasonsCount   = Object.keys(shared.appState.content.seriesEpisodes[seriesId] || {}).length;
+        const backButtonHTML = seasonsCount > 1 
+            ? `<button class="player-back-link back-to-seasons"><i class="fas fa-arrow-left"></i> Temporadas</button>` 
+            : '';
+ 
+        shared.DOM.seriesPlayerModal.className = 'series-player-page active player-layout-view';
+ 
+        const finishTime  = movieDuration ? calculateFinishTime(movieDuration) : null;
+        const endTimeHTML = finishTime
+            ? `<span class="meta-tag" style="display:inline-flex;align-items:center;">
+                   <i class="fas fa-flag-checkered" style="color:#ff4d4d;"></i>
+                   <span style="opacity:0.9;margin-left:5px;">Terminas de ver a las <strong style="color:#fff;">${finishTime}</strong> aprox.</span>
+               </span>`
+            : '';
+ 
+        if (isSingleMovie) {
+            shared.DOM.seriesPlayerModal.innerHTML = `
+                <button class="close-btn streaming-back-btn"><i class="fas fa-arrow-left"></i> Volver</button>
+                <div class="player-layout-container movie-mode">
+                    <div class="movie-player-container">
+                        <h2 id="cinema-title-${seriesId}" class="movie-player-title cinema-title-above">${displayTitle}</h2>
+                        <div class="screen"><div id="video-container-${seriesId}" style="width:100%; height:100%; background:#000;"></div></div>
+                    </div>
+                    <div class="movie-info-sidebar">
+                        <div class="movie-info-sidebar-inner">
+                            ${backButtonHTML}
+                            <div class="movie-poster-container">
+                                <img src="${specificPoster}" alt="Poster" onerror="this.src='https://via.placeholder.com/150'">
+                            </div>
+                            <div class="movie-details-info">
+                                <div class="movie-meta-info">
+                                    ${movieRequester ? `<span class="meta-tag request-tag"><i class="fas fa-user-circle"></i> ${movieRequester}</span>` : ''}
+                                    ${movieYear     ? `<span class="meta-tag"><i class="fas fa-calendar"></i> ${movieYear}</span>`     : ''}
+                                    ${movieDuration ? `<span class="meta-tag"><i class="fas fa-clock"></i> ${movieDuration}</span>`    : ''}
+                                    ${endTimeHTML}
+                                </div>
+                                <p id="cinema-synopsis-sp" class="movie-synopsis">${movieSynopsis}</p>
+                                <div class="cinema-controls-sp">
+                                    <button id="btn-review-player-${seriesId}" class="btn btn-review"><i class="fas fa-star"></i> Escribir Reseña</button>
+                                    <button class="btn btn-report-sp"><i class="fas fa-flag"></i> Reportar problema</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+ 
+        } else {
+            let langDropdown = '';
+            if (hasLangOptions) {
+                const currentLangLabel = seriesTracks.find(t => t.lang === initialLang)?.label || 'Original';
+                
+                const optionsHtml = seriesTracks.map(t => `
+                    <div class="cc-lang-option" data-lang="${t.lang}" style="padding: 10px 15px; cursor: pointer; color: ${t.lang === initialLang ? '#fff' : '#aaa'}; background: ${t.lang === initialLang ? '#e50914' : 'transparent'}; font-size: 11px; font-weight: bold; text-transform: uppercase; transition: 0.2s; border-bottom: 1px solid #222;">
+                        ${t.label}
+                    </div>
+                `).join('');
+
+                langDropdown = `
+                    <div class="cc-custom-lang-wrapper" style="position: relative; display: inline-block; font-family: 'Montserrat', sans-serif;">
+                        <div class="cc-lang-trigger" style="display: inline-flex; align-items: center; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px; padding: 7px 12px; cursor: pointer; transition: all 0.2s ease; box-shadow: 0 2px 8px rgba(0,0,0,0.2);">
+                            <i class="fas fa-language" style="color: #e50914; font-size: 14px; margin-right: 8px; pointer-events: none;"></i>
+                            <span style="color: #fff; font-size: 12px; font-weight: 700; text-transform: uppercase; padding-right: 10px; letter-spacing: 0.5px; pointer-events: none;">${currentLangLabel}</span>
+                            <i class="fas fa-chevron-down" style="font-size: 10px; color: #aaa; pointer-events: none;"></i>
+                        </div>
+                        <div class="cc-lang-menu" style="display: none; position: absolute; top: calc(100% + 5px); right: 0; background: #141414; border: 1px solid #333; border-radius: 8px; overflow: hidden; z-index: 999999; min-width: 130px; box-shadow: 0 10px 25px rgba(0,0,0,0.9);">
+                            ${optionsHtml}
+                        </div>
+                    </div>
+                `;
+            }
+
+            const mYear = postersData.year  || postersData.anio   || seriesInfo.year  || seriesInfo.anio || '';
+            const mReq  = postersData.pedido || postersData.pedidoPor || seriesInfo.pedido || seriesInfo.requester || '';
             
-            newToggle.addEventListener('click', () => {
-                const isPass = inputPass.type === 'password';
-                inputPass.type = isPass ? 'text' : 'password';
-                newToggle.classList.toggle('fa-eye');
-                newToggle.classList.toggle('fa-eye-slash');
+            const normStr = s => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\s]/g, '');
+            const rawAltTitle = seriesInfo.secondTitle || seriesId;
+            const originalTitle = rawAltTitle && normStr(rawAltTitle) !== normStr(seriesInfo.title || '') ? rawAltTitle : null;
+
+            let genresVal = '';
+            if (seriesInfo.genres) {
+                genresVal = Array.isArray(seriesInfo.genres) ? seriesInfo.genres.join(', ') : String(seriesInfo.genres).replace(/;/g, ', ');
+            }
+            const langVal  = seriesInfo.language || seriesInfo.idioma || seriesInfo.audio || '';
+
+            const mReqHtml  = mReq  ? `<span>Pedido por: <span style="color:#fff; font-weight:bold;">${mReq}</span></span><span style="font-size:10px; color:#555; margin:0 4px;">●</span>` : '';
+            const mYearHtml = mYear ? `<span>Estreno: <span style="color:#fff; font-weight:bold;">${mYear}</span></span><span style="font-size:10px; color:#555; margin:0 4px;">●</span>` : '';
+            const logoTheme = shared.THEMES?.normal?.logo || 'https://res.cloudinary.com/djhgmmdjx/image/upload/v1759209688/vgJjqSM_oicebo.png';
+
+            shared.DOM.seriesPlayerModal.innerHTML = `
+            <style>
+                body:has(#series-player-page.active) .bottom-nav { display: none !important; }
+                #series-player-page.player-layout-view {
+                    position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
+                    display: flex !important; flex-direction: column !important; background-color: #0f0f0f !important;
+                    z-index: 99999 !important; padding: 0 !important; margin: 0 !important; 
+                    width: 100vw !important; height: 100dvh !important; border-radius: 0 !important; 
+                    align-items: stretch !important; overflow-y: auto !important; overflow-x: hidden !important;
+                }
+                
+                @media (min-width: 1024px) { .mobile-only { display: none !important; } }
+                @media (max-width: 1023px) { .desktop-only { display: none !important; } }
+
+                @media (min-width: 1024px) {
+                    #series-player-page.player-layout-view {
+                        position: relative !important;
+                        top: auto !important; left: auto !important; right: auto !important; bottom: auto !important;
+                        width: 100% !important;
+                        height: auto !important;
+                        min-height: calc(100vh - 70px) !important;
+                        overflow-y: visible !important;
+                    }
+                }
+
+                .cc-top-fixed { flex-shrink: 0; display: flex; flex-direction: column; background-color: #0f0f0f; z-index: 10; transition: box-shadow 0.3s ease; }
+                .cc-top-fixed.scrolled { box-shadow: 0 4px 15px rgba(0,0,0,0.6); border-bottom: 1px solid #222; }
+                .cc-nav { display: flex; align-items: center; justify-content: space-between; padding: 10px 15px; padding-top: calc(10px + env(safe-area-inset-top)); border-bottom: 2px solid #e50914; }
+                .cc-logo { height: 22px; }
+                .cc-back-btn { background: transparent; border: none; color: white; font-size: 0.9rem; font-weight: bold; display: flex; align-items: center; gap: 7px; cursor: pointer; padding: 0; }
+                .cc-video-wrap { width: 100%; background: #000; position: relative; aspect-ratio: 16/9; }
+                .cc-details { padding: 15px; }
+                .cc-title-box { position: relative; cursor: pointer; margin-bottom: 0; user-select: none; -webkit-tap-highlight-color: transparent; }
+                .cc-title { font-size: 1.2rem; font-weight: bold; margin: 0 0 4px 0; color: white; line-height: 1.2;}
+                .cc-subtitle { color: #e50914; font-size: 12px; font-weight: bold; margin-bottom: 4px; display: block; }
+                .cc-toggle { position: absolute; bottom: 2px; right: 0; font-size: 14px; color: #8a8a92; font-weight: 500; background: linear-gradient(90deg, rgba(15,15,15,0) 0%, rgba(15,15,15,1) 25%, rgba(15,15,15,1) 100%); padding-left: 25px; padding-right: 2px; z-index: 2; }
+                .cc-scroll { flex: 1 1 auto; padding: 15px 15px 40px 15px; display: block !important; -webkit-overflow-scrolling: touch; }
+                .cc-scroll::-webkit-scrollbar { display: none; }
+                .cc-meta { font-size: 12px; color: #8a8a92; margin-bottom: 15px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; line-height: 1.6; border-bottom: 1px solid #222; padding-bottom: 15px; }
+                .cc-expand { display: none; background-color: #181818; border-radius: 12px; padding: 15px; margin-bottom: 20px; }
+                .cc-desc { font-size: 13px; line-height: 1.5; color: white; margin-bottom: 15px; }
+                .cc-controls { display: flex; align-items: center; justify-content: flex-start; gap: 15px; margin: 10px 0 15px 0; flex-wrap: wrap; }
+                .cc-season-btn { display: inline-flex; align-items: center; gap: 8px; font-size: 16px; font-weight: bold; cursor: pointer; padding: 8px; border-radius: 8px; background-color: transparent; color: white; margin-left: -8px; }
+                .cc-langs { display: flex; gap: 8px; flex-wrap: nowrap; margin-left: auto; } 
+                .cc-card { display: flex !important; gap: 12px !important; margin-bottom: 16px !important; align-items: center !important; padding: 0 !important; background: transparent !important; border: none !important; cursor: pointer; }
+                .cc-thumb { width: 120px !important; height: 67px !important; border-radius: 8px !important; object-fit: cover !important; border: 2px solid transparent !important; flex-shrink: 0; background: #222;}
+                .cc-card.active .cc-thumb { border: 2px solid #e50914 !important; }
+                .cc-info { display: flex !important; flex-direction: column !important; justify-content: center !important; flex: 1 !important; min-width: 0;}
+                .cc-ep-title { font-size: 0.85rem !important; font-weight: bold !important; color: white !important; margin: 0 0 4px 0 !important; line-height: 1.3;}
+                .cc-card.active .cc-ep-title { color: #e50914 !important; }
+                .cc-ep-desc { font-size: 0.75rem !important; color: #8a8a92 !important; display: -webkit-box !important; -webkit-line-clamp: 2 !important; -webkit-box-orient: vertical !important; overflow: hidden !important; margin: 0 !important; line-height: 1.4;}
+                
+                .cc-sheet-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 3000; display: flex; flex-direction: column; justify-content: flex-end; opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
+                .cc-sheet-overlay.active { opacity: 1; pointer-events: auto; }
+                .cc-sheet { background-color: #181818; border-radius: 20px 20px 0 0; padding: 20px 15px calc(20px + env(safe-area-inset-bottom)); max-height: 75vh; display: flex; flex-direction: column; transform: translateY(100%); transition: transform 0.3s cubic-bezier(0.1, 0.9, 0.2, 1); width: 100%; box-sizing: border-box; }
+                .cc-sheet-overlay.active .cc-sheet { transform: translateY(0); }
+                .cc-sheet-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; font-size: 18px; font-weight: bold; color: white;}
+                .cc-sheet-close { background: transparent; border: none; color: white; font-size: 24px; cursor: pointer; padding: 0;}
+                .cc-sheet-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; overflow-y: auto; padding-bottom: 20px; }
+                .cc-sheet-grid::-webkit-scrollbar { display: none; }
+                .cc-sheet-card { position: relative; border-radius: 8px; overflow: hidden; aspect-ratio: 2/3; cursor: pointer; background-color: #111; border: 2px solid transparent; }
+                .cc-sheet-card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+                .cc-sheet-card .cc-overlay { position: absolute; inset: 0; background: linear-gradient(to top, rgba(0,0,0,0.9) 0%, transparent 60%); display: flex; align-items: flex-end; justify-content: center; padding: 10px; color: white; font-size: 0.8rem; font-weight: bold; text-align: center; }
+                .cc-sheet-card.active-season { border-color: #e50914; }
+            </style>
+
+            <div class="sp-desktop-grid">
+                
+                <div class="sp-left-column">
+                    <div class="cc-top-fixed" id="fixedHeader">
+                        <nav class="cc-nav mobile-only">
+                            <img src="${logoTheme}" class="cc-logo">
+                            <button class="cc-back-btn streaming-back-btn"><i class="fas fa-times"></i> Cerrar</button>
+                        </nav>
+                        <div class="cc-video-wrap">
+                            <div id="video-container-${seriesId}" style="width:100%; height:100%; background:#000; position:absolute; inset:0;"></div>
+                        </div>
+                        <div class="cc-details mobile-only">
+                            <div class="cc-title-box" id="toggleDescBtn">
+                                <div>
+                                    <span class="cc-subtitle" id="subTitle">${seasonDisplayName}</span>
+                                    <h1 class="cc-title" id="cinema-title-${seriesId}"></h1>
+                                </div>
+                                <span class="cc-toggle" id="toggleText">... ver más</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="video-info-desktop desktop-only">
+                        <div class="info-header-clickable" id="toggleDescBtnDesktop">
+                            <div class="title-block-wrap">
+                                <span class="sub-title" id="subTitleDesktop">${seasonDisplayName}</span>
+                                <h1 class="video-title" id="cinema-title-desktop-${seriesId}"></h1>
+                                <div class="series-meta">
+                                    ${mReqHtml}
+                                    ${mYearHtml}
+                                    <span><span style="color:#fff; font-weight:bold;">${seasonsCount}</span> ${seasonWordPlural}</span>
+                                </div>
+                            </div>
+                            <div class="toggle-arrow" id="toggleArrowDesktop">
+                                <svg viewBox="0 0 24 24"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"></path></svg>
+                            </div>
+                        </div>
+                        <div class="synopsis-content" id="synopsisContentDesktop">
+                            <p class="desc-text" id="episode-desc-desktop-${seriesId}"></p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="sp-right-column cc-scroll" id="scrollArea">
+                    <div class="cc-meta mobile-only">
+                        ${mReqHtml}
+                        ${mYearHtml}
+                        <span><span style="color:#fff; font-weight:bold;">${seasonsCount}</span> ${seasonWordPlural}</span>
+                    </div>
+
+                    <div class="cc-expand mobile-only" id="expandableArea">
+                        <div style="font-size: 12px; color: #ccc; margin-bottom: 15px; display: flex; flex-direction: column; gap: 6px; background: rgba(255,255,255,0.05); padding: 12px; border-radius: 8px; border-left: 2px solid #e50914;">
+                            ${originalTitle ? `<span><i class="fas fa-film" style="color:#8a8a92; width:18px;"></i> ${originalTitle}</span>` : ''}
+                            ${genresVal     ? `<span><i class="fas fa-tags" style="color:#8a8a92; width:18px;"></i> ${genresVal}</span>`     : ''}
+                            ${langVal       ? `<span><i class="fas fa-language" style="color:#8a8a92; width:18px;"></i> ${langVal}</span>`    : ''}
+                        </div>
+                        <div class="cc-desc" id="episode-desc-${seriesId}"></div>
+                        <button class="vab-btn--report" style="background: rgba(229, 9, 20, 0.1); color: #e50914; border: 1px solid rgba(229, 9, 20, 0.3); border-radius: 18px; padding: 8px 16px; font-size: 13px; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 6px; width: fit-content;"><i class="fas fa-flag"></i> Reportar problema</button>
+                    </div>
+                    
+                    <div class="cc-controls">
+                        <div class="cc-season-btn" id="seasonSelectorBtn">
+                            <span id="seasonBtnText">${seasonDisplayName}</span>
+                            <i class="fas fa-chevron-down"></i>
+                        </div>
+                        <div class="cc-langs">
+                            ${langDropdown}
+                        </div>
+                    </div>
+
+                    <div id="episode-list-${seriesId}"></div>
+                </div>
+            </div>
+
+            <div class="cc-sheet-overlay" id="seasonModalSheet">
+                <div class="cc-sheet" onclick="event.stopPropagation();">
+                    <div class="cc-sheet-header" style="position: relative; display: flex; justify-content: center; align-items: center;">
+                        <span>${seasonWordPlural}</span>
+                        <button class="cc-sheet-close" id="closeSeasonSheetBtn" style="position: absolute; right: 0;">✕</button>
+                    </div>
+                    <div class="cc-sheet-grid" id="season-grid-sheet-container"></div>
+                </div>
+            </div>
+        `;
+ 
+            const scrollArea    = shared.DOM.seriesPlayerModal.querySelector('#scrollArea');
+            const fixedHeader   = shared.DOM.seriesPlayerModal.querySelector('#fixedHeader');
+            const toggleText    = shared.DOM.seriesPlayerModal.querySelector('#toggleText');
+            const toggleDescBtn = shared.DOM.seriesPlayerModal.querySelector('#toggleDescBtn');
+            const expandArea    = shared.DOM.seriesPlayerModal.querySelector('#expandableArea');
+ 
+            if (scrollArea && fixedHeader && toggleText) {
+                scrollArea.addEventListener('scroll', () => {
+                    if (scrollArea.scrollTop > 10) {
+                        toggleText.style.opacity       = '0';
+                        toggleText.style.pointerEvents = 'none';
+                        fixedHeader.classList.add('scrolled');
+                    } else {
+                        toggleText.style.opacity       = '1';
+                        toggleText.style.pointerEvents = 'auto';
+                        fixedHeader.classList.remove('scrolled');
+                    }
+                });
+            }
+ 
+            if (toggleDescBtn && expandArea && toggleText && scrollArea) {
+                toggleDescBtn.addEventListener('click', () => {
+                    if (expandArea.style.display === 'none' || expandArea.style.display === '') {
+                        expandArea.style.display = 'block';
+                        toggleText.innerHTML     = 'ocultar';
+                        scrollArea.scrollTo({ top: 0, behavior: 'smooth' });
+                    } else {
+                        expandArea.style.display = 'none';
+                        toggleText.innerHTML     = '... ver más';
+                    }
+                });
+            }
+
+            const toggleDescBtnDesktop   = shared.DOM.seriesPlayerModal.querySelector('#toggleDescBtnDesktop');
+            const toggleArrowDesktop     = shared.DOM.seriesPlayerModal.querySelector('#toggleArrowDesktop');
+            const synopsisContentDesktop = shared.DOM.seriesPlayerModal.querySelector('#synopsisContentDesktop');
+
+            if (toggleDescBtnDesktop && toggleArrowDesktop && synopsisContentDesktop) {
+                toggleDescBtnDesktop.addEventListener('click', () => {
+                    toggleArrowDesktop.classList.toggle('expanded');
+                    synopsisContentDesktop.classList.toggle('expanded');
+                });
+            }
+ 
+            const seasonSelectorBtn        = shared.DOM.seriesPlayerModal.querySelector('#seasonSelectorBtn');
+            const seasonModalSheet         = shared.DOM.seriesPlayerModal.querySelector('#seasonModalSheet');
+            const closeSeasonSheetBtn      = shared.DOM.seriesPlayerModal.querySelector('#closeSeasonSheetBtn');
+            const seasonGridSheetContainer = shared.DOM.seriesPlayerModal.querySelector('#season-grid-sheet-container');
+ 
+            if (seasonSelectorBtn && seasonModalSheet && seasonGridSheetContainer) {
+                seasonGridSheetContainer.innerHTML = '';
+ 
+                const seriesEpisodes   = shared.appState.content.seriesEpisodes[seriesId] || {};
+                const allSeasonPosters = shared.appState.content.seasonPosters[seriesId]  || {};
+                const allSeasonsKeys   = [...new Set([...Object.keys(seriesEpisodes), ...Object.keys(allSeasonPosters)])];
+                const orderedKeys      = shared.appState.content.seasonOrder?.[seriesId] || allSeasonsKeys;
+                const seasonsMappedSheet = orderedKeys
+                    .filter(k => allSeasonsKeys.includes(k))
+                    .map(k => ({ key: k, num: !isNaN(k) ? Number(k) : 0 }));
+ 
+                seasonsMappedSheet.forEach(({ key: sKey, num: sNum }) => {
+                    const posterEntry = allSeasonPosters[sKey];
+                    let posterUrl   = seriesInfo.poster || '';
+                    let customLabel = '';
+ 
+                    if (posterEntry && typeof posterEntry === 'object') {
+                        posterUrl   = posterEntry.posterUrl || posterEntry.poster || posterUrl;
+                        customLabel = posterEntry.etiqueta  || '';
+                    } else if (posterEntry) {
+                        posterUrl = posterEntry;
+                    }
+ 
+                    const sLabel   = customLabel ? customLabel : (sNum === 0 ? 'Especial/Película' : `Temporada ${sNum}`);
+                    const isActive = sKey === seasonNum;
+ 
+                    const card = document.createElement('div');
+                    card.className = `cc-sheet-card ${isActive ? 'active-season' : ''}`;
+                    card.innerHTML = `<img src="${posterUrl}" alt="${sLabel}"><div class="cc-overlay">${sLabel}</div>`;
+                    card.addEventListener('click', () => {
+                        seasonModalSheet.classList.remove('active');
+                        if (scrollArea) scrollArea.style.overflowY = 'auto';
+                        if (!isActive) renderEpisodePlayer(seriesId, sKey);
+                    });
+                    seasonGridSheetContainer.appendChild(card);
+                });
+ 
+                seasonSelectorBtn.addEventListener('click', () => {
+                    seasonModalSheet.classList.add('active');
+                    if (scrollArea) scrollArea.style.overflowY = 'hidden';
+                });
+                const closeSheet = () => {
+                    seasonModalSheet.classList.remove('active');
+                    if (scrollArea) scrollArea.style.overflowY = 'auto';
+                };
+                if (closeSeasonSheetBtn) closeSeasonSheetBtn.addEventListener('click', closeSheet);
+                seasonModalSheet.addEventListener('click', closeSheet);
+            }
+ 
+            const reportBtnB = shared.DOM.seriesPlayerModal.querySelector('.vab-btn--report');
+            if (reportBtnB) {
+                reportBtnB.addEventListener('click', async () => {
+                    try {
+                        const rptMod = await import('./features/reports.js');
+                        rptMod.openReportModal({ contentId: seriesId, contentTitle: seriesInfo.title, contentType: 'series' });
+                    } catch(e) { console.error('Error al abrir reporte:', e); }
+                });
+            }
+        } 
+ 
+        shared.DOM.seriesPlayerModal.querySelector('.streaming-back-btn').onclick = closeSeriesPlayerModal;
+        
+        const langWrapper = shared.DOM.seriesPlayerModal.querySelector('.cc-custom-lang-wrapper');
+        if (langWrapper) {
+            const trigger = langWrapper.querySelector('.cc-lang-trigger');
+            const menu    = langWrapper.querySelector('.cc-lang-menu');
+            const options = langWrapper.querySelectorAll('.cc-lang-option');
+
+            // AbortController para limpiar el listener global al renderizar de nuevo
+            if (shared._langMenuAbortCtrl) shared._langMenuAbortCtrl.abort();
+            shared._langMenuAbortCtrl = new AbortController();
+            const { signal } = shared._langMenuAbortCtrl;
+
+            trigger.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const isOpen = menu.style.display === 'block';
+                menu.style.display        = isOpen ? 'none' : 'block';
+                trigger.style.borderColor = isOpen ? 'rgba(255, 255, 255, 0.15)' : '#e50914';
+            });
+
+            document.addEventListener('click', () => {
+                if (menu.style.display === 'block') {
+                    menu.style.display        = 'none';
+                    trigger.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+                }
+            }, { signal });
+
+            options.forEach(opt => {
+                opt.addEventListener('mouseenter', () => {
+                    if (opt.style.background !== 'rgb(229, 9, 20)' && opt.style.background !== '#e50914') {
+                        opt.style.background = '#2a2a2a';
+                    }
+                });
+                opt.addEventListener('mouseleave', () => {
+                    if (opt.style.background !== 'rgb(229, 9, 20)' && opt.style.background !== '#e50914') {
+                        opt.style.background = 'transparent';
+                    }
+                });
+                
+                opt.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    menu.style.display = 'none';
+                    changeLanguage(seriesId, opt.dataset.lang);
+                });
             });
         }
-
-        const form = document.getElementById('new-password-form');
-        const feedback = document.getElementById('new-pass-feedback');
         
-        if (form) {
-            form.onsubmit = async (e) => {
-                e.preventDefault();
-                const newPassword = inputPass.value;
-                const btn = form.querySelector('button');
-
-                btn.disabled = true;
-                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Guardando...';
-                feedback.textContent = "";
-
-                try {
-                    await auth.confirmPasswordReset(actionCode, newPassword);
-                    
-                    feedback.style.color = '#4cd137'; 
-                    feedback.textContent = "¡Contraseña actualizada correctamente!";
-                    btn.textContent = "¡Listo!";
-                    
-                    setTimeout(() => {
-                        modal.classList.remove('show'); 
-                        if(window.openAuthModal) window.openAuthModal(true); 
-                    }, 2000);
-
-                } catch (error) {
-                    console.error("Error reset password:", error);
-                    btn.disabled = false;
-                    btn.textContent = "Guardar Nueva Contraseña";
-                    feedback.style.color = '#ff4d4d'; 
-                    
-                    if (error.code === 'auth/expired-action-code') {
-                        feedback.textContent = "El enlace ha expirado. Solicita uno nuevo.";
-                    } else if (error.code === 'auth/invalid-action-code') {
-                        feedback.textContent = "El enlace ya fue usado o no es válido.";
-                    } else if (error.code === 'auth/weak-password') {
-                        feedback.textContent = "La contraseña es muy débil (mínimo 6 caracteres).";
-                    } else {
-                        feedback.textContent = "Ocurrió un error. Intenta nuevamente.";
-                    }
+        const backButton = shared.DOM.seriesPlayerModal.querySelector('.player-back-link.back-to-seasons');
+        if (backButton) backButton.onclick = () => renderSeasonGrid(seriesId);
+ 
+        const reviewBtn = shared.DOM.seriesPlayerModal.querySelector(`#btn-review-player-${seriesId}`);
+        if (reviewBtn) {
+            reviewBtn.onclick = () => {
+                let correctTitle = '';
+                let correctType  = 'movie';
+                if (isSpecialContent || isSingleMovie) {
+                    correctTitle = displayTitle;
+                    correctType  = 'movie';
+                } else {
+                    correctTitle = seriesInfo.title || displayTitle;
+                    correctType  = 'series';
+                }
+                if (window.openSmartReviewModal) {
+                    window.openSmartReviewModal(seriesId, correctType, correctTitle);
+                } else {
+                    console.error("La función window.openSmartReviewModal no está definida en script.js");
                 }
             };
         }
+ 
+        const reportBtnSp = shared.DOM.seriesPlayerModal.querySelector('.btn-report-sp');
+        if (reportBtnSp) {
+            reportBtnSp.onclick = async () => {
+                try {
+                    const rptMod = await import('./features/reports.js');
+                    rptMod.openReportModal({ contentId: seriesId, contentTitle: displayTitle, contentType: 'movie' });
+                } catch(e) { console.error('Error al abrir reporte:', e); }
+            };
+        }
+ 
+        if (isSingleMovie) {
+            const synopsisEl = shared.DOM.seriesPlayerModal.querySelector('#cinema-synopsis-sp');
+            if (synopsisEl) {
+                requestAnimationFrame(() => {
+                    const isClamped = synopsisEl.scrollHeight > synopsisEl.clientHeight + 2;
+                    if (isClamped) {
+                        const toggleBtn = document.createElement('button');
+                        toggleBtn.className   = 'synopsis-toggle-btn';
+                        toggleBtn.textContent = 'Leer sinopsis ▾';
+                        toggleBtn.onclick = () => {
+                            const isExpanded = synopsisEl.classList.toggle('expanded');
+                            toggleBtn.textContent = isExpanded ? 'Ver menos ▴' : 'Leer sinopsis ▾';
+                        };
+                        synopsisEl.insertAdjacentElement('afterend', toggleBtn);
+                    }
+                });
+            }
+        }
+ 
+        if (!isSingleMovie) populateEpisodeList(seriesId, seasonNum);
+        openEpisode(seriesId, seasonNum, initialEpisodeIndex);
+ 
+    } catch (e) {
+        logError(e, 'Player: Render Episode');
+        shared.ErrorHandler.show('content', 'Error al cargar el episodio.');
     }
 }
 
-window.closeAllModals = () => ModalManager.closeAll();
-window.ErrorHandler = ErrorHandler;
-window.ContentManager = ContentManager;
-window.cacheManager = cacheManager;
+export function populateEpisodeList(seriesId, seasonNum) {
+    const container = shared.DOM.seriesPlayerModal.querySelector(`#episode-list-${seriesId}`);
+    const episodes  = shared.appState.content.seriesEpisodes[seriesId]?.[seasonNum];
+    if (!container || !episodes) return;
+ 
+    container.innerHTML = '';
+ 
+    [...episodes].sort((a, b) => a.episodeNumber - b.episodeNumber).forEach((episode, index) => {
+        const card = document.createElement('div');
+        card.className = 'cc-card episode-card'; 
+        card.id        = `episode-card-${seriesId}-${seasonNum}-${index}`;
+        card.addEventListener('click', () => openEpisode(seriesId, seasonNum, index));
+ 
+        const thumbSrc = episode.thumbnail || episode.thumb || episode.image || '';
+        const epNum    = String(episode.episodeNumber || index + 1).padStart(2, '0');
+        const desc     = episode.description || episode.synopsis || episode.desc || '';
+ 
+        card.innerHTML = `
+            ${thumbSrc
+                ? `<img class="cc-thumb ep-thumb" src="${thumbSrc}" alt="" loading="lazy" onerror="this.style.display='none'">`
+                : `<div class="cc-thumb ep-thumb"></div>`
+            }
+            <div class="cc-info episode-card-info">
+                <h3 class="cc-ep-title ep-title">${epNum}. ${episode.title || ''}</h3>
+                ${desc ? `<p class="cc-ep-desc episode-description">${desc}</p>` : ''}
+            </div>
+        `;
+        container.appendChild(card);
+    });
+}
 
-console.log('✅ Cine Corneta v9.8 (ArtPlayer) cargado correctamente');
+export function openEpisode(seriesId, season, newEpisodeIndex) {
+    const episode = shared.appState.content.seriesEpisodes[seriesId]?.[season]?.[newEpisodeIndex];
+    if (!episode) return;
+
+    commitAndClearPendingSave();
+
+    clearTimeout(shared.appState.player.episodeOpenTimer);
+    shared.appState.player.pendingHistorySave = {
+        contentId:   seriesId,
+        type:        'series',
+        episodeInfo: { season, index: newEpisodeIndex, title: episode.title || '' }
+    };
+ 
+    shared.DOM.seriesPlayerModal.querySelectorAll('.episode-card.active').forEach(c => c.classList.remove('active'));
+    const activeCard = shared.DOM.seriesPlayerModal.querySelector(`#episode-card-${seriesId}-${season}-${newEpisodeIndex}`);
+    if (activeCard) {
+        activeCard.classList.add('active');
+        activeCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+ 
+    shared.appState.player.state[seriesId] = { ...shared.appState.player.state[seriesId], season, episodeIndex: newEpisodeIndex };
+    saveProgress(seriesId);
+ 
+    const container = shared.DOM.seriesPlayerModal.querySelector(`#video-container-${seriesId}`);
+    const lang      = shared.appState.player.state[seriesId]?.lang || 'es';
+ 
+    let videoId;
+    if      (lang === 'en' && episode.videoId_en)                         videoId = episode.videoId_en;
+    else if (lang === 'es' && episode.videoId_es)                         videoId = episode.videoId_es;
+    else if (lang === 'jp' && (episode.videoId_jp || episode.videoId_alt)) videoId = episode.videoId_jp || episode.videoId_alt;
+    else                                                                   videoId = episode.videoId;
+ 
+    if (container) {
+        if (shared.appState.player.activeCineInstance) {
+            shared.appState.player.activeCineInstance.destroy();
+            shared.appState.player.activeCineInstance = null;
+        }
+        
+        shared.appState.player.activeCineInstance = new CinePlayer(container);
+
+        const { subId, subType } = ContentManager.getSubtitleConfig(episode);
+        
+        shared.appState.player.activeCineInstance.load({
+            videoId,
+            subId,
+            subType,
+            title:  episode.title || `Episodio ${newEpisodeIndex + 1}`,
+            poster: episode.thumbnail || episode.thumb || episode.image || ''
+        });
+    }
+ 
+    const seasonLower      = String(season).toLowerCase();
+    const isSpecialContent = seasonLower.includes('pelicula')  || seasonLower.includes('película') || 
+                             seasonLower.includes('especial')  || seasonLower.includes('ova')      || 
+                             seasonLower.includes('movie')     || seasonLower.includes('special');
+ 
+    const episodeNumber = episode.episodeNumber || newEpisodeIndex + 1;
+ 
+    const subTitleEl  = shared.DOM.seriesPlayerModal.querySelector('#subTitle');
+    const titleEl     = shared.DOM.seriesPlayerModal.querySelector(`#cinema-title-${seriesId}`);
+    const infoDescEl  = shared.DOM.seriesPlayerModal.querySelector(`#episode-desc-${seriesId}`);
+ 
+    const episodeTitleText = episode.title || `Episodio ${episodeNumber}`;
+    
+    const postersDataEp = shared.appState.content.seasonPosters[seriesId]?.[season] || {};
+    const customLabelEp = postersDataEp.etiqueta || '';
+    
+    const subTitleText = isSpecialContent 
+        ? 'Especial / Película' 
+        : (customLabelEp ? `${customLabelEp} | Ep ${episodeNumber}` : `Temporada ${String(season).replace('T', '')} | Ep ${episodeNumber}`);
+ 
+    if (subTitleEl) subTitleEl.textContent = subTitleText;
+    if (titleEl)    titleEl.textContent    = episodeTitleText;
+    if (infoDescEl) infoDescEl.innerHTML   = `<strong>Sinopsis:</strong><br><br>${episode.description || episode.synopsis || episode.desc || 'No hay descripción disponible para este episodio.'}`;
+
+    const titleDesktopEl    = shared.DOM.seriesPlayerModal.querySelector(`#cinema-title-desktop-${seriesId}`);
+    const subTitleDesktopEl = shared.DOM.seriesPlayerModal.querySelector('#subTitleDesktop');
+    const descDesktopEl     = shared.DOM.seriesPlayerModal.querySelector(`#episode-desc-desktop-${seriesId}`);
+    
+    if (titleDesktopEl)    titleDesktopEl.textContent    = episodeTitleText;
+    if (subTitleDesktopEl) subTitleDesktopEl.textContent = subTitleText;
+    if (descDesktopEl)     descDesktopEl.innerHTML       = episode.description || episode.synopsis || episode.desc || 'No hay descripción disponible para este episodio.';
+
+    const toggleArrowDesk    = shared.DOM.seriesPlayerModal.querySelector('#toggleArrowDesktop');
+    const synopsisContentDesk = shared.DOM.seriesPlayerModal.querySelector('#synopsisContentDesktop');
+    if (toggleArrowDesk)     toggleArrowDesk.classList.remove('expanded');
+    if (synopsisContentDesk) synopsisContentDesk.classList.remove('expanded');
+ 
+    const langWrapper = shared.DOM.seriesPlayerModal.querySelector('.cc-custom-lang-wrapper');
+    if (langWrapper) {
+        const triggerSpan = langWrapper.querySelector('.cc-lang-trigger span');
+        const options     = langWrapper.querySelectorAll('.cc-lang-option');
+        
+        options.forEach(opt => {
+            if (opt.dataset.lang === lang) {
+                opt.style.background = '#e50914';
+                opt.style.color      = '#fff';
+                opt.classList.add('active');
+                if (triggerSpan) triggerSpan.textContent = opt.textContent.trim();
+            } else {
+                opt.style.background = 'transparent';
+                opt.style.color      = '#aaa';
+                opt.classList.remove('active');
+            }
+        });
+    }
+ 
+    const scrollAreaEp = shared.DOM.seriesPlayerModal.querySelector('#scrollArea');
+    if (scrollAreaEp && window.innerWidth <= 768) {
+        scrollAreaEp.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+}
+
+function navigateEpisode(seriesId, direction) {
+    commitAndClearPendingSave();
+    const { season, episodeIndex } = shared.appState.player.state[seriesId];
+    const newIndex       = episodeIndex + direction;
+    const seasonEpisodes = shared.appState.content.seriesEpisodes[seriesId][season];
+    if (newIndex >= 0 && newIndex < seasonEpisodes.length) {
+        openEpisode(seriesId, season, newIndex);
+    }
+}
+
+function updateNavButtons(seriesId, season, episodeIndex) {
+    const totalEpisodes = shared.appState.content.seriesEpisodes[seriesId][season].length;
+    const prevBtn = shared.DOM.seriesPlayerModal.querySelector(`#prev-btn-${seriesId}`);
+    const nextBtn = shared.DOM.seriesPlayerModal.querySelector(`#next-btn-${seriesId}`);
+    
+    if (prevBtn) prevBtn.disabled = (episodeIndex === 0);
+    if (nextBtn) nextBtn.disabled = (episodeIndex === totalEpisodes - 1);
+}
+
+function changeLanguage(seriesId, lang) {
+    shared.appState.player.state[seriesId].lang = lang;
+    
+    try {
+        let prefs = JSON.parse(localStorage.getItem('seriesLangPrefs')) || {};
+        prefs[seriesId] = lang;
+        localStorage.setItem('seriesLangPrefs', JSON.stringify(prefs));
+    } catch(e) { console.warn("No se pudo guardar el idioma"); }
+
+    const { season, episodeIndex } = shared.appState.player.state[seriesId];
+    openEpisode(seriesId, season, episodeIndex);
+}
+
+// 6. REPRODUCTOR DE PELÍCULAS
+export function openPlayerModal(movieId, movieTitle) {
+    try {
+        shared.closeAllModals();
+        const movieData = findContentData(movieId);
+
+        if (!movieData || (movieData.estado && movieData.estado.toLowerCase() === 'vetada')) {
+            shared.ErrorHandler.show(shared.ErrorHandler.types.CONTENT, 'Película no disponible.');
+            return;
+        }
+
+        shared.DOM.cinemaModal.classList.add('show');
+        document.body.classList.add('modal-open');
+
+        const tracks = getLangTracks(movieData);
+        if (tracks.length > 0) {
+            loadMovieInPlayer(tracks[0].id, movieId, movieData);
+        }
+
+        setupMovieControls(movieId, movieData);
+    } catch (e) {
+        logError(e, 'Player: Open Modal');
+    }
+}
+
+function loadMovieInPlayer(videoId, movieId, movieData) {
+    const screenDiv = shared.DOM.cinemaModal.querySelector('.screen') || shared.DOM.cinemaModal.querySelector('.video-container');
+    if (!screenDiv) return;
+
+    const iframe = screenDiv.querySelector('iframe');
+    if (iframe) iframe.remove();
+    
+    let container = screenDiv.querySelector('.artplayer-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.className        = 'artplayer-container';
+        container.style.width      = '100%';
+        container.style.height     = '100%';
+        container.style.background = '#000';
+        screenDiv.appendChild(container);
+    }
+
+    if (shared.appState.player.activeCineInstance) {
+        shared.appState.player.activeCineInstance.destroy();
+    }
+    
+    shared.appState.player.activeCineInstance = new CinePlayer(container);
+
+    const { subId, subType } = ContentManager.getSubtitleConfig(movieData);
+
+    shared.appState.player.activeCineInstance.load({
+        videoId,
+        subId,
+        subType,
+        title:  movieData.title  || '',
+        poster: movieData.poster || movieData.image || ''
+    });
+}
+
+function setupMovieControls(movieId, movieData) {
+    const cinemaControls = shared.DOM.cinemaModal.querySelector('.cinema-controls');
+    if (!cinemaControls) return;
+    
+    let controlsHTML = '';
+    const user = shared.auth.currentUser;
+    
+    if (user) {
+        const isInList    = shared.appState.user.watchlist.has(movieId);
+        const iconClass   = isInList ? 'fa-check' : 'fa-plus';
+        const buttonClass = isInList ? 'btn-watchlist in-list' : 'btn-watchlist';
+        controlsHTML += `
+            <button class="${buttonClass}" data-content-id="${movieId}">
+                <i class="fas ${iconClass}"></i> 
+                ${isInList ? 'En Mi Lista' : 'Agregar a Mi Lista'}
+            </button>
+        `;
+    }
+    
+    controlsHTML += `
+        <button class="btn-review" data-content-id="${movieId}" data-type="movie">
+            <i class="fas fa-star"></i> 
+            Escribir Reseña
+        </button>
+    `;
+    
+    cinemaControls.innerHTML = controlsHTML;
+    
+    const reviewBtn = cinemaControls.querySelector('.btn-review');
+    if (reviewBtn) {
+        reviewBtn.addEventListener('click', () => {
+            if (typeof window.openSmartReviewModal === 'function') {
+                window.openSmartReviewModal(movieId, 'movie', movieData.title);
+            } else {
+                console.error("Error: window.openSmartReviewModal no está definida en script.js");
+            }
+        });
+    }
+}
+
+export function playRandomEpisode(seriesId) {
+    const episodesData = shared.appState.content.seriesEpisodes[seriesId];
+    if (!episodesData) {
+        shared.ErrorHandler.show('content', 'No hay episodios disponibles para esta serie.');
+        return;
+    }
+
+    const allEpisodes = Object.entries(episodesData).flatMap(([seasonKey, episodes]) =>
+        episodes.map((ep, index) => ({ ...ep, season: seasonKey, index: index }))
+    );
+
+    if (allEpisodes.length === 0) {
+        shared.ErrorHandler.show('content', 'No se encontraron episodios registrados.');
+        return;
+    }
+
+    const randomEpisode = allEpisodes[Math.floor(Math.random() * allEpisodes.length)];
+    if (typeof openPlayerToEpisode === 'function') {
+        shared.closeAllModals(); 
+        openPlayerToEpisode(seriesId, randomEpisode.season, randomEpisode.index);
+    }
+}
+
+export function openSeriesPlayerDirectlyToSeason(seriesId, seasonNum) {
+    const seriesInfo = findContentData(seriesId); 
+    if (!seriesInfo) return;
+
+    shared.closeAllModals();
+    _openSeriesPlayerPage();
+    renderEpisodePlayer(seriesId, seasonNum);
+}
+
+export function openPlayerToEpisode(seriesId, seasonNum, episodeIndex) {
+    const seriesInfo = findContentData(seriesId);
+    if (!seriesInfo) return;
+    
+    shared.closeAllModals();
+    _openSeriesPlayerPage();
+    renderEpisodePlayer(seriesId, seasonNum, episodeIndex);
+}
+
+function calculateFinishTime(durationStr) {
+    if (!durationStr) return null;
+    
+    let hours = 0, minutes = 0, seconds = 0;
+    
+    durationStr = durationStr.toString().trim();
+
+    if (durationStr.includes(':')) {
+        const parts = durationStr.split(':').map(Number);
+        if      (parts.length === 3) { [hours, minutes, seconds] = parts; }
+        else if (parts.length === 2) { if (parts[0] > 7) { [minutes, seconds] = parts; } else { [hours, minutes] = parts; } }
+    } else {
+        const hMatch = durationStr.match(/(\d+)\s*h/);
+        const mMatch = durationStr.match(/(\d+)\s*m/);
+        if (hMatch) hours   = parseInt(hMatch[1]);
+        if (mMatch) minutes = parseInt(mMatch[1]);
+        if (!hMatch && !mMatch && durationStr.includes('min')) {
+            const minOnly = parseInt(durationStr);
+            if (!isNaN(minOnly)) minutes = minOnly;
+        }
+    }
+
+    const now        = new Date();
+    const durationMs = (hours * 3600000) + (minutes * 60000) + (seconds * 1000);
+    const endTime    = new Date(now.getTime() + durationMs);
+
+    return endTime.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+}
