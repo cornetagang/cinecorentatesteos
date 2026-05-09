@@ -42,99 +42,58 @@ let _assPluginLoadPromise = null;
 //   → Se incluye el sustituto libre más compatible visualmente.
 //   → Para fuentes propietarias exactas, pasa el Drive ID en tu data
 //     como fontIds: ['1Abc...'] y el Worker las servirá automáticamente.
-// Cada paquete @expo-google-fonts es independiente por familia tipográfica.
-// NO existe un paquete "all-in-one" — cada fuente requiere su propia URL base.
+const _EGF = "https://cdn.jsdelivr.net/npm/@expo-google-fonts/inter@0.4.2/";
 const ANIME_FONT_MAP = {
   // ── Sans-serif genéricas ──────────────────────────────────────────────
-  "open sans":
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/open-sans/400Regular/OpenSans_400Regular.ttf",
-  roboto:
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/roboto/400Regular/Roboto_400Regular.ttf",
-  montserrat:
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/montserrat/400Regular/Montserrat_400Regular.ttf",
-  lato: "https://cdn.jsdelivr.net/npm/@expo-google-fonts/lato/400Regular/Lato_400Regular.ttf",
-  "noto sans":
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/noto-sans/400Regular/NotoSans_400Regular.ttf",
-  "source sans pro":
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/source-sans-pro/400Regular/SourceSansPro_400Regular.ttf",
-  ubuntu:
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/ubuntu/400Regular/Ubuntu_400Regular.ttf",
-  nunito:
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/nunito/400Regular/Nunito_400Regular.ttf",
-  inter:
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/inter/400Regular/Inter_400Regular.ttf",
-  oswald:
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/oswald/400Regular/Oswald_400Regular.ttf",
-  raleway:
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/raleway/400Regular/Raleway_400Regular.ttf",
-  cabin:
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/cabin/400Regular/Cabin_400Regular.ttf",
-  "exo 2":
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/exo-2/400Regular/Exo2_400Regular.ttf",
-  rajdhani:
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/rajdhani/400Regular/Rajdhani_400Regular.ttf",
-  kanit:
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/kanit/400Regular/Kanit_400Regular.ttf",
+  "open sans": _EGF + "open-sans/400Regular/OpenSans_400Regular.ttf",
+  roboto: _EGF + "roboto/400Regular/Roboto_400Regular.ttf",
+  montserrat: _EGF + "montserrat/400Regular/Montserrat_400Regular.ttf",
+  lato: _EGF + "lato/400Regular/Lato_400Regular.ttf",
+  "noto sans": _EGF + "noto-sans/400Regular/NotoSans_400Regular.ttf",
+  "source sans pro": _EGF + "source-sans-pro/SourceSansPro_400Regular.ttf",
+  ubuntu: _EGF + "ubuntu/400Regular/Ubuntu_400Regular.ttf",
+  nunito: _EGF + "nunito/400Regular/Nunito_400Regular.ttf",
+  inter: _EGF + "inter/400Regular/Inter_400Regular.ttf",
+  oswald: _EGF + "oswald/400Regular/Oswald_400Regular.ttf",
+  raleway: _EGF + "raleway/400Regular/Raleway_400Regular.ttf",
+  cabin: _EGF + "cabin/400Regular/Cabin_400Regular.ttf",
+  "exo 2": _EGF + "exo-2/400Regular/Exo2_400Regular.ttf",
+  rajdhani: _EGF + "rajdhani/400Regular/Rajdhani_400Regular.ttf",
+  kanit: _EGF + "kanit/400Regular/Kanit_400Regular.ttf",
   "yanone kaffeesatz":
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/yanone-kaffeesatz/400Regular/YanoneKaffeesatz_400Regular.ttf",
+    _EGF + "yanone-kaffeesatz/400Regular/YanoneKaffeesatz_400Regular.ttf",
 
   // ── Sustitutos para fuentes comerciales comunes en fansubs ───────────
-  gotham:
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/montserrat/400Regular/Montserrat_400Regular.ttf",
-  "gotham bold":
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/montserrat/700Bold/Montserrat_700Bold.ttf",
-  "gotham narrow":
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/montserrat/400Regular/Montserrat_400Regular.ttf",
-  futura:
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/nunito-sans/400Regular/NunitoSans_400Regular.ttf",
-  "futura pt":
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/nunito-sans/400Regular/NunitoSans_400Regular.ttf",
-  "gill sans":
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/lato/400Regular/Lato_400Regular.ttf",
-  "myriad pro":
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/source-sans-pro/400Regular/SourceSansPro_400Regular.ttf",
-  "helvetica neue":
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/inter/400Regular/Inter_400Regular.ttf",
-  helvetica:
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/inter/400Regular/Inter_400Regular.ttf",
-  "franklin gothic":
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/oswald/400Regular/Oswald_400Regular.ttf",
+  gotham: _EGF + "montserrat/400Regular/Montserrat_400Regular.ttf",
+  "gotham bold": _EGF + "montserrat/700Bold/Montserrat_700Bold.ttf",
+  "gotham narrow": _EGF + "montserrat/400Regular/Montserrat_400Regular.ttf",
+  futura: _EGF + "nunito-sans/400Regular/NunitoSans_400Regular.ttf",
+  "futura pt": _EGF + "nunito-sans/400Regular/NunitoSans_400Regular.ttf",
+  "gill sans": _EGF + "lato/400Regular/Lato_400Regular.ttf",
+  "myriad pro": _EGF + "source-sans-pro/SourceSansPro_400Regular.ttf",
+  "helvetica neue": _EGF + "inter/400Regular/Inter_400Regular.ttf",
+  helvetica: _EGF + "inter/400Regular/Inter_400Regular.ttf",
+  "franklin gothic": _EGF + "oswald/400Regular/Oswald_400Regular.ttf",
 
   // ── Sustitutos para fuentes CLÁSICAS de Fansubs de Anime y Manga ─────
-  "anime ace":
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/comic-neue/700Bold/ComicNeue_700Bold.ttf",
-  "anime ace bb":
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/comic-neue/700Bold/ComicNeue_700Bold.ttf",
-  "wild words":
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/bangers/400Regular/Bangers_400Regular.ttf",
-  "cc wild words":
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/bangers/400Regular/Bangers_400Regular.ttf",
-  "action man":
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/bangers/400Regular/Bangers_400Regular.ttf",
-  "comic book":
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/comic-neue/400Regular/ComicNeue_400Regular.ttf",
+  "anime ace": _EGF + "comic-neue/700Bold/ComicNeue_700Bold.ttf",
+  "anime ace bb": _EGF + "comic-neue/700Bold/ComicNeue_700Bold.ttf",
+  "wild words": _EGF + "bangers/400Regular/Bangers_400Regular.ttf",
+  "cc wild words": _EGF + "bangers/400Regular/Bangers_400Regular.ttf",
+  "action man": _EGF + "bangers/400Regular/Bangers_400Regular.ttf",
+  "comic book": _EGF + "comic-neue/400Regular/ComicNeue_400Regular.ttf",
 
-  // ── Fuentes de sistema (equivalentes libres en TTF) ───────────────────
-  arial:
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/arimo/400Regular/Arimo_400Regular.ttf",
-  "arial bold":
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/arimo/700Bold/Arimo_700Bold.ttf",
-  "times new roman":
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/tinos/400Regular/Tinos_400Regular.ttf",
-  "courier new":
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/cousine/400Regular/Cousine_400Regular.ttf",
-  "trebuchet ms":
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/fira-sans/400Regular/FiraSans_400Regular.ttf",
-  verdana:
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/pt-sans/400Regular/PTSans_400Regular.ttf",
-  tahoma:
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/noto-sans/400Regular/NotoSans_400Regular.ttf",
-  georgia:
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/lora/400Regular/Lora_400Regular.ttf",
-  impact:
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/oswald/700Bold/Oswald_700Bold.ttf",
-  "comic sans ms":
-    "https://cdn.jsdelivr.net/npm/@expo-google-fonts/comic-neue/400Regular/ComicNeue_400Regular.ttf",
+  // ── Fuentes de sistema (Mapeadas a equivalentes libres en TTF) ────────
+  arial: _EGF + "arimo/400Regular/Arimo_400Regular.ttf",
+  "arial bold": _EGF + "arimo/700Bold/Arimo_700Bold.ttf",
+  "times new roman": _EGF + "tinos/400Regular/Tinos_400Regular.ttf",
+  "courier new": _EGF + "cousine/400Regular/Cousine_400Regular.ttf",
+  "trebuchet ms": _EGF + "fira-sans/400Regular/FiraSans_400Regular.ttf",
+  verdana: _EGF + "pt-sans/400Regular/PTSans_400Regular.ttf",
+  tahoma: _EGF + "noto-sans/400Regular/NotoSans_400Regular.ttf",
+  georgia: _EGF + "lora/400Regular/Lora_400Regular.ttf",
+  impact: _EGF + "oswald/700Bold/Oswald_700Bold.ttf",
+  "comic sans ms": _EGF + "comic-neue/400Regular/ComicNeue_400Regular.ttf",
 };
 
 let shared;
@@ -496,18 +455,26 @@ class CinePlayer {
       const EAGER_FALLBACK =
         "https://cdn.jsdelivr.net/npm/@expo-google-fonts/arimo/400Regular/Arimo_400Regular.ttf";
 
+      // "arimo" como fuente de emergencia: nombre que JASSUB usará como fallbackFont.
+      // fallbackFont espera un NOMBRE de fuente (no una URL).
+      // La URL se registra en availableFonts bajo esa misma clave.
+      const FALLBACK_FONT_NAME = "arimo";
+      const availableFontsWithFallback = {
+        ...availableFonts,
+        [FALLBACK_FONT_NAME]: EAGER_FALLBACK,
+      };
+
       const pluginInit = ArtplayerPluginAss({
         subUrl: blobUrl,
 
-        // ✅ fonts[]: TTF eagerly preloaded → al menos 1 fuente en VFS desde frame 0
+        // fonts[]: descarga eager — en VFS antes del frame 0
         fonts: [EAGER_FALLBACK, ...fontUrls],
 
-        // ✅ availableFonts: on-demand aliasing (clave lowercase, correcta)
-        availableFonts,
+        // availableFonts: lazy fetch por nombre (claves en minúscula)
+        availableFonts: availableFontsWithFallback,
 
-        // ✅ fallbackFont SÍ es opción válida de artplayer-plugin-jassub,
-        //    pero NECESITA ser TTF, no woff2 — el bug original era el formato, no el nombre
-        fallbackFont: EAGER_FALLBACK,
+        // fallbackFont: NOMBRE de fuente (no URL) — debe existir en availableFonts
+        fallbackFont: FALLBACK_FONT_NAME,
 
         workerUrl: "/cinecorentatesteos/assests/js/jassub-worker.js",
         wasmUrl: "/cinecorentatesteos/assests/js/jassub-worker.wasm",
@@ -520,6 +487,15 @@ class CinePlayer {
 
       this._assPlugin = pluginInit(this.art);
       this.container._assPluginRef = this._assPlugin;
+
+      // Esperar que JASSUB tenga todas las fuentes en el VFS de libass
+      // antes de permitir el primer frame. Sin este await, libass cachea
+      // "fuente no encontrada" en el frame 0 y nunca reintenta → canvas vacío.
+      const wasPlaying = !this.art.video.paused;
+      if (wasPlaying) this.art.video.pause();
+      await this._assPlugin.instance.ready;
+      if (wasPlaying) this.art.video.play();
+
       console.log("[CinePlayer] Plugin ass montado:", this._assPlugin);
     } catch (err) {
       console.error(
