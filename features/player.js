@@ -29,62 +29,69 @@ let _assPluginLoadPromise  = null;
 
 // ─── Mapa de fuentes comunes en fansubs de anime ──────────────
 // Clave: nombre en minúscula tal como aparece en [V4+ Styles] del .ass
-// Valor: URL pública de la fuente (.woff2 preferido por tamaño)
+// Valor: URL pública de la fuente en formato TTF (requerido por libass/JASSUB)
+//
+// IMPORTANTE: libass dentro del worker WASM sólo puede leer TTF/OTF.
+// Los formatos WOFF y WOFF2 se descargan correctamente pero libass no puede
+// parsearlos → VFS queda vacío → "failed to find any fallback".
+// Usamos @expo-google-fonts en jsDelivr porque son el único CDN npm
+// que publica TTF directamente accesibles por URL.
 //
 // Estrategia para fuentes comerciales (Gotham, Futura, etc.):
 //   → Se incluye el sustituto libre más compatible visualmente.
 //   → Para fuentes propietarias exactas, pasa el Drive ID en tu data
 //     como fontIds: ['1Abc...'] y el Worker las servirá automáticamente.
+const _EGF = 'https://cdn.jsdelivr.net/npm/@expo-google-fonts/';
 const ANIME_FONT_MAP = {
-    // ── Sans-serif genéricas (100% Permanentes en NPM) ──
-    'open sans':         'https://cdn.jsdelivr.net/npm/@fontsource/open-sans/files/open-sans-latin-400-normal.woff2',
-    'roboto':            'https://cdn.jsdelivr.net/npm/@fontsource/roboto/files/roboto-latin-400-normal.woff2',
-    'montserrat':        'https://cdn.jsdelivr.net/npm/@fontsource/montserrat/files/montserrat-latin-400-normal.woff2',
-    'lato':              'https://cdn.jsdelivr.net/npm/@fontsource/lato/files/lato-latin-400-normal.woff2',
-    'noto sans':         'https://cdn.jsdelivr.net/npm/@fontsource/noto-sans/files/noto-sans-latin-400-normal.woff2',
-    'source sans pro':   'https://cdn.jsdelivr.net/npm/@fontsource/source-sans-pro/files/source-sans-pro-latin-400-normal.woff2',
-    'ubuntu':            'https://cdn.jsdelivr.net/npm/@fontsource/ubuntu/files/ubuntu-latin-400-normal.woff2',
-    'nunito':            'https://cdn.jsdelivr.net/npm/@fontsource/nunito/files/nunito-latin-400-normal.woff2',
-    'inter':             'https://cdn.jsdelivr.net/npm/@fontsource/inter/files/inter-latin-400-normal.woff2',
-    'oswald':            'https://cdn.jsdelivr.net/npm/@fontsource/oswald/files/oswald-latin-400-normal.woff2',
-    'raleway':           'https://cdn.jsdelivr.net/npm/@fontsource/raleway/files/raleway-latin-400-normal.woff2',
-    'cabin':             'https://cdn.jsdelivr.net/npm/@fontsource/cabin/files/cabin-latin-400-normal.woff2',
-    'exo 2':             'https://cdn.jsdelivr.net/npm/@fontsource/exo-2/files/exo-2-latin-400-normal.woff2',
-    'rajdhani':          'https://cdn.jsdelivr.net/npm/@fontsource/rajdhani/files/rajdhani-latin-400-normal.woff2',
-    'kanit':             'https://cdn.jsdelivr.net/npm/@fontsource/kanit/files/kanit-latin-400-normal.woff2',
-    'yanone kaffeesatz': 'https://cdn.jsdelivr.net/npm/@fontsource/yanone-kaffeesatz/files/yanone-kaffeesatz-latin-400-normal.woff2',
+    // ── Sans-serif genéricas ──────────────────────────────────────────────
+    'open sans':         _EGF + 'open-sans/400Regular/OpenSans_400Regular.ttf',
+    'roboto':            _EGF + 'roboto/400Regular/Roboto_400Regular.ttf',
+    'montserrat':        _EGF + 'montserrat/400Regular/Montserrat_400Regular.ttf',
+    'lato':              _EGF + 'lato/400Regular/Lato_400Regular.ttf',
+    'noto sans':         _EGF + 'noto-sans/400Regular/NotoSans_400Regular.ttf',
+    'source sans pro':   _EGF + 'source-sans-pro/SourceSansPro_400Regular.ttf',
+    'ubuntu':            _EGF + 'ubuntu/400Regular/Ubuntu_400Regular.ttf',
+    'nunito':            _EGF + 'nunito/400Regular/Nunito_400Regular.ttf',
+    'inter':             _EGF + 'inter/400Regular/Inter_400Regular.ttf',
+    'oswald':            _EGF + 'oswald/400Regular/Oswald_400Regular.ttf',
+    'raleway':           _EGF + 'raleway/400Regular/Raleway_400Regular.ttf',
+    'cabin':             _EGF + 'cabin/400Regular/Cabin_400Regular.ttf',
+    'exo 2':             _EGF + 'exo-2/400Regular/Exo2_400Regular.ttf',
+    'rajdhani':          _EGF + 'rajdhani/400Regular/Rajdhani_400Regular.ttf',
+    'kanit':             _EGF + 'kanit/400Regular/Kanit_400Regular.ttf',
+    'yanone kaffeesatz': _EGF + 'yanone-kaffeesatz/400Regular/YanoneKaffeesatz_400Regular.ttf',
 
-    // ── Sustitutos para fuentes comerciales comunes en fansubs ──
-    'gotham':            'https://cdn.jsdelivr.net/npm/@fontsource/montserrat/files/montserrat-latin-400-normal.woff2',
-    'gotham bold':       'https://cdn.jsdelivr.net/npm/@fontsource/montserrat/files/montserrat-latin-700-normal.woff2',
-    'gotham narrow':     'https://cdn.jsdelivr.net/npm/@fontsource/montserrat/files/montserrat-latin-400-normal.woff2',
-    'futura':            'https://cdn.jsdelivr.net/npm/@fontsource/nunito-sans/files/nunito-sans-latin-400-normal.woff2',
-    'futura pt':         'https://cdn.jsdelivr.net/npm/@fontsource/nunito-sans/files/nunito-sans-latin-400-normal.woff2',
-    'gill sans':         'https://cdn.jsdelivr.net/npm/@fontsource/lato/files/lato-latin-400-normal.woff2',
-    'myriad pro':        'https://cdn.jsdelivr.net/npm/@fontsource/source-sans-pro/files/source-sans-pro-latin-400-normal.woff2',
-    'helvetica neue':    'https://cdn.jsdelivr.net/npm/@fontsource/inter/files/inter-latin-400-normal.woff2',
-    'helvetica':         'https://cdn.jsdelivr.net/npm/@fontsource/inter/files/inter-latin-400-normal.woff2',
-    'franklin gothic':   'https://cdn.jsdelivr.net/npm/@fontsource/oswald/files/oswald-latin-400-normal.woff2',
+    // ── Sustitutos para fuentes comerciales comunes en fansubs ───────────
+    'gotham':            _EGF + 'montserrat/400Regular/Montserrat_400Regular.ttf',
+    'gotham bold':       _EGF + 'montserrat/700Bold/Montserrat_700Bold.ttf',
+    'gotham narrow':     _EGF + 'montserrat/400Regular/Montserrat_400Regular.ttf',
+    'futura':            _EGF + 'nunito-sans/400Regular/NunitoSans_400Regular.ttf',
+    'futura pt':         _EGF + 'nunito-sans/400Regular/NunitoSans_400Regular.ttf',
+    'gill sans':         _EGF + 'lato/400Regular/Lato_400Regular.ttf',
+    'myriad pro':        _EGF + 'source-sans-pro/SourceSansPro_400Regular.ttf',
+    'helvetica neue':    _EGF + 'inter/400Regular/Inter_400Regular.ttf',
+    'helvetica':         _EGF + 'inter/400Regular/Inter_400Regular.ttf',
+    'franklin gothic':   _EGF + 'oswald/400Regular/Oswald_400Regular.ttf',
 
-    // ── Sustitutos para fuentes CLÁSICAS de Fansubs de Anime y Manga ──
-    'anime ace':         'https://cdn.jsdelivr.net/npm/@fontsource/comic-neue/files/comic-neue-latin-700-normal.woff2',
-    'anime ace bb':      'https://cdn.jsdelivr.net/npm/@fontsource/comic-neue/files/comic-neue-latin-700-normal.woff2',
-    'wild words':        'https://cdn.jsdelivr.net/npm/@fontsource/bangers/files/bangers-latin-400-normal.woff2',
-    'cc wild words':     'https://cdn.jsdelivr.net/npm/@fontsource/bangers/files/bangers-latin-400-normal.woff2',
-    'action man':        'https://cdn.jsdelivr.net/npm/@fontsource/bangers/files/bangers-latin-400-normal.woff2',
-    'comic book':        'https://cdn.jsdelivr.net/npm/@fontsource/comic-neue/files/comic-neue-latin-400-normal.woff2',
+    // ── Sustitutos para fuentes CLÁSICAS de Fansubs de Anime y Manga ─────
+    'anime ace':         _EGF + 'comic-neue/700Bold/ComicNeue_700Bold.ttf',
+    'anime ace bb':      _EGF + 'comic-neue/700Bold/ComicNeue_700Bold.ttf',
+    'wild words':        _EGF + 'bangers/400Regular/Bangers_400Regular.ttf',
+    'cc wild words':     _EGF + 'bangers/400Regular/Bangers_400Regular.ttf',
+    'action man':        _EGF + 'bangers/400Regular/Bangers_400Regular.ttf',
+    'comic book':        _EGF + 'comic-neue/400Regular/ComicNeue_400Regular.ttf',
 
-    // ── Fuentes de sistema (Mapeadas a Clones de Fontsource NPM) ──
-    'arial':             'https://cdn.jsdelivr.net/npm/@fontsource/arimo/files/arimo-latin-400-normal.woff2',
-    'arial bold':        'https://cdn.jsdelivr.net/npm/@fontsource/arimo/files/arimo-latin-700-normal.woff2',
-    'times new roman':   'https://cdn.jsdelivr.net/npm/@fontsource/tinos/files/tinos-latin-400-normal.woff2',
-    'courier new':       'https://cdn.jsdelivr.net/npm/@fontsource/cousine/files/cousine-latin-400-normal.woff2',
-    'trebuchet ms':      'https://cdn.jsdelivr.net/npm/@fontsource/fira-sans/files/fira-sans-latin-400-normal.woff2',
-    'verdana':           'https://cdn.jsdelivr.net/npm/@fontsource/pt-sans/files/pt-sans-latin-400-normal.woff2',
-    'tahoma':            'https://cdn.jsdelivr.net/npm/@fontsource/noto-sans/files/noto-sans-latin-400-normal.woff2',
-    'georgia':           'https://cdn.jsdelivr.net/npm/@fontsource/lora/files/lora-latin-400-normal.woff2',
-    'impact':            'https://cdn.jsdelivr.net/npm/@fontsource/oswald/files/oswald-latin-700-normal.woff2',
-    'comic sans ms':     'https://cdn.jsdelivr.net/npm/@fontsource/comic-neue/files/comic-neue-latin-400-normal.woff2'
+    // ── Fuentes de sistema (Mapeadas a equivalentes libres en TTF) ────────
+    'arial':             _EGF + 'arimo/400Regular/Arimo_400Regular.ttf',
+    'arial bold':        _EGF + 'arimo/700Bold/Arimo_700Bold.ttf',
+    'times new roman':   _EGF + 'tinos/400Regular/Tinos_400Regular.ttf',
+    'courier new':       _EGF + 'cousine/400Regular/Cousine_400Regular.ttf',
+    'trebuchet ms':      _EGF + 'fira-sans/400Regular/FiraSans_400Regular.ttf',
+    'verdana':           _EGF + 'pt-sans/400Regular/PTSans_400Regular.ttf',
+    'tahoma':            _EGF + 'noto-sans/400Regular/NotoSans_400Regular.ttf',
+    'georgia':           _EGF + 'lora/400Regular/Lora_400Regular.ttf',
+    'impact':            _EGF + 'oswald/700Bold/Oswald_700Bold.ttf',
+    'comic sans ms':     _EGF + 'comic-neue/400Regular/ComicNeue_400Regular.ttf',
 };
 
 let shared; 
@@ -413,8 +420,8 @@ art.on("error", (err) => {
     );
 
     try {
-    // Arimo como fuente base: siempre disponible antes del primer frame
-    const EAGER_FALLBACK = 'https://cdn.jsdelivr.net/npm/@fontsource/arimo/files/arimo-latin-400-normal.woff2';
+    // Arimo como fuente base: TTF requerido — libass no puede leer woff2
+    const EAGER_FALLBACK = 'https://cdn.jsdelivr.net/npm/@expo-google-fonts/arimo/400Regular/Arimo_400Regular.ttf';
 
     const pluginInit = ArtplayerPluginAss({
         subUrl: blobUrl,
@@ -635,7 +642,7 @@ art.on("error", (err) => {
         // JASSUB normaliza el nombre pedido por el .ass a lowercase antes de buscar
         // en este objeto. Si la clave es "Trebuchet MS" y JASSUB busca "trebuchet ms",
         // no hay match → "failed to find any fallback".
-        // Los valores deben ser strings de URL (JASSUB no acepta arrays).
+        // Los valores deben ser strings URL. libass/JASSUB no acepta arrays.
         for (const [lower, original] of fontNames) {
             const url = ANIME_FONT_MAP[lower];
             // url === undefined → fuente desconocida, no bloquear la carga
@@ -643,7 +650,7 @@ art.on("error", (err) => {
             // url es string URL → agregarla
             if (url && url.length > 0) {
                 // ✅ Clave en minúscula (lower) para que JASSUB la encuentre
-                // ✅ Valor como string (JASSUB espera URL string, no array)
+                // ✅ Valor como string TTF — JASSUB espera URL string, no array
                 availableFonts[lower] = url;
                 // fontUrls se mantiene para preloading eager opcional
                 fontUrls.push(url);
@@ -663,7 +670,7 @@ art.on("error", (err) => {
             }
         }
 
-        const FALLBACK_URL = 'https://cdn.jsdelivr.net/npm/@fontsource/arimo/files/arimo-latin-400-normal.woff2';
+        const FALLBACK_URL = 'https://cdn.jsdelivr.net/npm/@expo-google-fonts/arimo/400Regular/Arimo_400Regular.ttf';
         for (const genericName of ['arial', 'sans-serif', 'helvetica', 'default']) {
             if (!availableFonts[genericName]) {
                 availableFonts[genericName] = FALLBACK_URL;
