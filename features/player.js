@@ -414,7 +414,7 @@ art.on("error", (err) => {
 
     try {
     // Arimo como fuente base: siempre disponible antes del primer frame
-    const EAGER_FALLBACK = 'https://cdn.jsdelivr.net/gh/google/fonts@main/apache/arimo/Arimo-Regular.ttf';
+    const EAGER_FALLBACK = 'https://cdn.jsdelivr.net/npm/@fontsource/arimo/files/arimo-latin-400-normal.woff2';
 
     const pluginInit = ArtplayerPluginAss({
         subUrl: blobUrl,
