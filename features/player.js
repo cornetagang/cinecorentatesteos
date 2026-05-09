@@ -635,7 +635,7 @@ art.on("error", (err) => {
         // JASSUB normaliza el nombre pedido por el .ass a lowercase antes de buscar
         // en este objeto. Si la clave es "Trebuchet MS" y JASSUB busca "trebuchet ms",
         // no hay match → "failed to find any fallback".
-        // Los valores deben ser arrays de URLs (string[] según el tipado de JASSUB).
+        // Los valores deben ser strings de URL (JASSUB no acepta arrays).
         for (const [lower, original] of fontNames) {
             const url = ANIME_FONT_MAP[lower];
             // url === undefined → fuente desconocida, no bloquear la carga
@@ -643,8 +643,8 @@ art.on("error", (err) => {
             // url es string URL → agregarla
             if (url && url.length > 0) {
                 // ✅ Clave en minúscula (lower) para que JASSUB la encuentre
-                // ✅ Valor como array [url] según el contrato de JASSUB
-                availableFonts[lower] = [url];
+                // ✅ Valor como string (JASSUB espera URL string, no array)
+                availableFonts[lower] = url;
                 // fontUrls se mantiene para preloading eager opcional
                 fontUrls.push(url);
             }
@@ -663,7 +663,7 @@ art.on("error", (err) => {
             }
         }
 
-        const FALLBACK_URL = ['https://cdn.jsdelivr.net/npm/@fontsource/arimo/files/arimo-latin-400-normal.woff2'];
+        const FALLBACK_URL = 'https://cdn.jsdelivr.net/npm/@fontsource/arimo/files/arimo-latin-400-normal.woff2';
         for (const genericName of ['arial', 'sans-serif', 'helvetica', 'default']) {
             if (!availableFonts[genericName]) {
                 availableFonts[genericName] = FALLBACK_URL;
