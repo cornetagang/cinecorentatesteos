@@ -85,7 +85,7 @@ let reportsModule = null;
 
 async function getPlayerModule() {
   if (playerModule) return playerModule;
-  const module = await import("./features/player.js?v=20");
+  const module = await import("./features/player.js?v=21");
   module.initPlayer({
     appState,
     DOM,
