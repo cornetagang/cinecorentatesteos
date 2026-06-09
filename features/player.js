@@ -184,6 +184,17 @@ function buildErrorHTML(message = "No se pudo cargar el video.") {
 
 function destroyPrevious(container) {
   if (container._artInstance) {
+    // Flush del progreso actual antes de destruir, para no perder los últimos
+    // segundos que el timeupdate (cada 3s) aún no había guardado.
+    try {
+      const art = container._artInstance;
+      const t = art.currentTime;
+      const d = art.duration;
+      const sid = container._artStorageId;
+      if (sid && t > 5 && d > 0 && d - t >= 60) {
+        localStorage.setItem(sid, t);
+      }
+    } catch (_) {}
     // destroy(false) = no borra el nodo del DOM, solo limpia Artplayer.
     // El canvas de artplayer-plugin-ass se destruye automáticamente aquí.
     container._artInstance.destroy(false);
@@ -226,7 +237,43 @@ class CinePlayer {
     subType = null,
     title = "",
     poster = "",
+    grayscale = false,
   }) {
+    // Limpiar timers y doc-listeners de la carga anterior (evita acumulación de handlers)
+    if (this._epSetupTimer) {
+      clearTimeout(this._epSetupTimer);
+      this._epSetupTimer = null;
+    }
+    if (this._ccSetupTimer) {
+      clearTimeout(this._ccSetupTimer);
+      this._ccSetupTimer = null;
+    }
+    if (this._settingsSetupTimer) {
+      clearTimeout(this._settingsSetupTimer);
+      this._settingsSetupTimer = null;
+    }
+    if (this._epDocHandler) {
+      document.removeEventListener("click", this._epDocHandler);
+      this._epDocHandler = null;
+    }
+    if (this._ccDocHandler) {
+      document.removeEventListener("click", this._ccDocHandler);
+      this._ccDocHandler = null;
+    }
+    if (this._settingsDocHandler) {
+      document.removeEventListener("click", this._settingsDocHandler);
+      this._settingsDocHandler = null;
+    }
+    // Limpiar drawer móvil anterior
+    if (this._mobileDrawerBackdrop) {
+      this._mobileDrawerBackdrop.remove();
+      this._mobileDrawerBackdrop = null;
+    }
+    if (this._mobileDrawerEl) {
+      this._mobileDrawerEl.remove();
+      this._mobileDrawerEl = null;
+    }
+
     destroyPrevious(this.container);
     this.container.innerHTML = "";
 
@@ -261,24 +308,19 @@ class CinePlayer {
       type: "mp4",
       title,
       poster,
-      theme: "#e50914",
+      theme: "var(--accent-color)",
       volume: 1,
       autoplay: false,
-      pip: true,
       autoSize: true,
-      autoHeight: true,
       fastForward: true,
-      backdrop: true,
-      lock: true,
       autoMini: false,
-      autoPlayback: true,
+      autoPlayback: false,
       miniProgressBar: true,
       autoOrientation: true,
       screenshot: false,
-      hotkey: true,
+      hotkey: false,
       mutex: true,
       fullscreen: true,
-      fullscreenWeb: true,
       lang: navigator.language.toLocaleLowerCase() || "es",
       moreVideoAttr: {
         playsinline: true,
@@ -307,70 +349,58 @@ class CinePlayer {
       //    NO se pasa nada en artConfig.plugins aquí; el plugin se agrega
       //    dinámicamente para poder hacer detección de CORS previa.
 
-      // 🛠️ PANEL DE AJUSTES
-      setting: true,
-      settings: [
-        {
-          width: 260,
-          html: "Velocidad",
-          tooltip: "1.0x",
-          name: "playbackRate",
-          icon: '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
-          selector: [
-            { url: "0.5", html: "0.5x" },
-            { url: "0.75", html: "0.75x" },
-            { default: true, url: "1.0", html: "Normal" },
-            { url: "1.25", html: "1.25x" },
-            { url: "1.5", html: "1.5x" },
-            { url: "2.0", html: "2.0x" },
-          ],
-          onSelect: function (item) {
-            this.playbackRate = parseFloat(item.url);
-            return item.html;
-          },
-        },
-        {
-          width: 260,
-          html: "Relación de Aspecto",
-          name: "aspectRatio",
-          selector: [
-            { default: true, html: "Default", url: "default" },
-            { html: "16:9", url: "16:9" },
-            { html: "4:3", url: "4:3" },
-          ],
-          onSelect: function (item) {
-            this.aspectRatio = item.url;
-            return item.html;
-          },
-        },
-
-        // 📝 TAMAÑO DE SUBTÍTULOS — solo para ruta SRT (nativa)
-        // En ASS el tamaño viene definido en el .ass y escala con resampling
+      // 🎨 Menú click derecho personalizado
+      contextmenu: [
+        // 📝 CONTROLES DE SUBTÍTULOS (SRT) — solo si hay subs SRT activos
         ...(resolvedSubType === "srt" && subUrl
           ? [
               {
                 width: 260,
                 html: "Tamaño Subtítulos",
-                tooltip: "Mediano",
+                tooltip: "100%",
                 name: "subtitleSize",
                 icon: '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>',
                 selector: [
-                  { url: "14px", html: "Pequeño" },
-                  { url: "18px", html: "Mediano", default: true },
-                  { url: "24px", html: "Grande" },
-                  { url: "30px", html: "Extra" },
+                  { url: "14px", html: "50% (Muy Pequeño)" },
+                  { url: "16px", html: "75% (Pequeño)" },
+                  { url: "20px", html: "100% (Normal)", default: true },
+                  { url: "26px", html: "150% (Grande)" },
+                  { url: "32px", html: "200% (Extra Grande)" },
                 ],
                 onSelect: function (item) {
                   this.subtitle.style({ fontSize: item.url });
                   return item.html;
                 },
               },
+              {
+                width: 260,
+                html: "Fondo de Subtítulos",
+                tooltip: "Transparente",
+                name: "subtitleBg",
+                icon: '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>',
+                selector: [
+                  { url: "transparent", html: "Transparente", default: true },
+                  { url: "rgba(0, 0, 0, 0.5)", html: "Semi-oscuro" },
+                  {
+                    url: "rgba(0, 0, 0, 0.85)",
+                    html: "Oscuro (Estilo YouTube)",
+                  },
+                ],
+                onSelect: function (item) {
+                  const isTransparent = item.url === "transparent";
+                  this.subtitle.style({
+                    backgroundColor: item.url,
+                    padding: isTransparent ? "0px" : "4px 12px",
+                    borderRadius: isTransparent ? "0px" : "6px",
+                    textShadow: isTransparent
+                      ? "1px 1px 3px rgba(0,0,0,0.9)"
+                      : "none",
+                  });
+                  return item.html;
+                },
+              },
             ]
           : []),
-      ],
-
-      // 🎨 Menú click derecho personalizado
-      contextmenu: [
         {
           html: "Cine Corneta Player",
           click: function (contextmenu) {
@@ -395,8 +425,11 @@ class CinePlayer {
           art.subtitle.show = true;
           art.subtitle.style({
             color: "#ffffff",
-            fontSize: "18px",
+            fontSize: "20px", // ← Asegúrate de que esto sea 20px
             textShadow: "1px 1px 3px rgba(0,0,0,0.9)",
+            backgroundColor: "transparent",
+            padding: "0px",
+            borderRadius: "0px",
           });
         });
       } else {
@@ -455,9 +488,1033 @@ class CinePlayer {
       }
     });
 
+    // =======================================================
+    // 🔊 SLIDER DE VOLUMEN VERTICAL CUSTOM (solo desktop)
+    // En móvil el volumen se controla con los botones físicos del dispositivo
+    // =======================================================
+    art.on("ready", () => {
+      const volumeControl = this.container.querySelector(".art-control-volume");
+      if (!volumeControl) return;
+
+      if (window.innerWidth <= 768) {
+        // Móvil: eliminar el botón de volumen directamente del DOM
+        volumeControl.remove();
+        return;
+      }
+
+      // Desktop: agregar slider vertical custom
+      const panel = document.createElement("div");
+      panel.className = "custom-volume-panel";
+      panel.innerHTML = `<input type="range" min="0" max="1" step="0.01" value="${art.volume}">`;
+
+      volumeControl.appendChild(panel);
+      const slider = panel.querySelector("input");
+
+      panel.addEventListener("click", (e) => e.stopPropagation());
+
+      slider.addEventListener("input", (e) => {
+        art.volume = parseFloat(e.target.value);
+        if (art.volume > 0) art.muted = false;
+      });
+
+      art.on("video:volumechange", () => {
+        slider.value = art.muted ? 0 : art.volume;
+      });
+    });
+    // =======================================================
+    // ▶️ NUEVO CÓDIGO: BOTÓN DE PLAY CENTRAL GIGANTE
+    // =======================================================
+    art.layers.add({
+      name: "centerPlayBtn",
+      // Inyectamos el icono SVG de Play directamente (con un pequeño margen para que se vea centrado ópticamente)
+      html: '<svg viewBox="0 0 24 24" width="40" height="40" fill="white" style="margin-left: 5px;"><path d="M8 5v14l11-7z"/></svg>',
+      click: function () {
+        art.play(); // Al hacer clic, reproduce
+      },
+    });
+
+    // Buscamos la capa que acabamos de crear
+    const centerLayerBtn = this.container.querySelector(
+      ".art-layer-centerPlayBtn",
+    );
+
+    // Si el video se está reproduciendo, ocultamos el botón central
+    art.on("play", () => {
+      if (centerLayerBtn) centerLayerBtn.style.display = "none";
+    });
+
+    // Si el video se pausa, volvemos a mostrar el botón central
+    art.on("pause", () => {
+      if (centerLayerBtn) centerLayerBtn.style.display = "flex";
+    });
+
+    // =======================================================
+    // ⏭️ NUEVO CÓDIGO: BOTONES DE ADELANTAR / RETROCEDER
+    // =======================================================
+    art.on("ready", () => {
+      // ⟲10 / ↷10 solo en desktop — en móvil el doble tap cumple la misma función
+      if (window.innerWidth > 768) {
+        // 1. Botón de Retroceder 10s (A la izquierda del Play)
+        art.controls.add({
+          name: "backward10",
+          position: "left",
+          index: 5,
+          // Icono SVG oficial de Material Design (Replay 10)
+          html: '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M11.99 5V1l-5 5 5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6h-2c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8zm-1.1 11h-.85v-3.26l-1.01.31v-.69l1.77-.63h.09V16zm4.28-1.76c0 .32-.03.6-.1.82s-.17.42-.29.57-.28.26-.45.33-.37.1-.59.1-.41-.03-.59-.1-.33-.18-.46-.33-.23-.34-.29-.57-.1-.5-.1-.82v-1.4c0-.32.03-.6.1-.82s.17-.42.29-.57.28-.26.46-.33.37-.1.59-.1.41.03.59.1.33.18.45.33.22.34.29.57.1.5.1.82v1.4zm-1.74-1.54c-.04-.13-.11-.21-.21-.26s-.22-.08-.36-.08-.27.03-.36.08-.17.13-.21.27.06-.32.06-.58v1.66c0 .25.02.45.06.58s.11.22.21.27.22.08.36.08.27-.03.36-.08.17-.13.21-.27.06-.32.06-.58v-1.66c0-.25-.02-.45-.06-.58z"/></svg>',
+          tooltip: "Retroceder 10s",
+          click: function () {
+            // Resta 10 segundos asegurando que no baje de 0
+            art.currentTime = Math.max(art.currentTime - 10, 0);
+          },
+        });
+
+        // 2. Botón de Adelantar 10s (A la derecha del Play)
+        art.controls.add({
+          name: "forward10",
+          position: "left",
+          index: 15,
+          // Icono SVG oficial de Material Design (Forward 10)
+          html: '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M18 13c0 3.31-2.69 6-6 6s-6-2.69-6-6 2.69-6 6-6v4l5-5-5-5v4c-4.42 0-8 3.58-8 8s3.58 8 8 8 8-3.58 8-8h-2zm-5.66 3h-.85v-3.26l-1.01.31v-.69l1.77-.63h.09V16zm4.28-1.76c0 .32-.03.6-.1.82s-.17.42-.29.57-.28.26-.45.33-.37.1-.59.1-.41-.03-.59-.1-.33-.18-.46-.33-.23-.34-.29-.57-.1-.5-.1-.82v-1.4c0-.32.03-.6.1-.82s.17-.42.29-.57.28-.26.46-.33.37-.1.59-.1.41.03.59.1.33.18.45.33.22.34.29.57.1.5.1.82v1.4zm-1.74-1.54c-.04-.13-.11-.21-.21-.26s-.22-.08-.36-.08-.27.03-.36.08-.17.13-.21.26-.06.32-.06.58v1.66c0 .25.02.45.06.58s.11.22.21.27.22.08.36.08.27-.03.36-.08.17-.13.21-.27.06-.32.06-.58v-1.66c0-.25-.02-.45-.06-.58z"/></svg>',
+          tooltip: "Adelantar 10s",
+          click: function () {
+            // Suma 10 segundos asegurando que no pase del máximo del video
+            art.currentTime = Math.min(
+              art.currentTime + 10,
+              art.duration || art.currentTime + 10,
+            );
+          },
+        });
+      }
+    });
+
+    // =======================================================
+    // 🔤 BOTÓN CC INDEPENDIENTE (NIVEL PREMIUM Y FIJO)
+    // Se delega a _refreshCCButton para poder reutilizarlo también
+    // al cambiar episodio en fullscreen sin recrear el player.
+    // =======================================================
+    this._refreshCCButton(art, subUrl, resolvedSubType);
+
+    // =======================================================
+    // 📱 MÓVIL: BOTONES FLOTANTES + DRAWER (ESTILO YOUTUBE)
+    // =======================================================
+    this._setupMobileDrawer(art, subUrl, resolvedSubType);
+
+    // =======================================================
+    // ⌨️ CONTROL MAESTRO DE TECLADO (ESTILO YOUTUBE)
+    // =======================================================
+    // Variable para saber si el player tiene el foco
+    let isPlayerFocused = false;
+
+    // Detectamos cuándo el usuario hace clic dentro del reproductor
+    this.container.addEventListener("mousedown", () => {
+      isPlayerFocused = true;
+    });
+
+    // Si hace clic fuera del reproductor, le quitamos el foco
+    document.addEventListener("mousedown", (e) => {
+      if (!this.container.contains(e.target)) {
+        isPlayerFocused = false;
+      }
+    });
+
+    // Escuchamos las teclas a nivel global, pero SOLO actuamos si está enfocado
+    document.addEventListener("keydown", (e) => {
+      // Si no está enfocado, dejamos que el navegador haga lo normal (scroll, etc.)
+      if (!isPlayerFocused) return;
+
+      // Si presionó alguna de las teclas que nos interesan, bloqueamos el scroll nativo
+      if (
+        ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(e.key)
+      ) {
+        e.preventDefault();
+      }
+
+      switch (e.key) {
+        case "ArrowRight":
+          // Adelantar 10 segundos
+          art.currentTime = Math.min(art.currentTime + 10, art.duration);
+          art.notice.show = "Adelantar 10s";
+          break;
+
+        case "ArrowLeft":
+          // Retroceder 10 segundos
+          art.currentTime = Math.max(art.currentTime - 10, 0);
+          art.notice.show = "Retroceder 10s";
+          break;
+
+        case "ArrowUp":
+          // Subir volumen 5% (0.05)
+          art.volume = Math.min(art.volume + 0.05, 1);
+          art.muted = false;
+          art.notice.show = `Volumen: ${Math.round(art.volume * 100)}%`;
+          break;
+
+        case "ArrowDown":
+          // Bajar volumen 5% (0.05)
+          art.volume = Math.max(art.volume - 0.05, 0);
+          art.notice.show = `Volumen: ${Math.round(art.volume * 100)}%`;
+          break;
+
+        case " ": // Tecla Espacio
+          // Play / Pausa (Funciona perfecto ahora que apagamos el nativo)
+          art.toggle();
+          break;
+
+        case ",": {
+          // Retroceder 1 fotograma (~1/30 s asumiendo 30 fps)
+          const fps = 30;
+          art.video.pause();
+          art.currentTime = Math.max(art.currentTime - 1 / fps, 0);
+          art.notice.show = "◀ 1 fotograma";
+          break;
+        }
+
+        case ".": {
+          // Adelantar 1 fotograma (~1/30 s asumiendo 30 fps)
+          const fps = 30;
+          art.video.pause();
+          art.currentTime = Math.min(art.currentTime + 1 / fps, art.duration);
+          art.notice.show = "1 fotograma ▶";
+          break;
+        }
+
+        case "f":
+        case "F":
+          // Alternar pantalla completa
+          art.fullscreen = !art.fullscreen;
+          break;
+      }
+    });
+
+    // =======================================================
+// 🎞️ BOTÓN BLANCO Y NEGRO (solo si la serie lo requiere)
+// =======================================================
+if (grayscale) {
+  art.on("ready", () => {
+    let bynActivo = false;
+
+    art.controls.add({
+      name: "byn-toggle",
+      position: "right",
+      index: 5,
+      tooltip: "Blanco y Negro",
+      html: '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>',
+      click: () => {
+        bynActivo = !bynActivo;
+        this.container.style.filter = bynActivo
+          ? "grayscale(100%) contrast(1.15) brightness(0.92)"
+          : "";
+        art.notice.show = bynActivo ? "Modo Noir activado 🎞️" : "Color restaurado";
+      },
+    });
+  });
+}
+
+    // =======================================================
+    // ⏮️ BOTÓN FIJO: EPISODIO ANTERIOR
+    // =======================================================
+    if (window.appState?.player?.activeSeriesId) {
+      art.controls.add({
+        name: "btn-prev-ep",
+        position: "left",
+        index: 19,
+        tooltip: "Episodio Anterior",
+        html: '<i class="art-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="#ffffff"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"></path></svg></i>',
+        click: function () {
+          const currentEp = window._spCurrentEpisodeData;
+          const seriesId = window.appState?.player?.activeSeriesId;
+          if (!currentEp || !seriesId) return;
+
+          const season = currentEp._season;
+          const currentIdx = currentEp._index ?? 0;
+          const allSeasons =
+            window.appState?.content?.seriesEpisodes?.[seriesId] || {};
+
+          let targetSeason = season;
+          let targetIdx = null;
+          let targetEp = null;
+
+          if (currentIdx > 0) {
+            targetIdx = currentIdx - 1;
+            targetEp = (allSeasons[season] || [])[targetIdx];
+          } else {
+            const seasonKeys = Object.keys(allSeasons);
+            const currentSeasonPos = seasonKeys.indexOf(String(season));
+            const prevSeasonKey = seasonKeys[currentSeasonPos - 1];
+
+            if (prevSeasonKey && (allSeasons[prevSeasonKey] || []).length > 0) {
+              targetSeason = prevSeasonKey;
+              const prevEpisodes = allSeasons[prevSeasonKey];
+              targetIdx = prevEpisodes.length - 1;
+              targetEp = prevEpisodes[targetIdx];
+            } else {
+              art.notice.show = "Ya estás en el primer capítulo 🏁";
+              return;
+            }
+          }
+
+          const isFullscreen = !!document.fullscreenElement;
+
+          if (isFullscreen && art) {
+            let savedLang = null;
+            try {
+              savedLang = (JSON.parse(
+                localStorage.getItem("seriesLangPrefs"),
+              ) || {})[seriesId];
+            } catch (_) {}
+            const tracks = getLangTracks(targetEp);
+            const activeLang =
+              savedLang && tracks.some((t) => t.lang === savedLang)
+                ? savedLang
+                : window._spActiveLang || tracks[0]?.lang || "es";
+            const track =
+              tracks.find((t) => t.lang === activeLang) || tracks[0];
+            if (!track) return;
+
+            let subId, subType;
+            if (activeLang === "en" && targetEp.subId_en) {
+              subId = targetEp.subId_en;
+              subType = targetEp.subType_en || "srt";
+            } else if (targetEp.subId_es) {
+              subId = targetEp.subId_es;
+              subType = targetEp.subType_es || "srt";
+            } else {
+              const cfg = ContentManager.getSubtitleConfig(targetEp);
+              subId = cfg.subId;
+              subType = cfg.subType;
+            }
+
+            const newVideoUrl = buildWorkerUrl("video", track.id);
+            const newSubUrl = subId ? buildWorkerUrl("sub", subId) : null;
+
+            art.notice.show =
+              targetSeason !== season
+                ? "Cargando temporada anterior... 🍿"
+                : "Cargando episodio anterior... 🍿";
+
+            const videoEl = art.video;
+            videoEl.src = newVideoUrl;
+            videoEl.load();
+            art.once("video:canplay", () => {
+              art.play();
+            });
+
+            if (newSubUrl && subType === "srt") {
+              art.subtitle.url = newSubUrl;
+              art.subtitle.show = true;
+            } else if (newSubUrl && subType === "ass") {
+              art.plugins?.ass?.setTrack?.(newSubUrl);
+            } else {
+              art.subtitle.show = false;
+            }
+
+            const cineInst = window.appState?.player?.activeCineInstance;
+            if (cineInst) cineInst._refreshCCButton(art, newSubUrl, subType);
+
+            window.appState.player.state[seriesId] = {
+              ...window.appState.player.state[seriesId],
+              season: targetSeason,
+              episodeIndex: targetIdx,
+            };
+            window._spCurrentEpisodeData = {
+              ...targetEp,
+              _season: targetSeason,
+              _index: targetIdx,
+            };
+            window._spActiveLang = activeLang;
+
+            _updateSpPsInfo(
+              targetEp,
+              targetSeason,
+              seriesId,
+              track.label || "",
+              targetIdx,
+            );
+
+            if (targetSeason !== season) {
+              _fillSpPsPanel(seriesId, targetSeason, targetIdx, activeLang);
+            } else {
+              const epListContainer =
+                document.getElementById("sp-ps-episode-list");
+              if (epListContainer) {
+                epListContainer
+                  .querySelectorAll(".sp-episode-item")
+                  .forEach((el, i) => {
+                    el.classList.toggle("active", i === targetIdx);
+                  });
+                epListContainer
+                  .querySelector(".sp-episode-item.active")
+                  ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+              }
+            }
+
+            try {
+              const allProgress =
+                JSON.parse(localStorage.getItem("seriesProgress")) || {};
+              if (!allProgress[seriesId]) allProgress[seriesId] = {};
+              allProgress[seriesId][targetSeason] = targetIdx;
+              localStorage.setItem(
+                "seriesProgress",
+                JSON.stringify(allProgress),
+              );
+            } catch (_) {}
+
+            return;
+          }
+
+          art.notice.show =
+            targetSeason !== season
+              ? "Cargando temporada anterior... 🍿"
+              : "Cargando episodio anterior... 🍿";
+          playEpisodeInDetailView(seriesId, targetSeason, targetIdx);
+        },
+      });
+    }
+
+    // =======================================================
+    // ⏭️ BOTÓN FIJO: SIGUIENTE CAPÍTULO
+    // =======================================================
+    if (window.appState?.player?.activeSeriesId) {
+      art.controls.add({
+        name: "btn-next-ep",
+        position: "left",
+        index: 20,
+        tooltip: "Siguiente Capítulo",
+        html: '<i class="art-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="#ffffff"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"></path></svg></i>',
+        click: function () {
+          const currentEp = window._spCurrentEpisodeData;
+          const seriesId = window.appState?.player?.activeSeriesId;
+          if (!currentEp || !seriesId) return;
+
+          const season = currentEp._season;
+          const currentIdx = currentEp._index ?? 0;
+          const allSeasons =
+            window.appState?.content?.seriesEpisodes?.[seriesId] || {};
+          const episodes = allSeasons[season] || [];
+          const nextIdx = currentIdx + 1;
+
+          let targetSeason = season;
+          let targetIdx = null;
+          let targetEp = null;
+
+          if (nextIdx < episodes.length) {
+            targetIdx = nextIdx;
+            targetEp = episodes[nextIdx];
+          } else {
+            const seasonKeys = Object.keys(allSeasons);
+            const currentSeasonPos = seasonKeys.indexOf(String(season));
+            const nextSeasonKey = seasonKeys[currentSeasonPos + 1];
+
+            if (nextSeasonKey && (allSeasons[nextSeasonKey] || []).length > 0) {
+              targetSeason = nextSeasonKey;
+              targetIdx = 0;
+              targetEp = allSeasons[nextSeasonKey][0];
+            } else {
+              art.notice.show = "Ya estás en el último capítulo 🏁";
+              return;
+            }
+          }
+
+          const isFullscreen = !!document.fullscreenElement;
+
+          if (isFullscreen && art) {
+            let savedLang = null;
+            try {
+              savedLang = (JSON.parse(
+                localStorage.getItem("seriesLangPrefs"),
+              ) || {})[seriesId];
+            } catch (_) {}
+            const tracks = getLangTracks(targetEp);
+            const activeLang =
+              savedLang && tracks.some((t) => t.lang === savedLang)
+                ? savedLang
+                : window._spActiveLang || tracks[0]?.lang || "es";
+            const track =
+              tracks.find((t) => t.lang === activeLang) || tracks[0];
+            if (!track) return;
+
+            let subId, subType;
+            if (activeLang === "en" && targetEp.subId_en) {
+              subId = targetEp.subId_en;
+              subType = targetEp.subType_en || "srt";
+            } else if (targetEp.subId_es) {
+              subId = targetEp.subId_es;
+              subType = targetEp.subType_es || "srt";
+            } else {
+              const cfg = ContentManager.getSubtitleConfig(targetEp);
+              subId = cfg.subId;
+              subType = cfg.subType;
+            }
+
+            const newVideoUrl = buildWorkerUrl("video", track.id);
+            const newSubUrl = subId ? buildWorkerUrl("sub", subId) : null;
+
+            art.notice.show =
+              targetSeason !== season
+                ? "Cargando siguiente temporada... 🍿"
+                : "Cargando siguiente capítulo... 🍿";
+
+            const videoEl = art.video;
+            videoEl.src = newVideoUrl;
+            videoEl.load();
+            art.once("video:canplay", () => {
+              art.play();
+            });
+
+            if (newSubUrl && subType === "srt") {
+              art.subtitle.url = newSubUrl;
+              art.subtitle.show = true;
+            } else if (newSubUrl && subType === "ass") {
+              art.plugins?.ass?.setTrack?.(newSubUrl);
+            } else {
+              art.subtitle.show = false;
+            }
+
+            const cineInst = window.appState?.player?.activeCineInstance;
+            if (cineInst) cineInst._refreshCCButton(art, newSubUrl, subType);
+
+            window.appState.player.state[seriesId] = {
+              ...window.appState.player.state[seriesId],
+              season: targetSeason,
+              episodeIndex: targetIdx,
+            };
+            window._spCurrentEpisodeData = {
+              ...targetEp,
+              _season: targetSeason,
+              _index: targetIdx,
+            };
+            window._spActiveLang = activeLang;
+
+            _updateSpPsInfo(
+              targetEp,
+              targetSeason,
+              seriesId,
+              track.label || "",
+              targetIdx,
+            );
+
+            if (targetSeason !== season) {
+              _fillSpPsPanel(seriesId, targetSeason, targetIdx, activeLang);
+            } else {
+              const epListContainer =
+                document.getElementById("sp-ps-episode-list");
+              if (epListContainer) {
+                epListContainer
+                  .querySelectorAll(".sp-episode-item")
+                  .forEach((el, i) => {
+                    el.classList.toggle("active", i === targetIdx);
+                  });
+                epListContainer
+                  .querySelector(".sp-episode-item.active")
+                  ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+              }
+            }
+
+            try {
+              const allProgress =
+                JSON.parse(localStorage.getItem("seriesProgress")) || {};
+              if (!allProgress[seriesId]) allProgress[seriesId] = {};
+              allProgress[seriesId][targetSeason] = targetIdx;
+              localStorage.setItem(
+                "seriesProgress",
+                JSON.stringify(allProgress),
+              );
+            } catch (_) {}
+
+            return;
+          }
+
+          art.notice.show =
+            targetSeason !== season
+              ? "Cargando siguiente temporada... 🍿"
+              : "Cargando siguiente capítulo... 🍿";
+          playEpisodeInDetailView(seriesId, targetSeason, targetIdx);
+        },
+      });
+    }
+
+    // =======================================================
+    // 💾 1. MEMORIA DE REPRODUCCIÓN (Continuar viendo)
+    // =======================================================
+    // Usamos videoId (ID estable de Drive/Cloudinary) como clave,
+    // no la URL del worker que puede cambiar con cada refresh o token.
+    const videoStorageId = "cine_progreso_" + videoId;
+    // Guardamos la clave en el container para que destroyPrevious pueda
+    // hacer un flush del currentTime justo antes de destruir el player.
+    this.container._artStorageId = videoStorageId;
+    const savedTime = localStorage.getItem(videoStorageId);
+
+    // Si hay tiempo guardado y es mayor a 5 segundos, retomamos desde ahí
+    if (savedTime && parseFloat(savedTime) > 5) {
+      const jumpToSavedTime = () => {
+        art.currentTime = parseFloat(savedTime);
+        art.notice.show = "Continuando donde lo dejaste... 🍿";
+      };
+
+      // Seguro antibug: Verificamos si el video ya cargó su línea de tiempo
+      if (art.video.readyState >= 1) {
+        jumpToSavedTime(); // Si ya está listo, saltamos de inmediato
+      } else {
+        // Si está cargando, esperamos a que reporte los metadatos y luego saltamos
+        art.once("video:loadedmetadata", jumpToSavedTime);
+      }
+    }
+
+    // Guardar el progreso de forma inteligente
+    let lastSaveTime = 0;
+    art.on("video:timeupdate", () => {
+      const now = Date.now();
+      if (now - lastSaveTime > 3000) {
+        // Guardamos cada 3 segundos reales
+        // Si faltan menos de 60 segundos para terminar, borramos el progreso
+        // para que la próxima vez la película empiece desde cero.
+        if (art.duration > 0 && art.duration - art.currentTime < 60) {
+          localStorage.removeItem(videoStorageId);
+        } else {
+          localStorage.setItem(videoStorageId, art.currentTime);
+        }
+        lastSaveTime = now;
+      }
+    });
+    // =======================================================
+    // 📱 2. DOBLE TOQUE PARA MÓVILES (Estilo App de YouTube)
+    // =======================================================
+    let lastTapTime = 0;
+    art.template.$video.addEventListener(
+      "touchstart",
+      (e) => {
+        const currentTime = new Date().getTime();
+        const tapLength = currentTime - lastTapTime;
+
+        // Si el toque ocurre con menos de 300ms de diferencia, es doble toque
+        if (tapLength < 300 && tapLength > 0) {
+          if (e.cancelable) e.preventDefault(); // Evita que la pantalla del celular haga "zoom"
+
+          const touchX = e.changedTouches[0].clientX;
+          const screenWidth = window.innerWidth;
+
+          // ¿Tocó la mitad derecha o la mitad izquierda?
+          if (touchX > screenWidth / 2) {
+            art.currentTime = Math.min(art.currentTime + 10, art.duration);
+            art.notice.show = "Adelantar 10s ⏭️";
+          } else {
+            art.currentTime = Math.max(art.currentTime - 10, 0);
+            art.notice.show = "⏮️ Retroceder 10s";
+          }
+        }
+        lastTapTime = currentTime;
+      },
+      { passive: false },
+    );
+
+    // =======================================================
+    // 🔲 3. BOTÓN PICTURE-IN-PICTURE → movido al panel de Ajustes
+    // =======================================================
+
+    // ── Guardia de plataforma ────────────────────────────────
+    // En móvil estos controles no se montan en la barra nativa:
+    // el drawer de _setupMobileDrawer los reemplaza con mejor UX táctil.
+    const isMobile = window.innerWidth <= 768;
+
+    // =======================================================
+    // ⚙️ 4. BOTÓN DE AJUSTES PERSONALIZADO (VELOCIDAD / ASPECTO)
+    // =======================================================
+    if (!isMobile) {
+      art.controls.add({
+        name: "custom-settings",
+        position: "right",
+        index: 30, // Se pone a la derecha del todo
+        tooltip: "Ajustes",
+        // Icono de Tuerca elegante y sólido
+        html: '<i class="art-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="#ffffff"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.5c-1.93 0-3.5-1.57-3.5-3.5s1.57-3.5 3.5-3.5 3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z"></path></svg></i>',
+      });
+
+      this._settingsSetupTimer = setTimeout(() => {
+        this._settingsSetupTimer = null;
+        const settingsControl = this.container.querySelector(
+          ".art-control-custom-settings",
+        );
+        if (settingsControl) {
+          settingsControl.style.position = "relative";
+
+          const panel = document.createElement("div");
+          // Heredamos la clase 'custom-cc-panel' para tener el mismo fondo de cristal desenfocado
+          panel.className = "custom-cc-panel custom-settings-panel";
+          const pipSection = document.pictureInPictureEnabled
+            ? `
+            <hr class="cc-separator">
+            <span class="cc-title">MINIRREPRODUCTOR</span>
+            <div class="cc-item" id="settings-pip-btn">📺 Imagen en Imagen (PiP)</div>
+          `
+            : "";
+
+          panel.innerHTML = `
+            <span class="cc-title">VELOCIDAD</span>
+            <div class="settings-grid">
+              <div class="settings-grid-item" data-speed="0.5">0.5x</div>
+              <div class="settings-grid-item" data-speed="0.75">0.75x</div>
+              <div class="settings-grid-item active" data-speed="1.0">1x</div>
+              <div class="settings-grid-item" data-speed="1.25">1.25x</div>
+              <div class="settings-grid-item" data-speed="1.5">1.5x</div>
+              <div class="settings-grid-item" data-speed="2.0">2x</div>
+            </div>
+            <hr class="cc-separator">
+            <span class="cc-title">ASPECTO</span>
+            <div class="cc-item active" data-ratio="default">Original</div>
+            <div class="cc-item" data-ratio="16:9">16:9</div>
+            <div class="cc-item" data-ratio="4:3">4:3</div>
+            ${pipSection}
+          `;
+
+          settingsControl.appendChild(panel);
+
+          // Panel oculto por defecto — se muestra/oculta con el botón de ajustes
+          panel.style.display = "none";
+
+          // Toggle al hacer click en el botón de ajustes
+          settingsControl.addEventListener("click", (e) => {
+            e.stopPropagation();
+            panel.style.display =
+              panel.style.display === "none" ? "block" : "none";
+          });
+
+          // Cerrar al hacer click fuera del control (referencia guardada para limpiar en load())
+          this._settingsDocHandler = (e) => {
+            if (!settingsControl.contains(e.target)) panel.style.display = "none";
+          };
+          document.addEventListener("click", this._settingsDocHandler);
+
+          // Evitar que el menú se cierre al hacer clic adentro
+          panel.addEventListener("click", (e) => e.stopPropagation());
+
+          // ==========================================
+          // 1. Lógica para Velocidad (A prueba de balas)
+          // ==========================================
+          panel.querySelectorAll("[data-speed]").forEach((item) => {
+            item.addEventListener("click", () => {
+              const speed = parseFloat(item.getAttribute("data-speed"));
+
+              // Método 1: API de ArtPlayer
+              art.playbackRate = speed;
+              // Método 2: Inyección directa al motor de video HTML5 (Imposible que falle)
+              if (art.video) art.video.playbackRate = speed;
+
+              art.notice.show = "Velocidad: " + speed + "x";
+
+              panel
+                .querySelectorAll("[data-speed]")
+                .forEach((el) => el.classList.remove("active"));
+              item.classList.add("active");
+            });
+          });
+
+          // ==========================================
+          // 2. Lógica para Aspecto (A prueba de balas)
+          // ==========================================
+          panel.querySelectorAll("[data-ratio]").forEach((item) => {
+            item.addEventListener("click", () => {
+              const ratio = item.getAttribute("data-ratio");
+
+              // ArtPlayer calcula los píxeles aquí...
+              art.aspectRatio = ratio;
+
+              // ...pero si tu CSS lo está bloqueando, nosotros lo forzamos a obedecer con !important
+              setTimeout(() => {
+                if (art.video) {
+                  if (ratio === "default") {
+                    art.video.style.setProperty("width", "100%", "important");
+                    art.video.style.setProperty("height", "100%", "important");
+                  } else {
+                    // Capturamos el cálculo de ArtPlayer y lo forzamos
+                    art.video.style.setProperty(
+                      "width",
+                      art.video.style.width,
+                      "important",
+                    );
+                    art.video.style.setProperty(
+                      "height",
+                      art.video.style.height,
+                      "important",
+                    );
+                  }
+                }
+              }, 50);
+
+              art.notice.show =
+                "Aspecto: " + (ratio === "default" ? "Original" : ratio);
+
+              panel
+                .querySelectorAll("[data-ratio]")
+                .forEach((el) => el.classList.remove("active"));
+              item.classList.add("active");
+            });
+          });
+          // ==========================================
+          // 3. Lógica para Picture-in-Picture
+          // ==========================================
+          const pipBtn = panel.querySelector("#settings-pip-btn");
+          if (pipBtn) {
+            pipBtn.addEventListener("click", () => {
+              panel.style.display = "none";
+              if (document.pictureInPictureElement) {
+                document.exitPictureInPicture().catch(console.error);
+              } else {
+                art.template.$video
+                  .requestPictureInPicture()
+                  .catch(console.error);
+              }
+            });
+            // Actualizar texto según estado PiP
+            art.template.$video.addEventListener("enterpictureinpicture", () => {
+              pipBtn.textContent = "✖ Salir de PiP";
+            });
+            art.template.$video.addEventListener("leavepictureinpicture", () => {
+              pipBtn.textContent = "📺 Imagen en Imagen (PiP)";
+            });
+          }
+        }
+      }, 150);
+
+    } // end if (!isMobile)
+
+    // =======================================================
+    // 📑 BOTÓN Y PANEL: LISTA DE EPISODIOS (series, desktop y móvil)
+    // =======================================================
+    if (window.appState?.player?.activeSeriesId) art.controls.add({
+      name: "episodes-list",
+      position: "right",
+      index: 25,
+      tooltip: "Episodios",
+      html: '<i class="art-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="#ffffff"><path d="M4 10h12v2H4zm0-4h16v2H4zm0 8h8v2H4zm10 0v6l5-3z"></path></svg></i>',
+    });
+
+    if (window.appState?.player?.activeSeriesId) this._epSetupTimer = setTimeout(() => {
+        this._epSetupTimer = null;
+        const epControl = this.container.querySelector(
+          ".art-control-episodes-list",
+        );
+        if (!epControl) return;
+
+        epControl.style.position = "relative";
+
+        // Helpers para mostrar/ocultar usando setProperty con !important
+        // — necesario porque el CSS tiene `display: flex !important` que gana al inline normal
+        const showEpPanel = () =>
+          epPanel.style.setProperty("display", "flex", "important");
+        const hideEpPanel = () =>
+          epPanel.style.setProperty("display", "none", "important");
+
+        const epPanel = document.createElement("div");
+        epPanel.className = "custom-cc-panel custom-settings-panel";
+        const isMobileEp = window.innerWidth <= 768;
+        // Posición base (no compite con !important del CSS externo)
+        epPanel.style.cssText = "position:absolute; right:0; bottom:100%; z-index:100;";
+        // Scroll y dimensiones con !important para ganarle al CSS externo
+        const epMaxH = isMobileEp ? "55vh" : "40vh";
+        const epMinW = isMobileEp ? "280px" : "320px";
+        const epMaxW = isMobileEp ? "92vw" : "380px";
+        epPanel.style.setProperty("max-height", epMaxH, "important");
+        epPanel.style.setProperty("min-width", epMinW, "important");
+        epPanel.style.setProperty("max-width", epMaxW, "important");
+        epPanel.style.setProperty("overflow-y", "auto", "important");
+        epPanel.style.setProperty("overflow-x", "hidden", "important");
+        epPanel.style.setProperty("-webkit-overflow-scrolling", "touch", "important");
+        epPanel.style.setProperty("overscroll-behavior", "contain", "important");
+        hideEpPanel();
+        epControl.appendChild(epPanel);
+        epPanel.addEventListener("click", (e) => e.stopPropagation());
+
+        const buildEpList = () => {
+          // ✅ Leer desde window.appState (expuesto globalmente en script.js)
+          const seriesId = window.appState?.player?.activeSeriesId;
+          const state = window.appState?.player?.state?.[seriesId] || {};
+          const season = state.season;
+          const epIdx = state.episodeIndex ?? 0;
+
+          console.log("[EpPanel] seriesId:", seriesId, "| season:", season); // debug
+
+          const episodesData =
+            window.appState?.content?.seriesEpisodes?.[seriesId] || {};
+          const raw = episodesData[season];
+          const epList = Array.isArray(raw) ? raw : Object.values(raw || {});
+
+          if (!epList.length) return '<div class="cc-item">Sin episodios</div>';
+
+          return epList
+            .map((ep, idx) => {
+              const isActive = idx === epIdx;
+              const title = ep?.title || `Episodio ${idx + 1}`;
+              const thumb = ep?.thumbnail || ep?.thumb || ep?.image || "";
+              const thumbHtml = thumb
+                ? `<img src="${thumb}" loading="lazy"
+                     style="width:80px;min-width:80px;height:50px;object-fit:cover;border-radius:4px;display:block;"
+                     onerror="this.style.display='none'">`
+                : `<div style="width:80px;min-width:80px;height:50px;border-radius:4px;background:#1e1e2e;display:flex;align-items:center;justify-content:center;">
+                     <svg width="18" height="18" fill="none" stroke="#555" stroke-width="2" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                   </div>`;
+              return `<div class="ep-panel-item${isActive ? " active" : ""}" data-ep-idx="${idx}"
+                style="display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;
+                       border-bottom:1px solid rgba(255,255,255,0.06);
+                       background:${isActive ? "rgba(var(--accent-color-rgb,229,115,26),0.18)" : "transparent"};
+                       transition:background 0.15s;">
+                ${thumbHtml}
+                <div style="display:flex;flex-direction:column;gap:3px;min-width:0;flex:1;">
+                  <span style="color:var(--accent-color);font-weight:700;font-size:0.72rem;line-height:1;">E${idx + 1}</span>
+                  <span style="color:#fff;font-size:0.82rem;line-height:1.3;white-space:normal;word-break:break-word;">${title}</span>
+                </div>
+              </div>`;
+            })
+            .join("");
+        };
+
+        epPanel.addEventListener("click", (e) => {
+          const item = e.target.closest(".ep-panel-item");
+          if (!item) return;
+          e.stopPropagation();
+          const idx = parseInt(item.dataset.epIdx);
+          const seriesId = window.appState?.player?.activeSeriesId;
+          const season = window.appState?.player?.state?.[seriesId]?.season;
+
+          hideEpPanel();
+
+          const art = window.appState?.player?.activeCineInstance?.art;
+          const isFullscreen = !!document.fullscreenElement;
+
+          if (isFullscreen && art) {
+            const episodesData =
+              window.appState?.content?.seriesEpisodes?.[seriesId] || {};
+            const episodes = episodesData[season] || [];
+            const ep = episodes[idx];
+            if (!ep) return;
+
+            let savedLang = null;
+            try {
+              savedLang = (JSON.parse(localStorage.getItem("seriesLangPrefs")) ||
+                {})[seriesId];
+            } catch (_) {}
+            const tracks = getLangTracks(ep);
+            const activeLang =
+              savedLang && tracks.some((t) => t.lang === savedLang)
+                ? savedLang
+                : window._spActiveLang || tracks[0]?.lang || "es";
+            const track = tracks.find((t) => t.lang === activeLang) || tracks[0];
+
+            let subId, subType;
+            if (activeLang === "en" && ep.subId_en) {
+              subId = ep.subId_en;
+              subType = ep.subType_en || "srt";
+            } else if (ep.subId_es) {
+              subId = ep.subId_es;
+              subType = ep.subType_es || "srt";
+            } else {
+              const cfg = ContentManager.getSubtitleConfig(ep);
+              subId = cfg.subId;
+              subType = cfg.subType;
+            }
+
+            const newVideoUrl = buildWorkerUrl("video", track.id);
+            const newSubUrl = subId ? buildWorkerUrl("sub", subId) : null;
+
+            const videoEl = art.video;
+            videoEl.src = newVideoUrl;
+            videoEl.load();
+            art.once("video:canplay", () => {
+              art.play();
+              hideEpPanel();
+            });
+
+            if (newSubUrl && subType === "srt") {
+              art.subtitle.url = newSubUrl;
+              art.subtitle.show = true;
+            } else if (newSubUrl && subType === "ass") {
+              art.plugins?.ass?.setTrack?.(newSubUrl);
+            } else {
+              art.subtitle.show = false;
+            }
+
+            // ✅ FIX: Actualizar el botón CC según el nuevo episodio.
+            // En fullscreen el player NO se recrea, por eso hay que agregar/quitar
+            // el botón manualmente cuando cambia la disponibilidad de subtítulos.
+            const cineInst = window.appState?.player?.activeCineInstance;
+            if (cineInst) cineInst._refreshCCButton(art, newSubUrl, subType);
+
+            window.appState.player.state[seriesId] = {
+              ...window.appState.player.state[seriesId],
+              episodeIndex: idx,
+            };
+            window._spCurrentEpisodeData = {
+              ...ep,
+              _season: season,
+              _index: idx,
+            };
+            window._spActiveLang = activeLang;
+
+            _updateSpPsInfo(ep, season, seriesId, track.label || "", idx);
+
+            const epListContainer = document.getElementById("sp-ps-episode-list");
+            if (epListContainer) {
+              epListContainer
+                .querySelectorAll(".sp-episode-item")
+                .forEach((el, i) => {
+                  el.classList.toggle("active", i === idx);
+                });
+              epListContainer
+                .querySelector(".sp-episode-item.active")
+                ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            }
+
+            try {
+              const allProgress =
+                JSON.parse(localStorage.getItem("seriesProgress")) || {};
+              if (!allProgress[seriesId]) allProgress[seriesId] = {};
+              allProgress[seriesId][season] = idx;
+              localStorage.setItem("seriesProgress", JSON.stringify(allProgress));
+            } catch (_) {}
+
+            return;
+          }
+
+          playEpisodeInDetailView(seriesId, season, idx);
+        });
+
+        epControl.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const isHidden = epPanel.style.getPropertyValue("display") === "none";
+          if (isHidden) {
+            epPanel.innerHTML = buildEpList();
+            showEpPanel();
+            // Desplazar al episodio activo para que quede visible sin scroll manual
+            requestAnimationFrame(() => {
+              const activeItem = epPanel.querySelector(".ep-panel-item.active");
+              if (activeItem) activeItem.scrollIntoView({ block: "nearest" });
+            });
+          } else {
+            hideEpPanel();
+          }
+        });
+
+        // Hover highlight via delegación (los items se recrean en cada apertura)
+        epPanel.addEventListener("mouseover", (e) => {
+          const item = e.target.closest(".ep-panel-item");
+          if (item && !item.classList.contains("active"))
+            item.style.background = "rgba(255,255,255,0.07)";
+        });
+        epPanel.addEventListener("mouseout", (e) => {
+          const item = e.target.closest(".ep-panel-item");
+          if (item && !item.classList.contains("active"))
+            item.style.background = "transparent";
+        });
+
+        // Guardar referencia para poder eliminar el listener en el próximo load()
+        this._epDocHandler = (e) => {
+          if (!epControl.contains(e.target)) hideEpPanel();
+        };
+        document.addEventListener("click", this._epDocHandler);
+      }, 150);
+    // =======================================================
+
     return art;
   }
-
   // ===========================================================
   // 🎯 _mountAssPlugin: Carga artplayer-plugin-ass dinámicamente
   //
@@ -853,14 +1910,762 @@ class CinePlayer {
   }
 
   destroy() {
-    // Incrementar _mountId cancela cualquier _mountAssPlugin pendiente
-    // (el check `myId !== this._mountId` lo detectará y abortará)
     this._mountId++;
     this._resizeObserver?.disconnect();
     this._assPlugin = null;
-    // art.destroy() limpia automáticamente el canvas overlay del plugin
+    if (this._mobileDrawerBackdrop) {
+      this._mobileDrawerBackdrop.remove();
+      this._mobileDrawerBackdrop = null;
+    }
+    if (this._mobileDrawerEl) {
+      this._mobileDrawerEl.remove();
+      this._mobileDrawerEl = null;
+    }
     destroyPrevious(this.container);
     this.container.innerHTML = "";
+  }
+
+  // ===========================================================
+  // 📱 _setupMobileDrawer: Botones flotantes arriba-derecha +
+  //   drawer desde abajo para CC / Episodios / Ajustes en móvil.
+  //   Solo se monta si window.innerWidth <= 768.
+  //   Se limpia automáticamente en load() al cambiar episodio.
+  // ===========================================================
+  _setupMobileDrawer(art, subUrl, subType) {
+    // UA sniffing es frágil (falla en Chrome DevTools y tablets).
+    // Detectamos por ancho real: <= 768px = mobile.
+    const isMobile = () => window.innerWidth <= 768;
+    if (!isMobile()) return;
+
+    // Limpiar instancias anteriores (buscamos en $player para la pantalla completa)
+    const oldOverlay = art.template.$player.querySelector(".cp-mobile-overlay");
+    if (oldOverlay) oldOverlay.remove();
+    const oldDrawerBg = art.template.$player.querySelector(
+      ".cp-drawer-backdrop",
+    );
+    if (oldDrawerBg) oldDrawerBg.remove();
+    const oldDrawer = art.template.$player.querySelector(".cp-drawer-mobile");
+    if (oldDrawer) oldDrawer.remove();
+
+    const hasSrtSubs = !!(subUrl && subType === "srt");
+
+    // ── 1. Overlay de botones arriba a la derecha ─────────────
+    const overlay = document.createElement("div");
+    overlay.className = "cp-mobile-overlay";
+    // Arranca con la misma visibilidad que la interfaz nativa
+    overlay.style.setProperty(
+      "opacity",
+      art.controls.show ? "1" : "0",
+      "important",
+    );
+    const btnStyle =
+      "pointer-events:all !important; background:rgba(0,0,0,0.6) !important; backdrop-filter:blur(8px) !important; border:1px solid rgba(255,255,255,0.2) !important; border-radius:8px !important; width:38px !important; height:38px !important; display:flex !important; align-items:center !important; justify-content:center !important; cursor:pointer !important;";
+
+    overlay.innerHTML = `
+      <button class="cp-mob-btn" data-drawer="episodes" aria-label="Episodios" style="${btnStyle}">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="#fff"><path d="M4 10h12v2H4zm0-4h16v2H4zm0 8h8v2H4zm10 0v6l5-3z"/></svg>
+      </button>
+      <button class="cp-mob-btn" data-drawer="cc" aria-label="Subtítulos" style="${btnStyle} display: ${hasSrtSubs ? "flex" : "none"} !important;">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="#fff"><path d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 11H7c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h4v1.5H7.5v3h3.5V15zm8 0h-4c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h4v1.5h-3.5v3H19V15z"/></svg>
+      </button>
+      <button class="cp-mob-btn" data-drawer="settings" aria-label="Ajustes" style="${btnStyle}">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="#fff"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.5c-1.93 0-3.5-1.57-3.5-3.5s1.57-3.5 3.5-3.5 3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z"/></svg>
+      </button>
+    `;
+    art.template.$player.appendChild(overlay);
+
+    // Ocultar/Mostrar sincronizado con los controles nativos
+    art.on("control", (state) => {
+      overlay.style.setProperty("opacity", state ? "1" : "0", "important");
+      const btns = overlay.querySelectorAll(".cp-mob-btn");
+      btns.forEach((b) =>
+        b.style.setProperty(
+          "pointer-events",
+          state ? "all" : "none",
+          "important",
+        ),
+      );
+    });
+
+    // Cerrar menú por seguridad si el usuario sale de pantalla completa
+    art.on("fullscreen", (isFullscreen) => {
+      if (!isFullscreen) {
+        const currentBackdrop = art.template.$player.querySelector(
+          ".cp-drawer-backdrop",
+        );
+        const currentDrawer =
+          art.template.$player.querySelector(".cp-drawer-mobile");
+        if (currentBackdrop)
+          currentBackdrop.classList.remove("cp-drawer-backdrop--open");
+        if (currentDrawer)
+          currentDrawer.classList.remove("cp-drawer-mobile--open");
+      }
+    });
+
+    // ── 2. Drawer + backdrop (se añaden al $player para evitar clipping) ─
+    const backdrop = document.createElement("div");
+    backdrop.className = "cp-drawer-backdrop";
+    art.template.$player.appendChild(backdrop);
+
+    const drawer = document.createElement("div");
+    drawer.className = "cp-drawer-mobile";
+    drawer.innerHTML = `
+      <div class="cp-drawer-handle"></div>
+      <div class="cp-drawer-content"></div>
+    `;
+    art.template.$player.appendChild(drawer);
+
+    const drawerContent = drawer.querySelector(".cp-drawer-content");
+
+    // ── 3. Contenido por tipo ──────────────────────────────────
+    const buildCCContent = () => `
+      <div class="cp-drawer-title">Subtítulos</div>
+      <div class="cp-drawer-section-label">TAMAÑO</div>
+      <div class="cp-drawer-list">
+        <div class="cp-drawer-item" data-size="16px">Pequeño</div>
+        <div class="cp-drawer-item active" data-size="20px">Normal</div>
+        <div class="cp-drawer-item" data-size="26px">Grande</div>
+      </div>
+      <div class="cp-drawer-section-label" style="margin-top:12px">FONDO</div>
+      <div class="cp-drawer-list">
+        <div class="cp-drawer-item active" data-bg="transparent">Transparente</div>
+        <div class="cp-drawer-item" data-bg="rgba(0,0,0,0.85)">Oscuro</div>
+      </div>
+    `;
+
+    const buildSettingsContent = () => {
+      const pipHtml = document.pictureInPictureEnabled
+        ? `
+        <div class="cp-drawer-section-label" style="margin-top:12px">MINIRREPRODUCTOR</div>
+        <div class="cp-drawer-list">
+          <div class="cp-drawer-item" id="cp-mob-pip">📺 Imagen en Imagen (PiP)</div>
+        </div>`
+        : "";
+      return `
+        <div class="cp-drawer-title">Ajustes</div>
+        <div class="cp-drawer-section-label">VELOCIDAD</div>
+        <div class="cp-drawer-speed-grid">
+          <div class="cp-drawer-speed-item" data-speed="0.5">0.5x</div>
+          <div class="cp-drawer-speed-item" data-speed="0.75">0.75x</div>
+          <div class="cp-drawer-speed-item active" data-speed="1.0">1x</div>
+          <div class="cp-drawer-speed-item" data-speed="1.25">1.25x</div>
+          <div class="cp-drawer-speed-item" data-speed="1.5">1.5x</div>
+          <div class="cp-drawer-speed-item" data-speed="2.0">2x</div>
+        </div>
+        <div class="cp-drawer-section-label" style="margin-top:12px">ASPECTO</div>
+        <div class="cp-drawer-list">
+          <div class="cp-drawer-item active" data-ratio="default">Original</div>
+          <div class="cp-drawer-item" data-ratio="16:9">16:9</div>
+          <div class="cp-drawer-item" data-ratio="4:3">4:3</div>
+        </div>
+        ${pipHtml}
+      `;
+    };
+
+    const buildEpisodesContent = () => {
+      const seriesId = window.appState?.player?.activeSeriesId;
+      const state = window.appState?.player?.state?.[seriesId] || {};
+      const season = state.season;
+      const epIdx = state.episodeIndex ?? 0;
+      const episodesData =
+        window.appState?.content?.seriesEpisodes?.[seriesId] || {};
+      const raw = episodesData[season];
+      const epList = Array.isArray(raw) ? raw : Object.values(raw || {});
+
+      if (!epList.length)
+        return `
+        <div class="cp-drawer-title">Episodios</div>
+        <div style="padding:30px 20px;text-align:center;color:#4b5563;font-size:13px;font-family:Montserrat,sans-serif;">
+          Sin episodios disponibles
+        </div>`;
+
+      const items = epList
+        .map((ep, idx) => {
+          const isActive = idx === epIdx;
+          const title = ep?.title || `Episodio ${idx + 1}`;
+          const thumb = ep?.thumbnail || ep?.thumb || ep?.image || "";
+          const playIcon = isActive
+            ? `<div class="cp-ep-playing-icon">
+               <svg width="16" height="16" viewBox="0 0 24 24" fill="#e50914">
+                 <rect x="6" y="5" width="4" height="14" rx="1"/>
+                 <rect x="14" y="5" width="4" height="14" rx="1"/>
+               </svg>
+             </div>`
+            : "";
+
+          const thumbHtml = thumb
+            ? `<div class="cp-ep-thumb-wrap">
+               <img src="${thumb}" loading="lazy"
+                 onerror="this.style.display='none';this.parentNode.classList.add('cp-ep-no-thumb');this.parentNode.innerHTML+='<svg width=\\'22\\' height=\\'22\\' fill=\\'none\\' stroke=\\'#fff\\' stroke-width=\\'2\\' viewBox=\\'0 0 24 24\\'><polygon points=\\'5 3 19 12 5 21 5 3\\'/></svg>'">
+               <span class="cp-ep-badge">E${idx + 1}</span>
+             </div>`
+            : `<div class="cp-ep-thumb-wrap cp-ep-no-thumb">
+               <svg width="22" height="22" fill="none" stroke="#fff" stroke-width="2" viewBox="0 0 24 24">
+                 <polygon points="5 3 19 12 5 21 5 3"/>
+               </svg>
+               <span class="cp-ep-badge">E${idx + 1}</span>
+             </div>`;
+
+          return `<div class="cp-ep-item${isActive ? " active" : ""}" data-ep-idx="${idx}">
+          ${thumbHtml}
+          <div class="cp-ep-info">
+            <span class="cp-ep-num">Episodio ${idx + 1}</span>
+            <span class="cp-ep-title">${title}</span>
+          </div>
+          ${playIcon}
+        </div>`;
+        })
+        .join("");
+
+      return `<div class="cp-drawer-title">Episodios — T${season}</div>
+              <div class="cp-drawer-episode-list">${items}</div>`;
+    };
+
+    // ── 4. Abrir / cerrar drawer ───────────────────────────────
+    const openDrawer = (type) => {
+      switch (type) {
+        case "cc":
+          drawerContent.innerHTML = buildCCContent();
+          break;
+        case "settings":
+          drawerContent.innerHTML = buildSettingsContent();
+          break;
+        case "episodes":
+          drawerContent.innerHTML = buildEpisodesContent();
+          break;
+      }
+      // Scroll al episodio activo
+      if (type === "episodes") {
+        setTimeout(() => {
+          drawerContent
+            .querySelector(".cp-ep-item.active")
+            ?.scrollIntoView({ block: "center" });
+        }, 50);
+      }
+      drawer.dataset.type = type;
+      backdrop.classList.add("cp-drawer-backdrop--open");
+      drawer.classList.add("cp-drawer-mobile--open");
+      bindDrawerEvents(type);
+    };
+
+    const closeDrawer = () => {
+      backdrop.classList.remove("cp-drawer-backdrop--open");
+      drawer.classList.remove("cp-drawer-mobile--open");
+    };
+
+    // ── 5. Eventos dentro del drawer ──────────────────────────
+    const bindDrawerEvents = (type) => {
+      if (type === "cc") {
+        drawerContent.querySelectorAll("[data-size]").forEach((el) => {
+          el.addEventListener("click", () => {
+            art.subtitle.style({ fontSize: el.dataset.size });
+            drawerContent
+              .querySelectorAll("[data-size]")
+              .forEach((e) => e.classList.remove("active"));
+            el.classList.add("active");
+          });
+        });
+        drawerContent.querySelectorAll("[data-bg]").forEach((el) => {
+          el.addEventListener("click", () => {
+            const isTrans = el.dataset.bg === "transparent";
+            art.subtitle.style({
+              backgroundColor: el.dataset.bg,
+              padding: isTrans ? "0px" : "4px 12px",
+              borderRadius: isTrans ? "0px" : "6px",
+              textShadow: isTrans ? "1px 1px 3px rgba(0,0,0,0.9)" : "none",
+            });
+            drawerContent
+              .querySelectorAll("[data-bg]")
+              .forEach((e) => e.classList.remove("active"));
+            el.classList.add("active");
+          });
+        });
+      }
+
+      if (type === "settings") {
+        drawerContent.querySelectorAll("[data-speed]").forEach((el) => {
+          el.addEventListener("click", () => {
+            const speed = parseFloat(el.dataset.speed);
+            art.playbackRate = speed;
+            if (art.video) art.video.playbackRate = speed;
+            art.notice.show = `Velocidad: ${speed}x`;
+            drawerContent
+              .querySelectorAll("[data-speed]")
+              .forEach((e) => e.classList.remove("active"));
+            el.classList.add("active");
+          });
+        });
+        drawerContent.querySelectorAll("[data-ratio]").forEach((el) => {
+          el.addEventListener("click", () => {
+            art.aspectRatio = el.dataset.ratio;
+            setTimeout(() => {
+              if (art.video) {
+                if (el.dataset.ratio === "default") {
+                  art.video.style.setProperty("width", "100%", "important");
+                  art.video.style.setProperty("height", "100%", "important");
+                } else {
+                  art.video.style.setProperty(
+                    "width",
+                    art.video.style.width,
+                    "important",
+                  );
+                  art.video.style.setProperty(
+                    "height",
+                    art.video.style.height,
+                    "important",
+                  );
+                }
+              }
+            }, 50);
+            art.notice.show = `Aspecto: ${el.dataset.ratio === "default" ? "Original" : el.dataset.ratio}`;
+            drawerContent
+              .querySelectorAll("[data-ratio]")
+              .forEach((e) => e.classList.remove("active"));
+            el.classList.add("active");
+          });
+        });
+        const pipBtn = drawerContent.querySelector("#cp-mob-pip");
+        if (pipBtn) {
+          pipBtn.addEventListener("click", () => {
+            closeDrawer();
+            if (document.pictureInPictureElement) {
+              document.exitPictureInPicture().catch(console.error);
+            } else {
+              art.template.$video
+                .requestPictureInPicture()
+                .catch(console.error);
+            }
+          });
+        }
+      }
+
+      if (type === "episodes") {
+        drawerContent.querySelectorAll(".cp-ep-item").forEach((el) => {
+          el.addEventListener("click", () => {
+            const idx = parseInt(el.dataset.epIdx);
+            const seriesId = window.appState?.player?.activeSeriesId;
+            const season = window.appState?.player?.state?.[seriesId]?.season;
+            closeDrawer();
+            // Reusar la misma lógica fullscreen del panel de episodios
+            const isFullscreen = !!document.fullscreenElement;
+            if (isFullscreen && art) {
+              const episodesData =
+                window.appState?.content?.seriesEpisodes?.[seriesId] || {};
+              const episodes = episodesData[season] || [];
+              const ep = episodes[idx];
+              if (!ep) return;
+
+              let savedLang = null;
+              try {
+                savedLang = (JSON.parse(
+                  localStorage.getItem("seriesLangPrefs"),
+                ) || {})[seriesId];
+              } catch (_) {}
+              const tracks = getLangTracks(ep);
+              const activeLang =
+                savedLang && tracks.some((t) => t.lang === savedLang)
+                  ? savedLang
+                  : window._spActiveLang || tracks[0]?.lang || "es";
+              const track =
+                tracks.find((t) => t.lang === activeLang) || tracks[0];
+
+              let epSubId, epSubType;
+              if (activeLang === "en" && ep.subId_en) {
+                epSubId = ep.subId_en;
+                epSubType = ep.subType_en || "srt";
+              } else if (ep.subId_es) {
+                epSubId = ep.subId_es;
+                epSubType = ep.subType_es || "srt";
+              } else {
+                const cfg = ContentManager.getSubtitleConfig(ep);
+                epSubId = cfg.subId;
+                epSubType = cfg.subType;
+              }
+
+              const newVideoUrl = buildWorkerUrl("video", track.id);
+              const newSubUrl = epSubId ? buildWorkerUrl("sub", epSubId) : null;
+
+              art.video.src = newVideoUrl;
+              art.video.load();
+              art.once("video:canplay", () => art.play());
+
+              if (newSubUrl && epSubType === "srt") {
+                art.subtitle.url = newSubUrl;
+                art.subtitle.show = true;
+              } else if (newSubUrl && epSubType === "ass") {
+                art.plugins?.ass?.setTrack?.(newSubUrl);
+              } else {
+                art.subtitle.show = false;
+              }
+
+              const cineInst = window.appState?.player?.activeCineInstance;
+              if (cineInst)
+                cineInst._refreshCCButton(art, newSubUrl, epSubType);
+
+              window.appState.player.state[seriesId] = {
+                ...window.appState.player.state[seriesId],
+                episodeIndex: idx,
+              };
+              window._spCurrentEpisodeData = {
+                ...ep,
+                _season: season,
+                _index: idx,
+              };
+              window._spActiveLang = activeLang;
+              _updateSpPsInfo(ep, season, seriesId, track.label || "", idx);
+
+              const epListContainer =
+                document.getElementById("sp-ps-episode-list");
+              if (epListContainer) {
+                epListContainer
+                  .querySelectorAll(".sp-episode-item")
+                  .forEach((e, i) => e.classList.toggle("active", i === idx));
+                epListContainer
+                  .querySelector(".sp-episode-item.active")
+                  ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+              }
+              try {
+                const allProgress =
+                  JSON.parse(localStorage.getItem("seriesProgress")) || {};
+                if (!allProgress[seriesId]) allProgress[seriesId] = {};
+                allProgress[seriesId][season] = idx;
+                localStorage.setItem(
+                  "seriesProgress",
+                  JSON.stringify(allProgress),
+                );
+              } catch (_) {}
+              return;
+            }
+            playEpisodeInDetailView(seriesId, season, idx);
+          });
+        });
+      }
+    };
+
+    // ── 6. Wiring botones del overlay ─────────────────────────
+    overlay.querySelectorAll(".cp-mob-btn").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openDrawer(btn.dataset.drawer);
+      });
+    });
+
+    backdrop.addEventListener("click", closeDrawer);
+    drawer
+      .querySelector(".cp-drawer-handle")
+      .addEventListener("click", closeDrawer);
+
+    // Guardar referencia para limpiar en el próximo load()
+    this._mobileDrawerBackdrop = backdrop;
+    this._mobileDrawerEl = drawer;
+  }
+
+  // ===========================================================
+  // 🔤 _refreshCCButton: Agregar o quitar el botón CC según si
+  //   el episodio actual tiene subtítulos SRT.
+  //
+  //   Se llama desde dos lugares:
+  //     1. load()         → player recién creado, siempre desde cero
+  //     2. Fullscreen ep switch → player reutilizado, hay que sincronizar
+  //        manualmente porque art.controls NO se recrea en este path.
+  //
+  //   Casos:
+  //     • subUrl + subType==='srt' y botón ausente → agrega botón + panel
+  //     • subUrl + subType==='srt' y botón presente → no hace nada (ya ok)
+  //     • sin subUrl SRT y botón presente            → remueve botón
+  //     • sin subUrl SRT y botón ausente             → no hace nada
+  // ===========================================================
+  _refreshCCButton(art, subUrl, subType) {
+    // Limpiar timer/handler previos para evitar acumulación
+    if (this._ccSetupTimer) {
+      clearTimeout(this._ccSetupTimer);
+      this._ccSetupTimer = null;
+    }
+    if (this._ccDocHandler) {
+      document.removeEventListener("click", this._ccDocHandler);
+      this._ccDocHandler = null;
+    }
+
+    const hasSrtSubs = !!(subUrl && subType === "srt");
+
+    // ── NUEVO: Actualizar la visibilidad del botón flotante en móviles ──
+    const mobileCcBtn = art.template.$player.querySelector(
+      '.cp-mobile-overlay [data-drawer="cc"]',
+    );
+    if (mobileCcBtn) {
+      mobileCcBtn.style.setProperty(
+        "display",
+        hasSrtSubs ? "flex" : "none",
+        "important",
+      );
+    }
+    // ────────────────────────────────────────────────────────────────────
+
+    const existingBtn = this.container.querySelector(".art-control-cc-menu");
+
+    // ── Sin subs SRT: quitar botón si existe ──────────────────
+    if (!hasSrtSubs) {
+      if (existingBtn) {
+        try {
+          art.controls.remove("cc-menu");
+        } catch (_) {}
+      }
+      return;
+    }
+
+    // ── Con subs SRT: si el botón ya existe no hay nada que hacer ─
+    if (existingBtn) return;
+
+    // ── Con subs SRT: agregar botón + panel ───────────────────
+    const ccIconSvg =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="#ffffff"><path d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 11H7c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h4v1.5H7.5v3h3.5V15zm8 0h-4c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h4v1.5h-3.5v3H19V15z"/></svg>';
+
+    art.controls.add({
+      name: "cc-menu",
+      position: "right",
+      index: 10,
+      tooltip: "Subtítulos",
+      html: `<i class="art-icon">${ccIconSvg}</i>`,
+    });
+
+    // Esperar a que ArtPlayer monte el elemento en el DOM
+    this._ccSetupTimer = setTimeout(() => {
+      this._ccSetupTimer = null;
+      const ccControl = this.container.querySelector(".art-control-cc-menu");
+      if (!ccControl) return;
+
+      ccControl.style.position = "relative";
+
+      // ── Preferencias persistidas ──────────────────────────────
+      let ccPrefs = {};
+      try { ccPrefs = JSON.parse(localStorage.getItem("ccPrefs") || "{}"); } catch (_) {}
+      const pSize   = parseInt(ccPrefs.size   ?? 20);
+      const _validColors = ["#ffffff","#000000","#ff0000","#00cc00","#0088ff","#ffff00","#ff00ff","#00e5ff"];
+      if (ccPrefs.color && !_validColors.includes(ccPrefs.color)) ccPrefs.color = "#ffffff";
+      const pColor  = ccPrefs.color  ?? "#ffffff";
+      const pBg     = ccPrefs.bg     ?? "transparent";
+      const pBottom  = parseInt(ccPrefs.bottom  ?? 5);
+      const pOutline = ccPrefs.outline ?? false;
+
+      const savePrefs = (patch) => {
+        Object.assign(ccPrefs, patch);
+        try { localStorage.setItem("ccPrefs", JSON.stringify(ccPrefs)); } catch (_) {}
+      };
+
+      const applySubStyle = (s = {}) => {
+        const bg      = s.bg     ?? ccPrefs.bg     ?? pBg;
+        const isTrans = bg === "transparent";
+        art.subtitle.style({
+          fontSize:        (s.size   ?? ccPrefs.size   ?? pSize)   + "px",
+          color:            s.color  ?? ccPrefs.color  ?? pColor,
+          backgroundColor: bg,
+          bottom:          (s.bottom ?? ccPrefs.bottom ?? pBottom) + "%",
+          padding:         isTrans ? "0" : "3px 14px",
+          borderRadius:    isTrans ? "0" : "5px",
+          textShadow:      isTrans ? "0 1px 4px rgba(0,0,0,0.95)" : "none",
+        });
+      };
+      applySubStyle();
+
+      // ── Panel ─────────────────────────────────────────────────
+      const panel = document.createElement("div");
+      panel.className = "custom-cc-panel";
+      // Posición y tamaño con !important para ganar al CSS externo
+      panel.style.cssText = "position:absolute;right:0;bottom:100%;box-sizing:border-box;";
+      panel.style.setProperty("width",      "290px", "important");
+      panel.style.setProperty("min-width",  "290px", "important");
+      panel.style.setProperty("padding",    "0",     "important");
+      panel.style.setProperty("overflow",   "visible", "important");
+
+      const COLORS = [
+        { hex: "#ffffff", label: "Blanco"   },
+        { hex: "#000000", label: "Negro"    },
+        { hex: "#ff0000", label: "Rojo"     },
+        { hex: "#00cc00", label: "Verde"    },
+        { hex: "#0088ff", label: "Azul"     },
+        { hex: "#ffff00", label: "Amarillo" },
+        { hex: "#ff00ff", label: "Magenta"  },
+        { hex: "#00e5ff", label: "Cian"     },
+      ];
+      const BG_OPTS = [
+        { val: "transparent",       label: "Ninguno" },
+        { val: "rgba(0,0,0,0.55)",  label: "Semi"    },
+        { val: "rgba(0,0,0,0.90)",  label: "Sólido"  },
+      ];
+
+      const render = () => {
+        const curSize   = parseInt(ccPrefs.size   ?? pSize);
+        const curColor  = ccPrefs.color  ?? pColor;
+        const curBg     = ccPrefs.bg     ?? pBg;
+        const curBottom  = parseInt(ccPrefs.bottom  ?? pBottom);
+        const curOutline = ccPrefs.outline ?? pOutline;
+        const posLabel   = curBottom <= 6 ? "Abajo" : curBottom >= 40 ? "Arriba" : "Centro";
+
+        panel.innerHTML = `
+          <div style="
+            background:linear-gradient(135deg,#1a1a2e,#16213e);
+            border:1px solid rgba(255,255,255,0.1);
+            border-radius:12px;
+            box-shadow:0 8px 32px rgba(0,0,0,0.7);
+            overflow:hidden;
+          ">
+            <!-- Cabecera -->
+            <div style="
+              padding:10px 16px;
+              border-bottom:1px solid rgba(255,255,255,0.08);
+              display:flex;align-items:center;gap:8px;
+            ">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-color,#e5731a)" stroke-width="2.5">
+                <rect x="2" y="4" width="20" height="16" rx="3"/><path d="M7 15h4m2 0h4M7 11h2m2 0h6"/>
+              </svg>
+              <span style="color:#fff;font-size:0.8rem;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;">Subtítulos</span>
+            </div>
+
+
+            <div style="padding:10px 16px 14px;display:flex;flex-direction:column;gap:14px;">
+
+              <!-- TAMAÑO -->
+              <div>
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;">
+                  <span style="color:#aaa;font-size:0.7rem;letter-spacing:0.08em;text-transform:uppercase;">Tamaño</span>
+                  <span id="cc-size-val" style="color:var(--accent-color,#e5731a);font-size:0.78rem;font-weight:700;min-width:36px;text-align:right;">${curSize}px</span>
+                </div>
+                <input id="cc-size-slider" type="range" min="12" max="44" step="1" value="${curSize}"
+                  style="width:100%;accent-color:var(--accent-color,#e5731a);cursor:pointer;height:4px;">
+              </div>
+
+              <!-- COLOR -->
+              <div>
+                <span style="color:#aaa;font-size:0.7rem;letter-spacing:0.08em;text-transform:uppercase;display:block;margin-bottom:8px;">Color</span>
+                <div style="display:flex;gap:6px;justify-content:center;">
+                  ${COLORS.map(c => `
+                    <div class="cc-color-swatch" data-color="${c.hex}" title="${c.label}" style="
+                      width:22px;height:22px;border-radius:50%;background:${c.hex};cursor:pointer;
+                      border:2px solid ${curColor===c.hex?"var(--accent-color,#e5731a)":"rgba(255,255,255,0.15)"};
+                      box-shadow:${curColor===c.hex?"0 0 0 1px var(--accent-color,#e5731a)":"none"};
+                      transition:all 0.15s;flex-shrink:0;
+                    "></div>`).join("")}
+                </div>
+              </div>
+
+              <!-- FONDO -->
+              <div>
+                <span style="color:#aaa;font-size:0.7rem;letter-spacing:0.08em;text-transform:uppercase;display:block;margin-bottom:8px;">Fondo</span>
+                <div style="display:flex;gap:6px;">
+                  ${BG_OPTS.map(o => `
+                    <button class="cc-bg-btn" data-bg="${o.val}" style="
+                      flex:1;padding:6px 4px;border-radius:6px;font-size:0.76rem;cursor:pointer;
+                      border:1px solid ${curBg===o.val?"var(--accent-color,#e5731a)":"rgba(255,255,255,0.12)"};
+                      background:${curBg===o.val?"rgba(229,115,26,0.18)":"rgba(255,255,255,0.05)"};
+                      color:${curBg===o.val?"var(--accent-color,#e5731a)":"#ccc"};
+                      font-weight:${curBg===o.val?"700":"400"};
+                      transition:all 0.15s;
+                    ">${o.label}</button>`).join("")}
+                </div>
+              </div>
+
+              <!-- CONTORNO -->
+              <div>
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <span style="color:#aaa;font-size:0.7rem;letter-spacing:0.08em;text-transform:uppercase;">Contorno</span>
+                  <button id="cc-outline-btn" style="
+                    width:40px;height:22px;border-radius:11px;border:none;cursor:pointer;
+                    background:${curOutline ? 'var(--accent-color,#e5731a)' : 'rgba(255,255,255,0.1)'};
+                    position:relative;transition:background 0.2s;flex-shrink:0;
+                  ">
+                    <span style="
+                      position:absolute;top:3px;
+                      left:${curOutline ? '21px' : '3px'};
+                      width:16px;height:16px;border-radius:50%;
+                      background:#fff;transition:left 0.2s;
+                    "></span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- POSICIÓN -->
+              <div>
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;">
+                  <span style="color:#aaa;font-size:0.7rem;letter-spacing:0.08em;text-transform:uppercase;">Posición</span>
+                  <span id="cc-pos-label" style="color:var(--accent-color,#e5731a);font-size:0.78rem;font-weight:700;">${posLabel}</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <span style="color:#555;font-size:0.65rem;">▼</span>
+                  <input id="cc-pos-slider" type="range" min="2" max="50" step="1" value="${curBottom}"
+                    style="flex:1;accent-color:var(--accent-color,#e5731a);cursor:pointer;height:4px;">
+                  <span style="color:#555;font-size:0.65rem;">▲</span>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        `;
+
+
+
+        // — Tamaño —
+        const sizeSlider = panel.querySelector("#cc-size-slider");
+        const sizeVal    = panel.querySelector("#cc-size-val");
+        sizeSlider.addEventListener("input", () => {
+          const v = parseInt(sizeSlider.value);
+          sizeVal.textContent = v + "px";
+          savePrefs({ size: v });
+          applySubStyle({ size: v });
+        });
+
+        // — Color —
+        panel.querySelectorAll(".cc-color-swatch").forEach(sw => {
+          sw.addEventListener("click", () => {
+            savePrefs({ color: sw.dataset.color });
+            applySubStyle({ color: sw.dataset.color });
+            render();
+          });
+        });
+
+        // — Fondo —
+        panel.querySelectorAll(".cc-bg-btn").forEach(btn => {
+          btn.addEventListener("click", () => {
+            savePrefs({ bg: btn.dataset.bg });
+            applySubStyle({ bg: btn.dataset.bg });
+            render();
+          });
+        });
+
+        // — Contorno —
+        panel.querySelector("#cc-outline-btn").addEventListener("click", () => {
+          const next = !(ccPrefs.outline ?? pOutline);
+          savePrefs({ outline: next });
+          applySubStyle({ outline: next });
+          render();
+        });
+
+        // — Posición —
+        const posSlider = panel.querySelector("#cc-pos-slider");
+        const posLbl    = panel.querySelector("#cc-pos-label");
+        posSlider.addEventListener("input", () => {
+          const v = parseInt(posSlider.value);
+          posLbl.textContent = v <= 6 ? "Abajo" : v >= 40 ? "Arriba" : "Centro";
+          savePrefs({ bottom: v });
+          applySubStyle({ bottom: v });
+        });
+      };
+
+      render();
+      ccControl.appendChild(panel);
+      panel.style.display = "none";
+      panel.addEventListener("click", e => e.stopPropagation());
+
+      ccControl.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (panel.style.display === "none") { render(); panel.style.display = "block"; }
+        else panel.style.display = "none";
+      });
+
+      this._ccDocHandler = (e) => {
+        if (!ccControl.contains(e.target)) panel.style.display = "none";
+      };
+      document.addEventListener("click", this._ccDocHandler);
+    }, 150);
   }
 }
 
@@ -1011,6 +2816,16 @@ function _openSeriesPlayerPage() {
     if (el) el.style.display = "none";
   });
 
+  // Cerrar detail-view si estaba abierto
+  const detailView = document.getElementById("detail-view");
+  if (detailView) {
+    detailView.classList.remove("visible", "detail-view--playing");
+    detailView.style.display = "none";
+  }
+  // Restaurar el <main> que openDetailsModal oculta
+  const mainEl = document.querySelector("main");
+  if (mainEl) mainEl.style.display = "";
+
   const page =
     shared.DOM.seriesPlayerModal ||
     document.getElementById("series-player-page");
@@ -1022,15 +2837,43 @@ function _openSeriesPlayerPage() {
 
   page.style.display = "block";
   page.classList.add("active");
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  // En mobile el player es fixed/full-screen: scrollear el window causa
+  // un flash visual innecesario. Solo hacemos scroll si el page en sí
+  // tiene scroll interno (overflow-y: auto, como en desktop).
+  if (page.scrollHeight > page.clientHeight) {
+    page.scrollTo({ top: 0, behavior: "instant" });
+  }
 }
 
 export function closeSeriesPlayerModal() {
   clearTimeout(shared.appState.player.episodeOpenTimer);
   commitAndClearPendingSave();
+
+  // ✅ NUEVO: Regenerar carrusel "Continuar Viendo" después de guardar historial
+  const user = shared.auth?.currentUser;
+  if (user) {
+    shared.db
+      .ref(`users/${user.uid}/history`)
+      .orderByChild("viewedAt")
+      .once("value", (snapshot) => {
+        const existing = document.getElementById("continue-watching-carousel");
+        if (existing) existing.remove();
+        if (
+          snapshot.exists() &&
+          typeof window.generateContinueWatchingCarousel === "function"
+        ) {
+          window.generateContinueWatchingCarousel(snapshot);
+        }
+      });
+  }
+
   const page = shared.DOM.seriesPlayerModal;
   page.classList.remove("active", "season-grid-view", "player-layout-view");
   page.style.display = "none";
+
+  // Restaurar scroll del body en caso de que el sheet de temporadas
+  // lo haya bloqueado y el usuario cierre el player sin cerrar el sheet.
+  document.body.style.overflow = "";
 
   if (shared.appState.player.activeCineInstance) {
     shared.appState.player.activeCineInstance.destroy();
@@ -1145,14 +2988,53 @@ export async function openSeriesPlayer(seriesId, forceSeasonGrid = false) {
 
     if (targetSeasonKey) {
       const user = shared.auth.currentUser;
+      let resumeSeason = targetSeasonKey;
       let lastWatchedEpisode = 0;
 
       if (user) {
-        const savedIndex = loadProgress(seriesId, targetSeasonKey);
-        if (savedIndex > 0) lastWatchedEpisode = savedIndex;
+        try {
+          const allProgress =
+            JSON.parse(localStorage.getItem("seriesProgress")) || {};
+          const seriesProgress = allProgress[seriesId] || {};
+
+          // Buscar la última temporada con progreso, en orden
+          const validKeys = seasonsMapped
+            .map((s) => s.key)
+            .filter((k) => {
+              const pe = postersData[k];
+              const status =
+                pe && typeof pe === "object"
+                  ? String(pe.estado || "")
+                      .toLowerCase()
+                      .trim()
+                  : "";
+              const eps = seriesEpisodes[k];
+              const hasEps =
+                eps &&
+                (Array.isArray(eps)
+                  ? eps.length > 0
+                  : Object.keys(eps).length > 0);
+              const locked =
+                (status !== "" && status !== "disponible") ||
+                (!hasEps && status !== "disponible");
+              return !locked;
+            });
+
+          const seasonsWithProgress = validKeys.filter(
+            (k) => seriesProgress[k] != null && seriesProgress[k] > 0,
+          );
+
+          if (seasonsWithProgress.length > 0) {
+            // Tomar la última temporada con progreso registrado
+            resumeSeason = seasonsWithProgress[seasonsWithProgress.length - 1];
+            lastWatchedEpisode = seriesProgress[resumeSeason];
+          }
+        } catch (e) {
+          // fallback silencioso → T1 E1
+        }
       }
 
-      renderEpisodePlayer(seriesId, targetSeasonKey, lastWatchedEpisode);
+      renderEpisodePlayer(seriesId, resumeSeason, lastWatchedEpisode);
     } else {
       if (seasonsMapped.length > 0) {
         renderSeasonGrid(seriesId);
@@ -1362,7 +3244,19 @@ export async function renderEpisodePlayer(
       return;
     }
 
-    const seriesTracks = getLangTracks(firstEpisode);
+    const seasonHasEn = episodes.some((ep) => ep?.videoId_en?.trim());
+    const seasonHasEs = episodes.some((ep) => ep?.videoId_es?.trim());
+
+    const syntheticEp = {
+      ...firstEpisode,
+      videoId_en: seasonHasEn
+        ? episodes.find((ep) => ep?.videoId_en?.trim())?.videoId_en
+        : "",
+      videoId_es: seasonHasEs
+        ? episodes.find((ep) => ep?.videoId_es?.trim())?.videoId_es
+        : "",
+    };
+    const seriesTracks = getLangTracks(syntheticEp);
     const hasLangOptions = seriesTracks.length > 1;
 
     let savedLang = null;
@@ -1416,14 +3310,18 @@ export async function renderEpisodePlayer(
         ? firstEpisode.title
         : seriesInfo.title || firstEpisode.title || "Sin título";
 
+    const _nombreTmp = String(seriesInfo.nombreTemporadas || "").trim();
+
     const seasonDisplayName = postersData.etiqueta
       ? postersData.etiqueta
       : isSpecialContent
         ? "Especial / Película"
-        : `Temporada ${seasonNum}`;
+        : `${_nombreTmp || "Temporada"} ${seasonNum}`;
 
     let seasonWordPlural = "Temporadas";
-    if (seasonDisplayName.toLowerCase().includes("parte")) {
+    if (_nombreTmp) {
+      seasonWordPlural = `${_nombreTmp}s`; // "Parte" → "Partes"
+    } else if (seasonDisplayName.toLowerCase().includes("parte")) {
       seasonWordPlural = "Partes";
     } else if (isSpecialContent) {
       seasonWordPlural = "Especiales";
@@ -1434,7 +3332,7 @@ export async function renderEpisodePlayer(
     ).length;
     const backButtonHTML =
       seasonsCount > 1
-        ? `<button class="player-back-link back-to-seasons"><i class="fas fa-arrow-left"></i> Temporadas</button>`
+        ? `<button class="player-back-link back-to-seasons"><i class="fas fa-arrow-left"></i> ${seasonWordPlural}</button>`
         : "";
 
     shared.DOM.seriesPlayerModal.className =
@@ -1490,7 +3388,7 @@ export async function renderEpisodePlayer(
         const optionsHtml = seriesTracks
           .map(
             (t) => `
-                    <div class="cc-lang-option" data-lang="${t.lang}" style="padding: 10px 15px; cursor: pointer; color: ${t.lang === initialLang ? "#fff" : "#aaa"}; background: ${t.lang === initialLang ? "#e50914" : "transparent"}; font-size: 11px; font-weight: bold; text-transform: uppercase; transition: 0.2s; border-bottom: 1px solid #222;">
+                    <div class="cc-lang-option ${t.lang === initialLang ? "active" : ""}" data-lang="${t.lang}" style="padding: 10px 15px; cursor: pointer; color: ${t.lang === initialLang ? "#fff" : "#aaa"}; background: ${t.lang === initialLang ? "var(--accent-color)" : "transparent"}; font-size: 11px; font-weight: bold; text-transform: uppercase; transition: 0.2s; border-bottom: 1px solid #222;">
                         ${t.label}
                     </div>
                 `,
@@ -1499,10 +3397,10 @@ export async function renderEpisodePlayer(
 
         langDropdown = `
                     <div class="cc-custom-lang-wrapper" style="position: relative; display: inline-block; font-family: 'Montserrat', sans-serif;">
-                        <div class="cc-lang-trigger" style="display: inline-flex; align-items: center; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px; padding: 7px 12px; cursor: pointer; transition: all 0.2s ease; box-shadow: 0 2px 8px rgba(0,0,0,0.2);">
-                            <i class="fas fa-language" style="color: #e50914; font-size: 14px; margin-right: 8px; pointer-events: none;"></i>
-                            <span style="color: #fff; font-size: 12px; font-weight: 700; text-transform: uppercase; padding-right: 10px; letter-spacing: 0.5px; pointer-events: none;">${currentLangLabel}</span>
-                            <i class="fas fa-chevron-down" style="font-size: 10px; color: #aaa; pointer-events: none;"></i>
+                        <div class="cc-lang-trigger" style="display:inline-flex;align-items:center;gap:6px;background:none;border:none;padding:0;cursor:pointer;transition:color 0.2s;">
+                            <i class="fas fa-language" style="font-size:14px;color:var(--text-muted);pointer-events:none;transition:color 0.2s;"></i>
+                            <span style="color:var(--text-light);font-size:0.9rem;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;pointer-events:none;transition:color 0.2s;">${currentLangLabel}</span>
+                            <i class="fas fa-chevron-down" style="font-size:0.7rem;color:var(--text-muted);pointer-events:none;transition:color 0.2s;"></i>
                         </div>
                         <div class="cc-lang-menu" style="display: none; position: absolute; top: calc(100% + 5px); right: 0; background: #141414; border: 1px solid #333; border-radius: 8px; overflow: hidden; z-index: 999999; min-width: 130px; box-shadow: 0 10px 25px rgba(0,0,0,0.9);">
                             ${optionsHtml}
@@ -1557,151 +3455,374 @@ export async function renderEpisodePlayer(
 
       shared.DOM.seriesPlayerModal.innerHTML = `
             <style>
+                /* ── Crítico: page layout base (PC) ── */
                 body:has(#series-player-page.active) .bottom-nav { display: none !important; }
                 #series-player-page.player-layout-view {
-                    position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
-                    display: flex !important; flex-direction: column !important; background-color: #0f0f0f !important;
-                    z-index: 99999 !important; padding: 0 !important; margin: 0 !important; 
-                    width: 100vw !important; height: 100dvh !important; border-radius: 0 !important; 
-                    align-items: stretch !important; overflow-y: auto !important; overflow-x: hidden !important;
+                    position: fixed !important;
+                    inset: 72px 0 0 0 !important;
+                    display: block !important;
+                    background-color: var(--bg-dark, #05070a) !important;
+                    z-index: 999 !important;
+                    padding: 0 !important;
+                    margin: 0 !important;
+                    width: 100vw !important;
+                    height: 100dvh !important;
+                    border-radius: 0 !important;
+                    overflow-y: auto !important;
+                    overflow-x: hidden !important;
                 }
+                @media (min-width: 769px) { .mobile-only { display: none !important; } }
                 
-                @media (min-width: 1024px) { .mobile-only { display: none !important; } }
-                @media (max-width: 1023px) { .desktop-only { display: none !important; } }
-
-                @media (min-width: 1024px) {
+                /* ── ADAPTACIÓN PREMIUM PARA MÓVILES (<= 768px) ── */
+                @media (max-width: 768px) { 
+                    .desktop-only { display: none !important; } 
+                    
+                    /* Convertimos el layout global en un viewport fijo de app nativa */
                     #series-player-page.player-layout-view {
+                        height: calc(100dvh - 72px) !important;
+                        overflow: hidden !important; /* Prohibido el scroll en la página completa */
+                        display: flex !important;
+                        flex-direction: column !important;
+                    }
+                    
+                    .sp-desktop-grid {
+                        display: flex !important;
+                        flex-direction: column !important;
+                        height: 100% !important;
+                        overflow: hidden !important;
+                    }
+                    
+                    /* 📌 EL BLOQUE DEL REPRODUCTOR (Fijo/Pegado arriba) */
+                    .sp-left-col,
+                    .sp-left-col-mobile {
                         position: relative !important;
-                        top: auto !important; left: auto !important; right: auto !important; bottom: auto !important;
                         width: 100% !important;
-                        height: auto !important;
-                        min-height: calc(100vh - 70px) !important;
-                        overflow-y: visible !important;
+                        flex-shrink: 0 !important; /* Evita que el navegador lo aplaste */
+                        z-index: 100 !important;
+                        background-color: var(--bg-dark, #05070a) !important;
+                        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5) !important; /* Separación visual elegante */
+                    }
+                    
+                    /* 📱 MEJORA DE LA LISTA: Scroll independiente y suave */
+                    .sp-right-col#scrollArea,
+                    .sp-right-col-mobile#scrollArea {
+                        flex: 1 !important;
+                        min-height: 0 !important; /* Crucial para activar overflow en flexbox */
+                        overflow-y: auto !important; /* Activa el scroll exclusivo de la lista */
+                        -webkit-overflow-scrolling: touch !important; /* Scroll con inercia nativa de iOS/Android */
+                        padding: 12px 14px 40px !important; /* Espaciado limpio para los extremos táctiles */
+                    }
+                    
+                    /* Lista de episodios — estilo Image 1: filas planas, número inline */
+                    .sp-right-col#scrollArea .sp-episode-item,
+                    .sp-right-col-mobile#scrollArea .sp-episode-item-mobile {
+                        padding: 10px 14px !important;
+                        margin: 0 !important;
+                        background: transparent !important;
+                        border-radius: 0 !important;
+                        border: none !important;
+                        border-bottom: 1px solid rgba(255,255,255,0.05) !important;
+                        transition: background 0.18s ease !important;
+                        position: relative !important;
+                    }
+                    
+                    .sp-right-col#scrollArea .sp-episode-item:hover,
+                    .sp-right-col-mobile#scrollArea .sp-episode-item-mobile:hover {
+                        background: rgba(255,255,255,0.03) !important;
+                    }
+
+                    .sp-right-col#scrollArea .sp-episode-item.active,
+                    .sp-right-col-mobile#scrollArea .sp-episode-item-mobile.active {
+                        background: rgba(var(--accent-rgb), 0.08) !important;
+                        border-bottom-color: rgba(255,255,255,0.05) !important;
+                    }
+
+                    .sp-right-col#scrollArea .sp-episode-item.active::before,
+                    .sp-right-col-mobile#scrollArea .sp-episode-item-mobile.active::before {
+                        content: '' !important;
+                        position: absolute !important;
+                        left: 0 !important; top: 0 !important; bottom: 0 !important;
+                        width: 3px !important;
+                        background: var(--accent-color) !important;
+                        border-radius: 0 2px 2px 0 !important;
+                    }
+                    
+                    /* Número inline y descripción */
+                    .sp-right-col#scrollArea .sp-ep-num-prefix,
+                    .sp-right-col-mobile#scrollArea .sp-ep-num-prefix {
+                        color: var(--accent-color) !important;
+                        font-weight: 900 !important;
+                        font-size: 0.78rem !important;
+                        margin-right: 2px !important;
+                    }
+
+                    .sp-right-col#scrollArea .sp-ep-desc,
+                    .sp-right-col-mobile#scrollArea .sp-ep-desc {
+                        font-size: 11px !important;
+                        line-height: 1.4 !important;
+                        margin-top: 3px !important;
+                        opacity: 0.65 !important;
+                    }
+
+                    /* Badge de duración en thumbnail */
+                    .sp-right-col#scrollArea .sp-ep-duration,
+                    .sp-right-col-mobile#scrollArea .sp-ep-duration {
+                        position: absolute !important;
+                        bottom: 4px !important; right: 4px !important;
+                        background: rgba(0,0,0,0.82) !important;
+                        color: #fff !important;
+                        font-size: 0.6rem !important;
+                        font-weight: 700 !important;
+                        padding: 2px 5px !important;
+                        border-radius: 4px !important;
+                        pointer-events: none !important;
                     }
                 }
-
-                .cc-top-fixed { flex-shrink: 0; display: flex; flex-direction: column; background-color: #0f0f0f; z-index: 10; transition: box-shadow 0.3s ease; }
-                .cc-top-fixed.scrolled { box-shadow: 0 4px 15px rgba(0,0,0,0.6); border-bottom: 1px solid #222; }
-                .cc-nav { display: flex; align-items: center; justify-content: space-between; padding: 10px 15px; padding-top: calc(10px + env(safe-area-inset-top)); border-bottom: 2px solid #e50914; }
-                .cc-logo { height: 22px; }
-                .cc-back-btn { background: transparent; border: none; color: white; font-size: 0.9rem; font-weight: bold; display: flex; align-items: center; gap: 7px; cursor: pointer; padding: 0; }
-                .cc-video-wrap { width: 100%; background: #000; position: relative; aspect-ratio: 16/9; }
-                .cc-details { padding: 15px; }
-                .cc-title-box { position: relative; cursor: pointer; margin-bottom: 0; user-select: none; -webkit-tap-highlight-color: transparent; }
-                .cc-title { font-size: 1.2rem; font-weight: bold; margin: 0 0 4px 0; color: white; line-height: 1.2;}
-                .cc-subtitle { color: #e50914; font-size: 12px; font-weight: bold; margin-bottom: 4px; display: block; }
-                .cc-toggle { position: absolute; bottom: 2px; right: 0; font-size: 14px; color: #8a8a92; font-weight: 500; background: linear-gradient(90deg, rgba(15,15,15,0) 0%, rgba(15,15,15,1) 25%, rgba(15,15,15,1) 100%); padding-left: 25px; padding-right: 2px; z-index: 2; }
-                .cc-scroll { flex: 1 1 auto; padding: 15px 15px 40px 15px; display: block !important; -webkit-overflow-scrolling: touch; }
-                .cc-scroll::-webkit-scrollbar { display: none; }
-                .cc-meta { font-size: 12px; color: #8a8a92; margin-bottom: 15px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; line-height: 1.6; border-bottom: 1px solid #222; padding-bottom: 15px; }
-                .cc-expand { display: none; background-color: #181818; border-radius: 12px; padding: 15px; margin-bottom: 20px; }
-                .cc-desc { font-size: 13px; line-height: 1.5; color: white; margin-bottom: 15px; }
-                .cc-controls { display: flex; align-items: center; justify-content: flex-start; gap: 15px; margin: 10px 0 15px 0; flex-wrap: wrap; }
-                .cc-season-btn { display: inline-flex; align-items: center; gap: 8px; font-size: 16px; font-weight: bold; cursor: pointer; padding: 8px; border-radius: 8px; background-color: transparent; color: white; margin-left: -8px; }
-                .cc-langs { display: flex; gap: 8px; flex-wrap: nowrap; margin-left: auto; } 
-                .cc-card { display: flex !important; gap: 12px !important; margin-bottom: 16px !important; align-items: center !important; padding: 0 !important; background: transparent !important; border: none !important; cursor: pointer; }
-                .cc-thumb { width: 120px !important; height: 67px !important; border-radius: 8px !important; object-fit: cover !important; border: 2px solid transparent !important; flex-shrink: 0; background: #222;}
-                .cc-card.active .cc-thumb { border: 2px solid #e50914 !important; }
-                .cc-info { display: flex !important; flex-direction: column !important; justify-content: center !important; flex: 1 !important; min-width: 0;}
-                .cc-ep-title { font-size: 0.85rem !important; font-weight: bold !important; color: white !important; margin: 0 0 4px 0 !important; line-height: 1.3;}
-                .cc-card.active .cc-ep-title { color: #e50914 !important; }
-                .cc-ep-desc { font-size: 0.75rem !important; color: #8a8a92 !important; display: -webkit-box !important; -webkit-line-clamp: 2 !important; -webkit-box-orient: vertical !important; overflow: hidden !important; margin: 0 !important; line-height: 1.4;}
-                
-                .cc-sheet-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 3000; display: flex; flex-direction: column; justify-content: flex-end; opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
-                .cc-sheet-overlay.active { opacity: 1; pointer-events: auto; }
-                .cc-sheet { background-color: #181818; border-radius: 20px 20px 0 0; padding: 20px 15px calc(20px + env(safe-area-inset-bottom)); max-height: 75vh; display: flex; flex-direction: column; transform: translateY(100%); transition: transform 0.3s cubic-bezier(0.1, 0.9, 0.2, 1); width: 100%; box-sizing: border-box; }
-                .cc-sheet-overlay.active .cc-sheet { transform: translateY(0); }
-                .cc-sheet-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; font-size: 18px; font-weight: bold; color: white;}
-                .cc-sheet-close { background: transparent; border: none; color: white; font-size: 24px; cursor: pointer; padding: 0;}
-                .cc-sheet-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; overflow-y: auto; padding-bottom: 20px; }
-                .cc-sheet-grid::-webkit-scrollbar { display: none; }
-                .cc-sheet-card { position: relative; border-radius: 8px; overflow: hidden; aspect-ratio: 2/3; cursor: pointer; background-color: #111; border: 2px solid transparent; }
-                .cc-sheet-card img { width: 100%; height: 100%; object-fit: cover; display: block; }
-                .cc-sheet-card .cc-overlay { position: absolute; inset: 0; background: linear-gradient(to top, rgba(0,0,0,0.9) 0%, transparent 60%); display: flex; align-items: flex-end; justify-content: center; padding: 10px; color: white; font-size: 0.8rem; font-weight: bold; text-align: center; }
-                .cc-sheet-card.active-season { border-color: #e50914; }
             </style>
 
-            <div class="sp-desktop-grid">
-                
-                <div class="sp-left-column">
-                    <div class="cc-top-fixed" id="fixedHeader">
-                        <nav class="cc-nav mobile-only">
-                            <img src="${logoTheme}" class="cc-logo">
-                            <button class="cc-back-btn streaming-back-btn"><i class="fas fa-times"></i> Cerrar</button>
+            <!--
+            ╔══════════════════════════════════════════════════════╗
+            ║  SP-TOPBAR  —  Barra superior con botón volver      ║
+            ╚══════════════════════════════════════════════════════╝
+            -->
+            <div class="sp-player-topbar sp-player-topbar-mobile">
+                <button class="streaming-back-btn sp-topbar-back-btn">
+                    <svg width="14" height="14" viewBox="0 0 24 24"
+                         fill="none" stroke="currentColor" stroke-width="2.5">
+                        <path d="M19 12H5M12 5l-7 7 7 7"/>
+                    </svg>
+                    Volver
+                </button>
+                <span class="sp-topbar-series-title">${displayTitle}</span>
+            </div>
+            <!-- /sp-topbar -->
+
+
+            <!--
+            ╔══════════════════════════════════════════════════════╗
+            ║  SP-DESKTOP-GRID                                    ║
+            ║  Left : video + franja info episodio                ║
+            ║  Right: carrusel temporadas + lista capítulos       ║
+            ╚══════════════════════════════════════════════════════╝
+            -->
+            <div class="sp-desktop-grid sp-desktop-grid-mobile">
+
+                <!-- ─── COLUMNA IZQUIERDA ─── -->
+                <div class="sp-left-col sp-left-col-mobile">
+
+                    <!--
+                        sp-fixed-header: wrapper del video.
+                        En mobile queda sticky arriba al hacer scroll.
+                        ID #fixedHeader es hook del scroll listener.
+                    -->
+                    <div class="sp-fixed-header sp-fixed-header-mobile" id="fixedHeader">
+
+                        <!-- Barra de nav — solo móvil -->
+                        <nav class="sp-nav-mobile mobile-only">
+                            <img src="${logoTheme}" class="sp-nav-logo-mobile" alt="Cine Corneta">
+                            <button class="streaming-back-btn sp-close-btn-mobile">
+                                <i class="fas fa-times"></i> Cerrar
+                            </button>
                         </nav>
-                        <div class="cc-video-wrap">
-                            <div id="video-container-${seriesId}" style="width:100%; height:100%; background:#000; position:absolute; inset:0;"></div>
-                        </div>
-                        <div class="cc-details mobile-only">
-                            <div class="cc-title-box" id="toggleDescBtn">
-                                <div>
-                                    <span class="cc-subtitle" id="subTitle">${seasonDisplayName}</span>
-                                    <h1 class="cc-title" id="cinema-title-${seriesId}"></h1>
-                                </div>
-                                <span class="cc-toggle" id="toggleText">... ver más</span>
-                            </div>
-                        </div>
-                    </div>
 
-                    <div class="video-info-desktop desktop-only">
-                        <div class="info-header-clickable" id="toggleDescBtnDesktop">
-                            <div class="title-block-wrap">
-                                <span class="sub-title" id="subTitleDesktop">${seasonDisplayName}</span>
-                                <h1 class="video-title" id="cinema-title-desktop-${seriesId}"></h1>
-                                <div class="series-meta">
-                                    ${mReqHtml}
-                                    ${mYearHtml}
-                                    <span><span style="color:#fff; font-weight:bold;">${seasonsCount}</span> ${seasonWordPlural}</span>
+                        <!-- Video container (siempre presente) -->
+                        <div class="sp-video-wrap sp-video-wrap-mobile" style="position: relative; width: 100%; aspect-ratio: 16/9 !important; flex-shrink: 0 !important;">
+                            <div id="video-container-${seriesId}"
+                                 class="sp-video-container-mobile"
+                                 style="width:100%; height:100%; background:#000;
+                                        position:absolute; inset:0;">
+                            </div>
+                        </div>
+
+                        <!-- Título + toggle expandir — solo móvil.
+                             ID #toggleDescBtn y #toggleText son hooks del listener. -->
+                        <div class="sp-details-mobile mobile-only" id="toggleDescBtn">
+                            <div class="sp-details-text-mobile">
+                                <span class="sp-ep-season-mobile" id="subTitle">${seasonDisplayName}</span>
+                                <h1 class="sp-title-mobile" id="cinema-title-${seriesId}"></h1>
+                            </div>
+                            <span class="sp-toggle-hint-mobile" id="toggleText">... ver más</span>
+                        </div>
+
+                    </div>
+                    <!-- /sp-fixed-header -->
+
+
+                    <!--
+                        sp-ep-info-strip: franja debajo del video — solo desktop.
+                        Muestra temporada, título del ep, meta y sinopsis colapsable.
+                        IDs #toggleDescBtnDesktop, #toggleArrowDesktop,
+                            #synopsisContentDesktop son hooks del toggle listener.
+                    -->
+                    <div class="sp-ep-info-strip sp-ep-info-strip-mobile desktop-only" id="toggleDescBtnDesktop">
+
+                        <div class="sp-ep-info-header">
+                            <div class="sp-ep-info-text">
+                                <span class="sp-ep-season-label" id="subTitleDesktop">${seasonDisplayName}</span>
+                                <h2 class="sp-ep-title" id="cinema-title-desktop-${seriesId}"></h2>
+                                <div class="sp-ep-meta">
+                                    <span class="sp-ep-series-name">${displayTitle}</span>
+                                    <span class="sp-ep-dot">·</span>
+                                    <span class="sp-ep-lang" id="sp-ep-lang-${seriesId}">
+                                        ${
+                                          initialLang === "es"
+                                            ? "Latino"
+                                            : "Original"
+                                        }
+                                    </span>
                                 </div>
                             </div>
-                            <div class="toggle-arrow" id="toggleArrowDesktop">
-                                <svg viewBox="0 0 24 24"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"></path></svg>
+                            ${hasLangOptions ? `<div class="sp-ep-lang-selector desktop-only">${langDropdown}</div>` : ""}
+                            <div class="sp-ep-chevron" id="toggleArrowDesktop">
+                                <svg viewBox="0 0 24 24" width="16" height="16"
+                                     fill="none" stroke="currentColor" stroke-width="2.5">
+                                    <path d="M6 9l6 6 6-6"/>
+                                </svg>
                             </div>
                         </div>
-                        <div class="synopsis-content" id="synopsisContentDesktop">
-                            <p class="desc-text" id="episode-desc-desktop-${seriesId}"></p>
+
+                        <!-- Sinopsis del episodio — colapsable.
+                             ID #synopsisContentDesktop y #episode-desc-desktop-X son hooks. -->
+                        <div class="sp-synopsis-content" id="synopsisContentDesktop">
+                            <p class="sp-ep-synopsis-text"
+                               id="episode-desc-desktop-${seriesId}"></p>
+                            <button class="vab-btn--report sp-report-btn-desktop">
+                                <i class="fas fa-flag"></i> Reportar problema
+                            </button>
                         </div>
+
                     </div>
+                    <!-- /sp-ep-info-strip -->
+
                 </div>
+                <!-- /sp-left-col -->
 
-                <div class="sp-right-column cc-scroll" id="scrollArea">
-                    <div class="cc-meta mobile-only">
+
+                <!-- ─── COLUMNA DERECHA ───
+                     ID #scrollArea es hook del scroll listener (mobile).
+                     En desktop es el panel sticky de episodios. -->
+                <div class="sp-right-col sp-right-col-mobile sp-scroll" id="scrollArea">
+
+                    <!-- Meta info — solo móvil -->
+                    <div class="sp-meta-mobile mobile-only">
                         ${mReqHtml}
                         ${mYearHtml}
-                        <span><span style="color:#fff; font-weight:bold;">${seasonsCount}</span> ${seasonWordPlural}</span>
+                        <span>
+                            <span class="sp-meta-highlight-mobile">${seasonsCount}</span>
+                            ${seasonWordPlural}
+                        </span>
                     </div>
 
-                    <div class="cc-expand mobile-only" id="expandableArea">
-                        <div style="font-size: 12px; color: #ccc; margin-bottom: 15px; display: flex; flex-direction: column; gap: 6px; background: rgba(255,255,255,0.05); padding: 12px; border-radius: 8px; border-left: 2px solid #e50914;">
-                            ${originalTitle ? `<span><i class="fas fa-film" style="color:#8a8a92; width:18px;"></i> ${originalTitle}</span>` : ""}
-                            ${genresVal ? `<span><i class="fas fa-tags" style="color:#8a8a92; width:18px;"></i> ${genresVal}</span>` : ""}
-                            ${langVal ? `<span><i class="fas fa-language" style="color:#8a8a92; width:18px;"></i> ${langVal}</span>` : ""}
+                    <!-- Área expandible (géneros, título original, desc ep) — solo móvil.
+                         ID #expandableArea es hook del toggle listener. -->
+                    <div class="sp-expand-mobile mobile-only" id="expandableArea">
+                        <div class="sp-expand-details-mobile">
+                            ${
+                              originalTitle
+                                ? `<span><i class="fas fa-film sp-expand-icon-mobile"></i> ${originalTitle}</span>`
+                                : ""
+                            }
+                            ${
+                              genresVal
+                                ? `<span><i class="fas fa-tags sp-expand-icon-mobile"></i> ${genresVal}</span>`
+                                : ""
+                            }
+                            ${
+                              langVal
+                                ? `<span><i class="fas fa-language sp-expand-icon-mobile"></i> ${langVal}</span>`
+                                : ""
+                            }
                         </div>
-                        <div class="cc-desc" id="episode-desc-${seriesId}"></div>
-                        <button class="vab-btn--report" style="background: rgba(229, 9, 20, 0.1); color: #e50914; border: 1px solid rgba(229, 9, 20, 0.3); border-radius: 18px; padding: 8px 16px; font-size: 13px; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 6px; width: fit-content;"><i class="fas fa-flag"></i> Reportar problema</button>
+                        <!-- ID #episode-desc-X es hook para texto del episodio (mobile) -->
+                        <div class="sp-ep-desc-mobile" id="episode-desc-${seriesId}"></div>
+                        <button class="vab-btn--report sp-report-btn-mobile">
+                            <i class="fas fa-flag"></i> Reportar problema
+                        </button>
                     </div>
-                    
-                    <div class="cc-controls">
-                        <div class="cc-season-btn" id="seasonSelectorBtn">
+
+                    <!-- Carrusel de temporadas — solo desktop.
+                         #sp-season-tabs-X será poblado por JS en la fase siguiente. -->
+                    <div class="sp-season-carousel sp-season-carousel-mobile desktop-only">
+                        <div class="sp-panel-section-header">
+                            <span class="sp-panel-section-title">${seasonWordPlural}</span>
+                        </div>
+                        <div class="sp-season-tabs-wrap">
+                            <button class="sp-carousel-arrow sp-carousel-arrow--left"
+                                    id="sp-carousel-prev-${seriesId}"
+                                    aria-label="Temporada anterior">
+                                <svg viewBox="0 0 24 24" width="13" height="13"
+                                     fill="none" stroke="currentColor" stroke-width="2.5">
+                                    <polyline points="15 18 9 12 15 6"/>
+                                </svg>
+                            </button>
+                            <div class="sp-season-tabs" id="sp-season-tabs-${seriesId}"></div>
+                            <button class="sp-carousel-arrow sp-carousel-arrow--right"
+                                    id="sp-carousel-next-${seriesId}"
+                                    aria-label="Temporada siguiente">
+                                <svg viewBox="0 0 24 24" width="13" height="13"
+                                     fill="none" stroke="currentColor" stroke-width="2.5">
+                                    <polyline points="9 18 15 12 9 6"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <!-- /sp-season-carousel -->
+
+                    <!--
+                        sp-controls:
+                          Mobile  → botón selector de temporada (sheet) + idioma
+                          Desktop → etiqueta "Capítulos" + idioma
+                        IDs #seasonSelectorBtn y #seasonBtnText son hooks del sheet listener.
+                    -->
+                    <div class="sp-controls sp-controls-mobile">
+
+                        <!-- Botón que abre el sheet de temporadas — solo móvil -->
+                        <div class="sp-season-btn-mobile mobile-only" id="seasonSelectorBtn">
                             <span id="seasonBtnText">${seasonDisplayName}</span>
                             <i class="fas fa-chevron-down"></i>
                         </div>
-                        <div class="cc-langs">
+
+                        <!-- Etiqueta sección "Capítulos" — solo desktop -->
+                        <div class="sp-panel-section-header desktop-only">
+                            <span class="sp-panel-section-title">Capítulos</span>
+                        </div>
+
+                        <!-- Selector de idioma (ambas vistas).
+                             .cc-custom-lang-wrapper / .cc-lang-trigger / .cc-lang-menu /
+                             .cc-lang-option son hooks del listener de idioma.
+                             mobile-only cuando no hay opciones de idioma (oculta en desktop). -->
+                        <div class="sp-langs${hasLangOptions ? "" : " mobile-only"}">
                             ${langDropdown}
                         </div>
-                    </div>
 
-                    <div id="episode-list-${seriesId}"></div>
+                    </div>
+                    <!-- /sp-controls -->
+
+                    <!-- Lista de episodios — hook para renderEpisodes().
+                         ID #episode-list-X es esencial, no cambiar. -->
+                    <div id="episode-list-${seriesId}" class="sp-episode-list sp-episode-list-mobile"></div>
+
                 </div>
-            </div>
+                <!-- /sp-right-col -->
 
-            <div class="cc-sheet-overlay" id="seasonModalSheet">
-                <div class="cc-sheet" onclick="event.stopPropagation();">
-                    <div class="cc-sheet-header" style="position: relative; display: flex; justify-content: center; align-items: center;">
+            </div>
+            <!-- /sp-desktop-grid -->
+
+
+            <!--
+            ╔══════════════════════════════════════════════════════╗
+            ║  SP-SHEET  —  Selector de temporadas (mobile)       ║
+            ║  IDs #seasonModalSheet, #season-grid-sheet-container║
+            ║  y #closeSeasonSheetBtn son hooks del JS existente. ║
+            ╚══════════════════════════════════════════════════════╝
+            -->
+            <div class="sp-sheet-overlay sp-sheet-overlay-mobile" id="seasonModalSheet">
+                <div class="sp-sheet sp-sheet-mobile" onclick="event.stopPropagation();">
+                    <div class="sp-sheet-header">
                         <span>${seasonWordPlural}</span>
-                        <button class="cc-sheet-close" id="closeSeasonSheetBtn" style="position: absolute; right: 0;">✕</button>
+                        <button class="sp-sheet-close" id="closeSeasonSheetBtn">✕</button>
                     </div>
-                    <div class="cc-sheet-grid" id="season-grid-sheet-container"></div>
+                    <div class="sp-sheet-grid" id="season-grid-sheet-container"></div>
                 </div>
             </div>
         `;
@@ -1718,8 +3839,14 @@ export async function renderEpisodePlayer(
         shared.DOM.seriesPlayerModal.querySelector("#expandableArea");
 
       if (scrollArea && fixedHeader && toggleText) {
-        scrollArea.addEventListener("scroll", () => {
-          if (scrollArea.scrollTop > 10) {
+        // En mobile el scroll vive en el modal/page, no en scrollArea (overflow:visible).
+        // Escuchamos ambos para cubrir desktop (scrollArea) y mobile (modal o window).
+        const isMobile = () => window.innerWidth <= 768;
+        const onScroll = () => {
+          const scrollTop = isMobile()
+            ? (shared.DOM.seriesPlayerModal?.scrollTop ?? window.scrollY)
+            : scrollArea.scrollTop;
+          if (scrollTop > 10) {
             toggleText.style.opacity = "0";
             toggleText.style.pointerEvents = "none";
             fixedHeader.classList.add("scrolled");
@@ -1728,7 +3855,11 @@ export async function renderEpisodePlayer(
             toggleText.style.pointerEvents = "auto";
             fixedHeader.classList.remove("scrolled");
           }
-        });
+        };
+        scrollArea.addEventListener("scroll", onScroll);
+        if (shared.DOM.seriesPlayerModal)
+          shared.DOM.seriesPlayerModal.addEventListener("scroll", onScroll);
+        window.addEventListener("scroll", onScroll, { passive: true });
       }
 
       if (toggleDescBtn && expandArea && toggleText && scrollArea) {
@@ -1780,7 +3911,27 @@ export async function renderEpisodePlayer(
           "#season-grid-sheet-container",
         );
 
-      if (seasonSelectorBtn && seasonModalSheet && seasonGridSheetContainer) {
+      if (seasonSelectorBtn && seasonsCount <= 1) {
+        seasonSelectorBtn.style.setProperty("display", "none", "important");
+        const spControls =
+          shared.DOM.seriesPlayerModal.querySelector(".sp-controls");
+        if (spControls) {
+          const hasLang = spControls.querySelector(".cc-custom-lang-wrapper");
+          if (hasLang) {
+            // Solo idioma: alinear a la derecha
+            spControls.style.justifyContent = "flex-end";
+          } else {
+            // Sin temporada ni idioma: ocultar el bloque para que la lista use ese espacio
+            spControls.style.setProperty("display", "none", "important");
+          }
+        }
+      }
+      if (
+        seasonSelectorBtn &&
+        seasonModalSheet &&
+        seasonGridSheetContainer &&
+        seasonsCount > 1
+      ) {
         seasonGridSheetContainer.innerHTML = "";
 
         const seriesEpisodes =
@@ -1812,11 +3963,12 @@ export async function renderEpisodePlayer(
             posterUrl = posterEntry;
           }
 
+          const _sNombreTmp = String(seriesInfo.nombreTemporadas || "").trim();
           const sLabel = customLabel
             ? customLabel
             : sNum === 0
               ? "Especial/Película"
-              : `Temporada ${sNum}`;
+              : `${_sNombreTmp || "Temporada"} ${sNum}`;
           const isActive = sKey === seasonNum;
 
           const card = document.createElement("div");
@@ -1824,7 +3976,12 @@ export async function renderEpisodePlayer(
           card.innerHTML = `<img src="${posterUrl}" alt="${sLabel}"><div class="cc-overlay">${sLabel}</div>`;
           card.addEventListener("click", () => {
             seasonModalSheet.classList.remove("active");
-            if (scrollArea) scrollArea.style.overflowY = "auto";
+            // Mobile: unlock body scroll; Desktop: unlock scrollArea
+            if (window.innerWidth <= 768) {
+              document.body.style.overflow = "";
+            } else if (scrollArea) {
+              scrollArea.style.overflowY = "auto";
+            }
             if (!isActive) renderEpisodePlayer(seriesId, sKey);
           });
           seasonGridSheetContainer.appendChild(card);
@@ -1832,11 +3989,21 @@ export async function renderEpisodePlayer(
 
         seasonSelectorBtn.addEventListener("click", () => {
           seasonModalSheet.classList.add("active");
-          if (scrollArea) scrollArea.style.overflowY = "hidden";
+          // Mobile: bloquear scroll del body; Desktop: bloquear scrollArea interno
+          if (window.innerWidth <= 768) {
+            document.body.style.overflow = "hidden";
+          } else if (scrollArea) {
+            scrollArea.style.overflowY = "hidden";
+          }
         });
         const closeSheet = () => {
           seasonModalSheet.classList.remove("active");
-          if (scrollArea) scrollArea.style.overflowY = "auto";
+          // Mobile: restaurar scroll del body; Desktop: restaurar scrollArea
+          if (window.innerWidth <= 768) {
+            document.body.style.overflow = "";
+          } else if (scrollArea) {
+            scrollArea.style.overflowY = "auto";
+          }
         };
         if (closeSeasonSheetBtn)
           closeSeasonSheetBtn.addEventListener("click", closeSheet);
@@ -1861,8 +4028,12 @@ export async function renderEpisodePlayer(
       }
     }
 
-    shared.DOM.seriesPlayerModal.querySelector(".streaming-back-btn").onclick =
-      closeSeriesPlayerModal;
+    // Botón Volver desktop (hero) y botón cerrar mobile → ambos cierran el player
+    shared.DOM.seriesPlayerModal
+      .querySelectorAll(".streaming-back-btn")
+      .forEach((btn) => {
+        btn.onclick = closeSeriesPlayerModal;
+      });
 
     const langWrapper = shared.DOM.seriesPlayerModal.querySelector(
       ".cc-custom-lang-wrapper",
@@ -1877,49 +4048,69 @@ export async function renderEpisodePlayer(
       shared._langMenuAbortCtrl = new AbortController();
       const { signal } = shared._langMenuAbortCtrl;
 
-      trigger.addEventListener("click", (e) => {
+      const toggleLangMenu = (e) => {
         e.stopPropagation();
         const isOpen = menu.style.display === "block";
         menu.style.display = isOpen ? "none" : "block";
-        trigger.style.borderColor = isOpen
-          ? "rgba(255, 255, 255, 0.15)"
-          : "#e50914";
+      };
+
+      // Hover — solo desktop (touch no genera mouseenter)
+      const _ac1 = getComputedStyle(document.documentElement)
+        .getPropertyValue("--accent-color")
+        .trim();
+      const _mc1 = getComputedStyle(document.documentElement)
+        .getPropertyValue("--text-muted")
+        .trim();
+      const _lc1 = getComputedStyle(document.documentElement)
+        .getPropertyValue("--text-light")
+        .trim();
+      trigger.addEventListener("mouseenter", () => {
+        trigger.querySelectorAll("span").forEach((s) => (s.style.color = _ac1));
+        trigger.querySelectorAll("i").forEach((i) => (i.style.color = _ac1));
       });
+      trigger.addEventListener("mouseleave", () => {
+        trigger.querySelectorAll("span").forEach((s) => (s.style.color = _lc1));
+        trigger.querySelectorAll("i").forEach((i) => (i.style.color = _mc1));
+      });
+
+      trigger.addEventListener("click", toggleLangMenu);
+      // touchend explícito para iOS donde el primer tap a div no siempre
+      // genera click (fix para elementos que no son button/a/input)
+      trigger.addEventListener(
+        "touchend",
+        (e) => {
+          e.preventDefault();
+          toggleLangMenu(e);
+        },
+        { passive: false },
+      );
 
       document.addEventListener(
         "click",
         () => {
-          if (menu.style.display === "block") {
-            menu.style.display = "none";
-            trigger.style.borderColor = "rgba(255, 255, 255, 0.15)";
-          }
+          menu.style.display = "none";
         },
         { signal },
       );
 
       options.forEach((opt) => {
-        opt.addEventListener("mouseenter", () => {
-          if (
-            opt.style.background !== "rgb(229, 9, 20)" &&
-            opt.style.background !== "#e50914"
-          ) {
-            opt.style.background = "#2a2a2a";
-          }
-        });
-        opt.addEventListener("mouseleave", () => {
-          if (
-            opt.style.background !== "rgb(229, 9, 20)" &&
-            opt.style.background !== "#e50914"
-          ) {
-            opt.style.background = "transparent";
-          }
-        });
-
+        // mouseenter/mouseleave no existen en dispositivos touch — el hover
         opt.addEventListener("click", (e) => {
           e.stopPropagation();
           menu.style.display = "none";
           changeLanguage(seriesId, opt.dataset.lang);
         });
+        // Soporte táctil explícito: touchend cierra el menú y cambia idioma
+        opt.addEventListener(
+          "touchend",
+          (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            menu.style.display = "none";
+            changeLanguage(seriesId, opt.dataset.lang);
+          },
+          { passive: false },
+        );
       });
     }
 
@@ -1994,6 +4185,7 @@ export async function renderEpisodePlayer(
     }
 
     if (!isSingleMovie) populateEpisodeList(seriesId, seasonNum);
+    if (!isSingleMovie) populateSeasonTabs(seriesId, seasonNum);
     openEpisode(seriesId, seasonNum, initialEpisodeIndex);
   } catch (e) {
     logError(e, "Player: Render Episode");
@@ -2015,7 +4207,7 @@ export function populateEpisodeList(seriesId, seasonNum) {
     .sort((a, b) => a.episodeNumber - b.episodeNumber)
     .forEach((episode, index) => {
       const card = document.createElement("div");
-      card.className = "cc-card episode-card";
+      card.className = "sp-episode-item sp-episode-item-mobile";
       card.id = `episode-card-${seriesId}-${seasonNum}-${index}`;
       card.addEventListener("click", () =>
         openEpisode(seriesId, seasonNum, index),
@@ -2026,23 +4218,114 @@ export function populateEpisodeList(seriesId, seasonNum) {
       const epNum = String(episode.episodeNumber || index + 1).padStart(2, "0");
       const desc =
         episode.description || episode.synopsis || episode.desc || "";
+      const duration = episode.duration || episode.duracion || "";
 
       card.innerHTML = `
-            ${
-              thumbSrc
-                ? `<img class="cc-thumb ep-thumb" src="${thumbSrc}" alt="" loading="lazy" onerror="this.style.display='none'">`
-                : `<div class="cc-thumb ep-thumb"></div>`
-            }
-            <div class="cc-info episode-card-info">
-                <h3 class="cc-ep-title ep-title">${epNum}. ${episode.title || ""}</h3>
-                ${desc ? `<p class="cc-ep-desc episode-description">${desc}</p>` : ""}
+            <div style="position:relative;flex-shrink:0;">
+                ${
+                  thumbSrc
+                    ? `<div class="sp-ep-thumb"><img src="${thumbSrc}" alt="" loading="lazy" onerror="this.style.display='none'"></div>`
+                    : `<div class="sp-ep-thumb"><span class="sp-ep-thumb-num">E${epNum}</span></div>`
+                }
+                ${duration ? `<span class="sp-ep-duration">${duration}</span>` : ""}
+                <div class="sp-ep-play-overlay">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><polygon points="5,3 19,12 5,21"/></svg>
+                </div>
+            </div>
+            <div class="sp-ep-info">
+                <span class="sp-ep-name"><span class="sp-ep-num-prefix">${epNum}.</span> ${episode.title || ""}</span>
+                ${desc ? `<span class="sp-ep-desc">${desc}</span>` : ""}
             </div>
         `;
       container.appendChild(card);
     });
 }
 
-export function openEpisode(seriesId, season, newEpisodeIndex) {
+function populateSeasonTabs(seriesId, activeSeasonNum) {
+  const tabsContainer = shared.DOM.seriesPlayerModal.querySelector(
+    `#sp-season-tabs-${seriesId}`,
+  );
+  const prevBtn = shared.DOM.seriesPlayerModal.querySelector(
+    `#sp-carousel-prev-${seriesId}`,
+  );
+  const nextBtn = shared.DOM.seriesPlayerModal.querySelector(
+    `#sp-carousel-next-${seriesId}`,
+  );
+  if (!tabsContainer) return;
+
+  const seriesEpisodes = shared.appState.content.seriesEpisodes[seriesId] || {};
+  const postersData = shared.appState.content.seasonPosters[seriesId] || {};
+  const allKeys = [
+    ...new Set([...Object.keys(seriesEpisodes), ...Object.keys(postersData)]),
+  ];
+  const orderedKeys =
+    shared.appState.content.seasonOrder?.[seriesId] || allKeys;
+  const seasons = orderedKeys.filter((k) => allKeys.includes(k));
+
+  const carousel = shared.DOM.seriesPlayerModal.querySelector(
+    ".sp-season-carousel",
+  );
+  if (carousel) carousel.style.display = seasons.length <= 1 ? "none" : "";
+  if (seasons.length <= 1) return;
+
+  tabsContainer.innerHTML = "";
+
+  seasons.forEach((key) => {
+    const posterEntry = postersData[key];
+    const label =
+      (posterEntry?.etiqueta || "").trim() || (isNaN(key) ? key : `T${key}`);
+
+    const tab = document.createElement("button");
+    tab.className =
+      "sp-season-tab" +
+      (String(key) === String(activeSeasonNum) ? " active" : "");
+
+    const posterUrl =
+      posterEntry?.posterUrl ||
+      posterEntry?.url ||
+      posterEntry?.image ||
+      posterEntry?.poster ||
+      "";
+    tab.innerHTML = posterUrl
+      ? `<img src="${posterUrl}" alt="${label}" loading="lazy">
+         <div class="sp-season-tab-overlay"><span class="sp-season-tab-label">${label}</span></div>`
+      : `<div class="sp-season-tab-overlay" style="background:rgba(0,0,0,0.5);justify-content:center;align-items:center;">
+           <span class="sp-season-tab-label" style="font-size:0.7rem;">${label}</span>
+         </div>`;
+    tab.addEventListener("click", () => {
+      // Solo actualizar lista y tabs sin regenerar el hero
+      shared.appState.player.state[seriesId] = {
+        ...shared.appState.player.state[seriesId],
+        season: key,
+        episodeIndex: 0,
+      };
+      populateEpisodeList(seriesId, key);
+      populateSeasonTabs(seriesId, key);
+      openEpisode(seriesId, key, 0);
+    });
+    tabsContainer.appendChild(tab);
+  });
+
+  if (prevBtn && nextBtn) {
+    prevBtn.onclick = () =>
+      tabsContainer.scrollBy({ left: -120, behavior: "smooth" });
+    nextBtn.onclick = () =>
+      tabsContainer.scrollBy({ left: 120, behavior: "smooth" });
+  }
+
+  const activeTab = tabsContainer.querySelector(".sp-season-tab.active");
+  if (activeTab) {
+    requestAnimationFrame(() =>
+      activeTab.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+        inline: "center",
+      }),
+    );
+  }
+}
+
+function openEpisode(seriesId, season, newEpisodeIndex) {
   const episode =
     shared.appState.content.seriesEpisodes[seriesId]?.[season]?.[
       newEpisodeIndex
@@ -2052,11 +4335,19 @@ export function openEpisode(seriesId, season, newEpisodeIndex) {
   commitAndClearPendingSave();
 
   clearTimeout(shared.appState.player.episodeOpenTimer);
-  shared.appState.player.pendingHistorySave = {
-    contentId: seriesId,
-    type: "series",
-    episodeInfo: { season, index: newEpisodeIndex, title: episode.title || "" },
-  };
+  shared.appState.player.pendingHistorySave = null; // limpia inmediatamente
+
+  shared.appState.player.episodeOpenTimer = setTimeout(() => {
+    shared.appState.player.pendingHistorySave = {
+      contentId: seriesId,
+      type: "series",
+      episodeInfo: {
+        season,
+        index: newEpisodeIndex,
+        title: episode.title || "",
+      },
+    };
+  }, 3000); // solo confirma si el usuario se queda 3 segundos
 
   shared.DOM.seriesPlayerModal
     .querySelectorAll(".episode-card.active")
@@ -2066,7 +4357,10 @@ export function openEpisode(seriesId, season, newEpisodeIndex) {
   );
   if (activeCard) {
     activeCard.classList.add("active");
-    activeCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    // iOS Safari tiene bugs con scrollIntoView behavior:'smooth' dentro de
+    // contenedores con overflow. En mobile usamos 'instant' para fiabilidad.
+    const scrollBehavior = window.innerWidth <= 768 ? "instant" : "smooth";
+    activeCard.scrollIntoView({ behavior: scrollBehavior, block: "nearest" });
   }
 
   shared.appState.player.state[seriesId] = {
@@ -2096,7 +4390,18 @@ export function openEpisode(seriesId, season, newEpisodeIndex) {
 
     shared.appState.player.activeCineInstance = new CinePlayer(container);
 
-    const { subId, subType } = ContentManager.getSubtitleConfig(episode);
+    let subId, subType;
+    if (lang === "en" && episode.subId_en) {
+      subId = episode.subId_en;
+      subType = episode.subType_en || "srt";
+    } else if (episode.subId_es) {
+      subId = episode.subId_es;
+      subType = episode.subType_es || "srt";
+    } else {
+      const _cfg = ContentManager.getSubtitleConfig(episode);
+      subId = _cfg.subId;
+      subType = _cfg.subType;
+    }
 
     shared.appState.player.activeCineInstance.load({
       videoId,
@@ -2179,7 +4484,7 @@ export function openEpisode(seriesId, season, newEpisodeIndex) {
 
     options.forEach((opt) => {
       if (opt.dataset.lang === lang) {
-        opt.style.background = "#e50914";
+        opt.style.background = "var(--accent-color)";
         opt.style.color = "#fff";
         opt.classList.add("active");
         if (triggerSpan) triggerSpan.textContent = opt.textContent.trim();
@@ -2241,7 +4546,6 @@ function changeLanguage(seriesId, lang) {
 // 6. REPRODUCTOR DE PELÍCULAS
 export function openPlayerModal(movieId, movieTitle) {
   try {
-    shared.closeAllModals();
     const movieData = findContentData(movieId);
 
     if (
@@ -2255,97 +4559,1220 @@ export function openPlayerModal(movieId, movieTitle) {
       return;
     }
 
-    shared.DOM.cinemaModal.classList.add("show");
-    document.body.classList.add("modal-open");
-
     const tracks = getLangTracks(movieData);
-    if (tracks.length > 0) {
-      loadMovieInPlayer(tracks[0].id, movieId, movieData);
+    if (tracks.length === 0) return;
+
+    // Respetar idioma elegido por el usuario, inglés por defecto
+    const activeLang = window._dvActiveLang || "en";
+    const preferredTrack =
+      tracks.find((t) => t.lang === activeLang) || tracks[0];
+
+    loadMovieInPlayer(
+      preferredTrack.id,
+      movieId,
+      movieData,
+      preferredTrack.lang,
+    );
+
+    // Barra de info: usar el track real cargado
+    const titleBar = document.getElementById("dv-player-title-bar");
+    if (titleBar) titleBar.textContent = movieData.title || movieTitle || "";
+
+    const playerLang = document.getElementById("dv-player-lang");
+    if (playerLang) playerLang.textContent = preferredTrack.label;
+
+    const rawDuration = movieData.duration || movieData.duracion || "";
+    const playerDur = document.getElementById("dv-player-duration");
+    if (playerDur) playerDur.textContent = rawDuration;
+
+    const finishEl = document.getElementById("dv-player-finish-time");
+    if (finishEl && rawDuration) {
+      const ft = calculateFinishTime(rawDuration);
+      finishEl.textContent = ft ? `Termina a las ${ft}` : "";
     }
 
-    setupMovieControls(movieId, movieData);
+    // Mostrar sección reproductor con fade
+    const playerSection = document.getElementById("dv-player-section");
+    if (playerSection) {
+      playerSection.style.display = "block";
+
+      // En móvil: ocultar el banner (dv-hero background) y marcar estado playing
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      if (isMobile) {
+        const dvHero = document.getElementById("dv-hero");
+        if (dvHero) {
+          dvHero.classList.add("dv-hero--playing");
+          // Copiar el banner al dv-mobile-header para que se vea de fondo
+          const mobileHeader = document.querySelector(".dv-mobile-header");
+          if (mobileHeader) {
+            const bg = dvHero.style.backgroundImage;
+            mobileHeader.style.backgroundImage = bg;
+            mobileHeader.style.backgroundSize = "cover";
+            mobileHeader.style.backgroundPosition = "center";
+          }
+        }
+        const detailView = document.getElementById("detail-view");
+        if (detailView) detailView.classList.add("detail-view--playing");
+        // Scroll al top para que el player quede visible
+        const detailEl = document.getElementById("detail-view");
+        if (detailEl) detailEl.scrollTop = 0;
+      } else {
+        setTimeout(() => {
+          playerSection.scrollIntoView({ behavior: "smooth", block: "start" });
+        }, 80);
+      }
+
+      setTimeout(() => {
+        playerSection.style.opacity = "1";
+      }, 80);
+    }
+
+    // Sincronizar toggle visual con el idioma real cargado
+    if (tracks.length > 1) {
+      document.querySelectorAll(".dv-lang-btn").forEach((btn) => {
+        const isActive = btn.onclick
+          ?.toString()
+          .includes(`"${preferredTrack.lang}"`);
+        btn.classList.toggle("active", isActive);
+      });
+
+      window._dvCurrentMovieId = movieId;
+      window._dvCurrentMovieData = movieData;
+      window._dvTracks = tracks;
+    }
   } catch (e) {
     logError(e, "Player: Open Modal");
   }
 }
 
-function loadMovieInPlayer(videoId, movieId, movieData) {
-  const screenDiv =
-    shared.DOM.cinemaModal.querySelector(".screen") ||
-    shared.DOM.cinemaModal.querySelector(".video-container");
-  if (!screenDiv) return;
-
-  const iframe = screenDiv.querySelector("iframe");
-  if (iframe) iframe.remove();
-
-  let container = screenDiv.querySelector(".artplayer-container");
-  if (!container) {
-    container = document.createElement("div");
-    container.className = "artplayer-container";
-    container.style.width = "100%";
-    container.style.height = "100%";
-    container.style.background = "#000";
-    screenDiv.appendChild(container);
-  }
+function loadMovieInPlayer(videoId, movieId, movieData, lang = "es") {
+  const container = document.getElementById("dv-video-container");
+  if (!container) return;
 
   if (shared.appState.player.activeCineInstance) {
     shared.appState.player.activeCineInstance.destroy();
+    shared.appState.player.activeCineInstance = null;
   }
+  // ✅ Garantizar que el flag de serie quede limpio para películas
+  // (evita que btn-prev-ep / btn-next-ep aparezcan si venías de una serie)
+  shared.appState.player.activeSeriesId = null;
+  container.innerHTML = "";
 
-  shared.appState.player.activeCineInstance = new CinePlayer(container);
+  const artContainer = document.createElement("div");
+  artContainer.className = "artplayer-container";
+  artContainer.style.cssText = "width:100%;height:100%;background:#000";
+  container.appendChild(artContainer);
 
-  const { subId, subType } = ContentManager.getSubtitleConfig(movieData);
+  shared.appState.player.activeCineInstance = new CinePlayer(artContainer);
+
+  // Subs según idioma: inglés usa subId_en/subType_en, español usa subId_es/subType_es
+  let subId, subType;
+  if (lang === "en" && movieData.subId_en) {
+    subId = movieData.subId_en;
+    subType = movieData.subType_en || "srt";
+  } else if (movieData.subId_es) {
+    subId = movieData.subId_es;
+    subType = movieData.subType_es || "srt";
+  } else {
+    const config = ContentManager.getSubtitleConfig(movieData);
+    subId = config.subId;
+    subType = config.subType;
+  }
 
   shared.appState.player.activeCineInstance.load({
     videoId,
     subId,
     subType,
     title: movieData.title || "",
-    poster: movieData.poster || movieData.image || "",
+    poster: movieData.banner || movieData.poster || movieData.image || "",
   });
 }
 
-function setupMovieControls(movieId, movieData) {
-  const cinemaControls =
-    shared.DOM.cinemaModal.querySelector(".cinema-controls");
-  if (!cinemaControls) return;
+// ===========================================================
+// REPRODUCTOR SERIES EN DETAIL VIEW (sp-)
+// Espejo de openPlayerModal + loadMovieInPlayer con prefijo sp-
+// ===========================================================
+export async function playSeriesInDetailView(seriesId) {
+  try {
+    const seriesData = findContentData(seriesId);
+    if (!seriesData) {
+      shared.ErrorHandler.show(
+        shared.ErrorHandler.types?.CONTENT || "content",
+        "Serie no disponible.",
+      );
+      return;
+    }
+    seriesId = seriesData.id || seriesId;
 
-  let controlsHTML = "";
-  const user = shared.auth.currentUser;
+    // Obtener primer episodio de la primera temporada disponible
+    const episodesData = shared.appState.content.seriesEpisodes[seriesId] || {};
+    const seasonKeys = Object.keys(episodesData);
+    if (seasonKeys.length === 0) {
+      shared.ErrorHandler.show("content", "No hay episodios disponibles.");
+      return;
+    }
 
-  if (user) {
-    const isInList = shared.appState.user.watchlist.has(movieId);
-    const iconClass = isInList ? "fa-check" : "fa-plus";
-    const buttonClass = isInList ? "btn-watchlist in-list" : "btn-watchlist";
-    controlsHTML += `
-            <button class="${buttonClass}" data-content-id="${movieId}">
-                <i class="fas ${iconClass}"></i> 
-                ${isInList ? "En Mi Lista" : "Agregar a Mi Lista"}
-            </button>
-        `;
+    // Respetar orden de temporadas si existe
+    let orderedKeys = seasonKeys;
+    if (shared.appState.content.seasonOrder?.[seriesId]) {
+      orderedKeys = shared.appState.content.seasonOrder[seriesId];
+    }
+
+    // ── Buscar progreso: Firebase primero (si hay sesión), luego localStorage ──
+    let resumeSeasonKey = orderedKeys[0];
+    let resumeEpisodeIndex = 0;
+
+    try {
+      const user = shared.auth?.currentUser;
+      if (user) {
+        // Leer historial de Firebase
+        const snap = await shared.db
+          .ref(`users/${user.uid}/history/${seriesId}`)
+          .once("value");
+        const histEntry = snap.val();
+        if (
+          histEntry &&
+          histEntry.season != null &&
+          histEntry.lastEpisode != null
+        ) {
+          const fbSeason = String(histEntry.season);
+          const fbIndex = Number(histEntry.lastEpisode);
+          // Validar que la temporada y el episodio existen
+          const fbEpisodes = episodesData[fbSeason] || [];
+          const fbEpisode = Array.isArray(fbEpisodes)
+            ? fbEpisodes[fbIndex]
+            : Object.values(fbEpisodes)[fbIndex];
+          if (fbEpisode) {
+            resumeSeasonKey = fbSeason;
+            resumeEpisodeIndex = fbIndex;
+          }
+        }
+      } else {
+        // Sin sesión: leer de localStorage
+        const allProgress =
+          JSON.parse(localStorage.getItem("seriesProgress")) || {};
+        const seriesProgress = allProgress[seriesId] || {};
+        for (const key of orderedKeys) {
+          if (seriesProgress[key] != null) {
+            resumeSeasonKey = key;
+            resumeEpisodeIndex = Number(seriesProgress[key]);
+          }
+        }
+      }
+    } catch (e) {
+      /* fallback silencioso → T1 E1 */
+    }
+
+    const resumeEpisodes = episodesData[resumeSeasonKey] || [];
+    const resumeEpisode = Array.isArray(resumeEpisodes)
+      ? resumeEpisodes[resumeEpisodeIndex]
+      : Object.values(resumeEpisodes)[resumeEpisodeIndex];
+
+    // Si el índice guardado ya no existe (episodio borrado, etc.), caer al primero
+    const firstEpisode =
+      resumeEpisode ??
+      (Array.isArray(resumeEpisodes)
+        ? resumeEpisodes[0]
+        : Object.values(resumeEpisodes)[0]);
+    const firstSeasonKey = resumeEpisode ? resumeSeasonKey : orderedKeys[0];
+    const firstEpisodeIndex = resumeEpisode ? resumeEpisodeIndex : 0;
+
+    // Obtener tracks de idioma del episodio
+    const tracks = getLangTracks(firstEpisode);
+    if (tracks.length === 0) {
+      shared.ErrorHandler.show(
+        "content",
+        "No hay video disponible para este episodio.",
+      );
+      return;
+    }
+
+    // Respetar idioma guardado o usar el primero
+    let savedLang = null;
+    try {
+      const prefs = JSON.parse(localStorage.getItem("seriesLangPrefs")) || {};
+      savedLang = prefs[seriesId];
+    } catch (e) {}
+
+    const activeLang =
+      savedLang && tracks.some((t) => t.lang === savedLang)
+        ? savedLang
+        : window._spActiveLang || tracks[0].lang;
+    const preferredTrack =
+      tracks.find((t) => t.lang === activeLang) || tracks[0];
+
+    // Cargar en el contenedor sp-
+    loadSeriesInDetailPlayer(
+      preferredTrack.id,
+      seriesId,
+      { ...firstEpisode, _season: firstSeasonKey, _index: firstEpisodeIndex },
+      preferredTrack.lang,
+    );
+
+    // Barra de info
+    const titleBar = document.getElementById("sp-player-title-bar");
+    if (titleBar) titleBar.textContent = seriesData.title || "";
+
+    const playerLang = document.getElementById("sp-player-lang");
+    if (playerLang) playerLang.textContent = preferredTrack.label;
+
+    const rawDuration =
+      firstEpisode.duration ||
+      firstEpisode.duracion ||
+      seriesData.duration ||
+      "";
+    const playerDur = document.getElementById("sp-player-duration");
+    if (playerDur) playerDur.textContent = rawDuration;
+
+    const finishEl = document.getElementById("sp-player-finish-time");
+    if (finishEl && rawDuration) {
+      const ft = calculateFinishTime(rawDuration);
+      finishEl.textContent = ft ? `Termina a las ${ft}` : "";
+    }
+
+    // Mostrar seccion reproductor con fade
+    const playerSection = document.getElementById("sp-player-section");
+    if (playerSection) {
+      playerSection.style.display = "flex";
+
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      if (isMobile) {
+        const spHero = document.getElementById("sp-hero");
+        if (spHero) {
+          spHero.classList.add("sp-hero--playing");
+          const mobileHeader = document.querySelector(".sp-mobile-header");
+          if (mobileHeader) {
+            const bg = spHero.style.backgroundImage;
+            mobileHeader.style.backgroundImage = bg;
+            mobileHeader.style.backgroundSize = "cover";
+            mobileHeader.style.backgroundPosition = "center";
+          }
+        }
+        const detailView = document.getElementById("sp-detail-view");
+        if (detailView) detailView.classList.add("sp-detail-view--playing");
+        const tabBar = document.getElementById("mobileTabBar");
+        if (tabBar) tabBar.style.display = "none";
+        const detailEl = document.getElementById("sp-detail-view");
+        if (detailEl) detailEl.scrollTop = 0;
+      } else {
+        setTimeout(() => {
+          playerSection.scrollIntoView({ behavior: "smooth", block: "start" });
+        }, 80);
+      }
+
+      setTimeout(() => {
+        playerSection.style.opacity = "1";
+      }, 80);
+    }
+
+    // Sincronizar toggle de idioma si hay multiples tracks
+    if (tracks.length > 1) {
+      document.querySelectorAll(".sp-lang-btn").forEach((btn) => {
+        const isActive = btn.onclick
+          ?.toString()
+          .includes(`"${preferredTrack.lang}"`);
+        btn.classList.toggle("active", isActive);
+      });
+
+      window._spCurrentSeriesId = seriesId;
+      window._spCurrentSeriesData = seriesData;
+      window._spTracks = tracks;
+    }
+
+    // ── Llenar panel de episodios y temporadas del nuevo layout ──
+    _fillSpPsPanel(
+      seriesId,
+      firstSeasonKey,
+      firstEpisodeIndex,
+      preferredTrack.lang,
+    );
+
+    // ── Poblar bloque detalles (título original, géneros, idioma) ──
+    const _normStr = (s) =>
+      String(s || "")
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9\s]/g, "");
+    const _rawSecond = seriesData.secondTitle || "";
+    const _origTitle =
+      _rawSecond && _normStr(_rawSecond) !== _normStr(seriesData.title || "")
+        ? _rawSecond
+        : "";
+    let _genresVal = "";
+    if (seriesData.genres) {
+      if (Array.isArray(seriesData.genres))
+        _genresVal = seriesData.genres.join(", ");
+      else if (typeof seriesData.genres === "string")
+        _genresVal = seriesData.genres.replace(/;/g, ", ");
+    }
+    const _langLabel = preferredTrack.label || "";
+
+    const _origRow = document.getElementById("sp-ps-orig-row");
+    const _origEl = document.getElementById("sp-ps-orig-title");
+    const _genRow = document.getElementById("sp-ps-genres-row");
+    const _genEl = document.getElementById("sp-ps-genres");
+    const _langRow = document.getElementById("sp-ps-lang-row");
+    const _langEl = document.getElementById("sp-ps-lang-full");
+
+    if (_origTitle && _origRow && _origEl) {
+      _origEl.textContent = _origTitle;
+      _origRow.style.display = "flex";
+    }
+    if (_genresVal && _genRow && _genEl) {
+      _genEl.textContent = _genresVal;
+      _genRow.style.display = "flex";
+    }
+    if (_langLabel && _langRow && _langEl) {
+      _langEl.textContent = _langLabel;
+      _langRow.style.display = "flex";
+    }
+
+    // ── Toggle chevron boceto ──
+    const spPsChevronBtn = document.getElementById("sp-ps-chevron");
+    const spPsSynopsis = document.getElementById("sp-ps-synopsis-wrap");
+    const spPsHeader = document.getElementById("sp-ps-info-toggle");
+    if (spPsChevronBtn && spPsSynopsis && spPsHeader) {
+      const freshHdr = spPsHeader.cloneNode(true);
+      spPsHeader.parentNode.replaceChild(freshHdr, spPsHeader);
+      const freshChevron = freshHdr.querySelector(".sp-ps-chevron-icon");
+      freshHdr.addEventListener("click", () => {
+        const isOpen = spPsSynopsis.classList.contains("sp-ps-expanded");
+        spPsSynopsis.classList.toggle("sp-ps-expanded", !isOpen);
+        if (freshChevron)
+          freshChevron.style.transform = isOpen
+            ? "rotate(0deg)"
+            : "rotate(180deg)";
+      });
+    }
+  } catch (e) {
+    logError(e, "Player: playSeriesInDetailView");
+  }
+}
+
+// ── Abre el reproductor nuevo (sp-detail-view) en un episodio específico ──
+export function playEpisodeInDetailView(seriesId, season, episodeIndex) {
+  try {
+    const seriesData = findContentData(seriesId);
+    if (!seriesData) {
+      shared.ErrorHandler.show("content", "Serie no disponible.");
+      return;
+    }
+    seriesId = seriesData.id || seriesId;
+
+    const episodesData = shared.appState.content.seriesEpisodes[seriesId] || {};
+    const episodes = episodesData[season] || [];
+    const episode = episodes[episodeIndex] ?? episodes[0];
+    if (!episode) {
+      shared.ErrorHandler.show("content", "No se encontraron episodios.");
+      return;
+    }
+
+    // Respetar idioma guardado
+    let savedLang = null;
+    try {
+      const prefs = JSON.parse(localStorage.getItem("seriesLangPrefs")) || {};
+      savedLang = prefs[seriesId];
+    } catch (e) {}
+
+    const tracks = getLangTracks(episode);
+    const activeLang =
+      savedLang && tracks.some((t) => t.lang === savedLang)
+        ? savedLang
+        : window._spActiveLang || tracks[0]?.lang || "es";
+    const preferredTrack =
+      tracks.find((t) => t.lang === activeLang) || tracks[0];
+    if (!preferredTrack) {
+      shared.ErrorHandler.show("content", "No hay video disponible.");
+      return;
+    }
+
+    loadSeriesInDetailPlayer(
+      preferredTrack.id,
+      seriesId,
+      { ...episode, _season: season, _index: episodeIndex },
+      preferredTrack.lang,
+    );
+
+    // Guardar progreso en localStorage para que "Reproducir" retome desde aquí
+    try {
+      const allProgress =
+        JSON.parse(localStorage.getItem("seriesProgress")) || {};
+      if (!allProgress[seriesId]) allProgress[seriesId] = {};
+      allProgress[seriesId][season] = episodeIndex;
+      localStorage.setItem("seriesProgress", JSON.stringify(allProgress));
+    } catch (_) {}
+
+    // Panel de temporadas y episodios
+    _fillSpPsPanel(seriesId, season, episodeIndex, preferredTrack.lang);
+
+    // Mostrar sección reproductor
+    const playerSection = document.getElementById("sp-player-section");
+    if (playerSection) {
+      playerSection.style.display = "flex";
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      if (isMobile) {
+        const spHero = document.getElementById("sp-hero");
+        if (spHero) {
+          spHero.classList.add("sp-hero--playing");
+          const mobileHeader = document.querySelector(".sp-mobile-header");
+          if (mobileHeader) {
+            const bg = spHero.style.backgroundImage;
+            mobileHeader.style.backgroundImage = bg;
+            mobileHeader.style.backgroundSize = "cover";
+            mobileHeader.style.backgroundPosition = "center";
+          }
+        }
+        const detailView = document.getElementById("sp-detail-view");
+        if (detailView) {
+          detailView.classList.add("sp-detail-view--playing");
+          detailView.scrollTop = 0;
+
+          // ── Mantener .sp-controls-mobile sticky bajo .sp-ps-left (altura dinámica) ──
+          // El sp-detail-view usa la estructura estática de index.html (.sp-ps-left),
+          // no el template dinámico de player.js (.sp-left-col).
+          const leftCol = detailView.querySelector(".sp-ps-left, .sp-left-col");
+          if (leftCol && window.matchMedia("(max-width: 768px)").matches) {
+            const _updateStickyTop = () => {
+              document.documentElement.style.setProperty(
+                "--sp-left-h",
+                leftCol.offsetHeight + "px",
+              );
+            };
+            _updateStickyTop();
+            // Cancela el observer anterior si existe (re-entrada)
+            if (detailView._leftColObserver)
+              detailView._leftColObserver.disconnect();
+            const ro = new ResizeObserver(_updateStickyTop);
+            ro.observe(leftCol);
+            detailView._leftColObserver = ro;
+          }
+        }
+        const tabBar = document.getElementById("mobileTabBar");
+        if (tabBar) tabBar.style.display = "none";
+      } else {
+        setTimeout(
+          () =>
+            playerSection.scrollIntoView({
+              behavior: "smooth",
+              block: "start",
+            }),
+          80,
+        );
+      }
+      setTimeout(() => {
+        playerSection.style.opacity = "1";
+      }, 80);
+    }
+
+    if (tracks.length > 1) {
+      window._spCurrentSeriesId = seriesId;
+      window._spCurrentSeriesData = seriesData;
+      window._spTracks = tracks;
+    }
+
+    // ── Toggle chevron sinopsis (mismo que playSeriesInDetailView) ──
+    const spPsChevronBtn = document.getElementById("sp-ps-chevron");
+    const spPsSynopsis = document.getElementById("sp-ps-synopsis-wrap");
+    const spPsHeader = document.getElementById("sp-ps-info-toggle");
+    if (spPsChevronBtn && spPsSynopsis && spPsHeader) {
+      const freshHdr = spPsHeader.cloneNode(true);
+      spPsHeader.parentNode.replaceChild(freshHdr, spPsHeader);
+      const freshChevron = freshHdr.querySelector(".sp-ps-chevron-icon");
+      freshHdr.addEventListener("click", () => {
+        const isOpen = spPsSynopsis.classList.contains("sp-ps-expanded");
+        spPsSynopsis.classList.toggle("sp-ps-expanded", !isOpen);
+        if (freshChevron)
+          freshChevron.style.transform = isOpen
+            ? "rotate(0deg)"
+            : "rotate(180deg)";
+      });
+    }
+  } catch (e) {
+    logError(e, "Player: playEpisodeInDetailView");
+  }
+}
+
+function _spChangeLang(seriesId, lang) {
+  window._spActiveLang = lang;
+  try {
+    const prefs = JSON.parse(localStorage.getItem("seriesLangPrefs")) || {};
+    prefs[seriesId] = lang;
+    localStorage.setItem("seriesLangPrefs", JSON.stringify(prefs));
+  } catch (e) {}
+
+  const currentEp = window._spCurrentEpisodeData;
+  if (!currentEp) return;
+
+  let resolvedVideoId;
+  if (lang === "en" && currentEp.videoId_en)
+    resolvedVideoId = currentEp.videoId_en;
+  else if (lang === "es" && currentEp.videoId_es)
+    resolvedVideoId = currentEp.videoId_es;
+  else resolvedVideoId = currentEp.videoId;
+
+  loadSeriesInDetailPlayer(resolvedVideoId, seriesId, currentEp, lang);
+}
+
+// ── Función auxiliar: llena el panel sp-ps con temporadas y episodios ──
+function _fillSpPsPanel(seriesId, activeSeasonKey, activeEpIndex, lang) {
+  const episodesData = shared.appState.content.seriesEpisodes[seriesId] || {};
+  const postersData = shared.appState.content.seasonPosters[seriesId] || {};
+  const orderedKeys = shared.appState.content.seasonOrder?.[seriesId] || [
+    ...new Set([...Object.keys(episodesData), ...Object.keys(postersData)]),
+  ];
+
+  // ── Temporadas ──────────────────────────────────────────────────────
+  const _spPsSeasonCarousel = document.getElementById("sp-ps-season-carousel");
+  const tabsContainer = document.getElementById("sp-ps-season-tabs");
+  const _seriesInfo = findContentData(seriesId) || {};
+  const _nombreTmp = String(_seriesInfo.nombreTemporadas || "").trim();
+  const _seasonWordPlural = _nombreTmp ? `${_nombreTmp}s` : "Temporadas";
+  const _carouselTitle = _spPsSeasonCarousel?.querySelector(
+    ".sp-panel-section-title",
+  );
+  if (_carouselTitle) _carouselTitle.textContent = _seasonWordPlural;
+
+  if (tabsContainer) {
+    tabsContainer.innerHTML = "";
+    // Ocultar toda la sección si hay solo una temporada
+    if (_spPsSeasonCarousel)
+      _spPsSeasonCarousel.style.display = orderedKeys.length <= 1 ? "none" : "";
+    orderedKeys.forEach((key) => {
+      const posterEntry = postersData[key];
+      const label =
+        (posterEntry?.etiqueta || "").trim() || (isNaN(key) ? key : `T${key}`);
+      const posterUrl =
+        posterEntry?.posterUrl ||
+        posterEntry?.url ||
+        posterEntry?.image ||
+        posterEntry?.poster ||
+        "";
+
+      const tab = document.createElement("button");
+      tab.className =
+        "sp-season-tab" +
+        (String(key) === String(activeSeasonKey) ? " active" : "");
+      tab.innerHTML = posterUrl
+        ? `<img src="${posterUrl}" alt="${label}" loading="lazy">
+           <div class="sp-season-tab-overlay"><span class="sp-season-tab-label">${label}</span></div>`
+        : `<div class="sp-season-tab-overlay" style="background:rgba(0,0,0,0.5);justify-content:center;">
+             <span class="sp-season-tab-label" style="font-size:0.7rem;">${label}</span>
+           </div>`;
+      tab.addEventListener("click", () => {
+        _fillSpPsPanel(seriesId, key, 0, lang);
+        // También reproducir primer ep de la temporada seleccionada
+        const eps =
+          shared.appState.content.seriesEpisodes[seriesId]?.[key] || [];
+        if (eps[0]) {
+          const t = getLangTracks(eps[0]);
+          const track = t.find((x) => x.lang === lang) || t[0];
+          if (track)
+            loadSeriesInDetailPlayer(
+              track.id,
+              seriesId,
+              { ...eps[0], _season: key, _index: 0 },
+              track.lang,
+            );
+          _updateSpPsInfo(eps[0], key, seriesId, track?.label || "");
+        }
+      });
+      tabsContainer.appendChild(tab);
+    });
+
+    // Flechas del carrusel
+    const prev = document.getElementById("sp-ps-carousel-prev");
+    const next = document.getElementById("sp-ps-carousel-next");
+    if (prev)
+      prev.onclick = () =>
+        tabsContainer.scrollBy({ left: -120, behavior: "smooth" });
+    if (next)
+      next.onclick = () =>
+        tabsContainer.scrollBy({ left: 120, behavior: "smooth" });
+
+    // Scroll al tab activo
+    requestAnimationFrame(() => {
+      tabsContainer.querySelector(".sp-season-tab.active")?.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+        inline: "center",
+      });
+    });
   }
 
-  controlsHTML += `
-        <button class="btn-review" data-content-id="${movieId}" data-type="movie">
-            <i class="fas fa-star"></i> 
-            Escribir Reseña
-        </button>
-    `;
+  // DESPUÉS
+  // ── Mobile: conectar botón al drawer de temporadas ──
+  const mobileSeasonsBtn = document.getElementById("sp-ps-mobile-season-btn");
+  // Mostrar/ocultar la fila contenedora (temporada + idioma inline)
+  const spControlsRow = document.getElementById("sp-ps-controls-row");
+  if (mobileSeasonsBtn) {
+    if (Object.keys(episodesData).length <= 1) {
+      mobileSeasonsBtn.style.setProperty("display", "none", "important");
+      // No tocar spControlsRow — mobile-only en CSS lo gestiona
+    } else {
+      mobileSeasonsBtn.style.display = "";
+      // No tocar spControlsRow — mobile-only en CSS lo gestiona
 
-  cinemaControls.innerHTML = controlsHTML;
+      // Construir mapa de etiquetas y posters para el drawer
+      const _seasonWord = String(
+        (findContentData(seriesId) || {}).nombreTemporadas || "",
+      ).trim();
+      const postersList = {};
+      const etiquetasMap = {};
+      orderedKeys.forEach((k, i) => {
+        const pe = postersData[k];
+        postersList[k] =
+          pe?.posterUrl || pe?.url || pe?.image || pe?.poster || "";
+        const eta = (typeof pe === "object" ? pe?.etiqueta : "") || "";
+        etiquetasMap[k] =
+          eta.trim() ||
+          `${_seasonWord || "Temporada"} ${!isNaN(k) ? Number(k) : i + 1}`;
+      });
 
-  const reviewBtn = cinemaControls.querySelector(".btn-review");
-  if (reviewBtn) {
-    reviewBtn.addEventListener("click", () => {
-      if (typeof window.openSmartReviewModal === "function") {
-        window.openSmartReviewModal(movieId, "movie", movieData.title);
-      } else {
-        console.error(
-          "Error: window.openSmartReviewModal no está definida en script.js",
+      // Texto del botón activo: usar etiqueta si existe, sino nombreTemporadas + número
+      const _activeLabel =
+        etiquetasMap[activeSeasonKey] ||
+        (_seasonWord || "Temporada") +
+          " " +
+          String(activeSeasonKey).replace("T", "");
+      mobileSeasonsBtn.innerHTML = `${_activeLabel} <i class="fas fa-chevron-down"></i>`;
+
+      mobileSeasonsBtn.onclick = () => {
+        window.openSeasonDrawer(
+          orderedKeys,
+          postersList,
+          activeSeasonKey,
+          (selectedKey) => {
+            _fillSpPsPanel(seriesId, selectedKey, 0, lang);
+            const eps =
+              shared.appState.content.seriesEpisodes[seriesId]?.[selectedKey] ||
+              [];
+            if (eps[0]) {
+              const t = getLangTracks(eps[0]);
+              const track = t.find((x) => x.lang === lang) || t[0];
+              if (track)
+                loadSeriesInDetailPlayer(
+                  track.id,
+                  seriesId,
+                  { ...eps[0], _season: selectedKey, _index: 0 },
+                  track.lang,
+                );
+              _updateSpPsInfo(
+                eps[0],
+                selectedKey,
+                seriesId,
+                track?.label || "",
+              );
+            }
+          },
+          etiquetasMap,
+          _seasonWord,
+        );
+      };
+    }
+  }
+
+  // ── Selector de idioma (cc-custom-lang-wrapper, igual que renderEpisodePlayer) ──
+  const langContainer = document.getElementById("sp-ps-inline-lang");
+  if (langContainer) {
+    const activeEpForLang = (episodesData[activeSeasonKey] || [])[
+      activeEpIndex
+    ];
+    const tracks = activeEpForLang ? getLangTracks(activeEpForLang) : [];
+
+    if (tracks.length > 1) {
+      const currentLabel =
+        tracks.find((t) => t.lang === lang)?.label || tracks[0].label;
+      const optionsHtml = tracks
+        .map(
+          (t) => `
+      <div class="cc-lang-option ${t.lang === lang ? "active" : ""}" data-lang="${t.lang}"
+        style="padding:10px 15px;cursor:pointer;
+               color:${t.lang === lang ? "#fff" : "#aaa"};
+               background:${t.lang === lang ? "var(--accent-color)" : "transparent"};
+               font-size:11px;font-weight:bold;text-transform:uppercase;
+               transition:0.2s;border-bottom:1px solid #222;">
+        ${t.label}
+      </div>`,
+        )
+        .join("");
+
+      langContainer.innerHTML = `
+      <div class="cc-custom-lang-wrapper" style="position:relative;display:inline-block;font-family:'Montserrat',sans-serif;">
+        <div class="cc-lang-trigger" style="display:inline-flex;align-items:center;gap:6px;background:none;border:none;padding:0;cursor:pointer;transition:color 0.2s;">
+          <i class="fas fa-language" style="font-size:14px;color:var(--text-muted);pointer-events:none;transition:color 0.2s;"></i>
+          <span style="color:var(--text-light);font-size:0.9rem;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;pointer-events:none;transition:color 0.2s;">${currentLabel}</span>
+          <i class="fas fa-chevron-down" style="font-size:0.7rem;color:var(--text-muted);pointer-events:none;transition:color 0.2s;"></i>
+        </div>
+        <div class="cc-lang-menu" style="display:none;position:absolute;top:calc(100% + 5px);right:0;background:#141414;border:1px solid #333;border-radius:8px;overflow:hidden;z-index:999999;min-width:130px;box-shadow:0 10px 25px rgba(0,0,0,0.9);">
+          ${optionsHtml}
+        </div>
+      </div>`;
+
+      const trigger = langContainer.querySelector(".cc-lang-trigger");
+      const menu = langContainer.querySelector(".cc-lang-menu");
+
+      // Hover — funciona en desktop, ignorado en touch
+      const _ac2 = getComputedStyle(document.documentElement)
+        .getPropertyValue("--accent-color")
+        .trim();
+      const _mc2 = getComputedStyle(document.documentElement)
+        .getPropertyValue("--text-muted")
+        .trim();
+      const _lc2 = getComputedStyle(document.documentElement)
+        .getPropertyValue("--text-light")
+        .trim();
+      trigger.addEventListener("mouseenter", () => {
+        trigger.querySelectorAll("span").forEach((s) => (s.style.color = _ac2));
+        trigger.querySelectorAll("i").forEach((i) => (i.style.color = _ac2));
+      });
+      trigger.addEventListener("mouseleave", () => {
+        trigger.querySelectorAll("span").forEach((s) => (s.style.color = _lc2));
+        trigger.querySelectorAll("i").forEach((i) => (i.style.color = _mc2));
+      });
+
+      trigger.addEventListener("click", (e) => {
+        e.stopPropagation();
+        menu.style.display = menu.style.display === "block" ? "none" : "block";
+      });
+      document.addEventListener("click", () => {
+        menu.style.display = "none";
+      });
+
+      langContainer.querySelectorAll(".cc-lang-option").forEach((opt) => {
+        opt.addEventListener("click", (e) => {
+          e.stopPropagation();
+          menu.style.display = "none";
+          _spChangeLang(seriesId, opt.dataset.lang);
+          langContainer.querySelectorAll(".cc-lang-option").forEach((o) => {
+            const isActive = o.dataset.lang === opt.dataset.lang;
+            o.style.background = isActive
+              ? "var(--accent-color)"
+              : "transparent";
+            o.style.color = isActive ? "#fff" : "#aaa";
+            o.classList.toggle("active", isActive);
+          });
+          const span = trigger.querySelector("span");
+          if (span) span.textContent = opt.textContent.trim();
+        });
+      });
+
+      langContainer.style.display = "";
+    } else {
+      langContainer.style.display = "none";
+    }
+  }
+
+  // ── Selector de idioma en desktop (sp-ps-inline-lang-desktop) ──────
+  const langContainerDesktop = document.getElementById(
+    "sp-ps-inline-lang-desktop",
+  );
+  if (langContainerDesktop) {
+    const activeEpForLangD = (episodesData[activeSeasonKey] || [])[
+      activeEpIndex
+    ];
+    const tracksD = activeEpForLangD ? getLangTracks(activeEpForLangD) : [];
+
+    if (tracksD.length > 1) {
+      const currentLabelD =
+        tracksD.find((t) => t.lang === lang)?.label || tracksD[0].label;
+      const optionsHtmlD = tracksD
+        .map(
+          (t) => `
+        <div class="cc-lang-option ${t.lang === lang ? "active" : ""}" data-lang="${t.lang}"
+          style="padding:10px 15px;cursor:pointer;
+                 color:${t.lang === lang ? "#fff" : "#aaa"};
+                 background:${t.lang === lang ? "var(--accent-color)" : "transparent"};
+                 font-size:11px;font-weight:bold;text-transform:uppercase;
+                 transition:0.2s;border-bottom:1px solid #222;">
+          ${t.label}
+        </div>`,
+        )
+        .join("");
+
+      langContainerDesktop.innerHTML = `
+        <div class="cc-custom-lang-wrapper" style="position:relative;display:inline-block;font-family:'Montserrat',sans-serif;">
+          <div class="cc-lang-trigger" style="display:inline-flex;align-items:center;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.15);border-radius:8px;padding:7px 12px;cursor:pointer;transition:all 0.2s ease;">
+            <i class="fas fa-language" style="color:var(--accent-color);font-size:14px;margin-right:8px;pointer-events:none;"></i>
+            <span style="color:#fff;font-size:12px;font-weight:700;text-transform:uppercase;padding-right:10px;letter-spacing:0.5px;pointer-events:none;">${currentLabelD}</span>
+            <i class="fas fa-chevron-down" style="font-size:10px;color:#aaa;pointer-events:none;"></i>
+          </div>
+          <div class="cc-lang-menu" style="display:none;position:absolute;top:calc(100% + 5px);right:0;background:#141414;border:1px solid #333;border-radius:8px;overflow:hidden;z-index:999999;min-width:130px;box-shadow:0 10px 25px rgba(0,0,0,0.9);">
+            ${optionsHtmlD}
+          </div>
+        </div>`;
+
+      const triggerD = langContainerDesktop.querySelector(".cc-lang-trigger");
+      const menuD = langContainerDesktop.querySelector(".cc-lang-menu");
+
+      triggerD.addEventListener("click", (e) => {
+        e.stopPropagation();
+        menuD.style.display =
+          menuD.style.display === "block" ? "none" : "block";
+      });
+      document.addEventListener("click", () => {
+        menuD.style.display = "none";
+      });
+
+      langContainerDesktop
+        .querySelectorAll(".cc-lang-option")
+        .forEach((opt) => {
+          opt.addEventListener("click", (e) => {
+            e.stopPropagation();
+            menuD.style.display = "none";
+            _spChangeLang(seriesId, opt.dataset.lang);
+            langContainerDesktop
+              .querySelectorAll(".cc-lang-option")
+              .forEach((o) => {
+                const isActive = o.dataset.lang === opt.dataset.lang;
+                o.style.background = isActive
+                  ? "var(--accent-color)"
+                  : "transparent";
+                o.style.color = isActive ? "#fff" : "#aaa";
+                o.classList.toggle("active", isActive);
+              });
+            const span = triggerD.querySelector("span");
+            if (span) span.textContent = opt.textContent.trim();
+          });
+        });
+
+      langContainerDesktop.style.display = "";
+    } else {
+      langContainerDesktop.style.display = "none";
+    }
+  }
+
+  // ── Episodios ───────────────────────────────────────────────────────
+  const listContainer = document.getElementById("sp-ps-episode-list");
+  if (!listContainer) return;
+  listContainer.innerHTML = "";
+
+  const episodes = episodesData[activeSeasonKey] || [];
+  episodes.forEach((ep, idx) => {
+    const thumbUrl = ep.thumbnail || ep.thumb || ep.image || "";
+    const epNum = ep.episodeNumber || idx + 1;
+    const epTitle = ep.title || `Episodio ${epNum}`;
+    const epDesc = ep.description || ep.synopsis || ep.desc || "";
+    const epDur = ep.duration || ep.duracion || "";
+    const isActive = idx === activeEpIndex;
+
+    const item = document.createElement("div");
+    item.className =
+      "sp-episode-item sp-episode-item-mobile" + (isActive ? " active" : "");
+    item.id = `sp-ps-ep-${seriesId}-${activeSeasonKey}-${idx}`;
+    item.innerHTML = `
+  <div class="sp-ep-thumb">
+    ${thumbUrl ? `<img src="${thumbUrl}" alt="${epTitle}" loading="lazy">` : `<span class="sp-ep-thumb-num">E${String(epNum).padStart(2, "0")}</span>`}
+    <span class="sp-ep-num">${String(epNum).padStart(2, "0")}</span>
+    ${epDur ? `<span class="sp-ep-duration-badge">${epDur}</span>` : ""}
+    <div class="sp-ep-play-overlay">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><polygon points="5,3 19,12 5,21"/></svg>
+    </div>
+  </div>
+  <div class="sp-ep-info">
+    <div class="sp-ep-name">${epTitle}</div>
+    ${epDesc ? `<div class="sp-ep-desc">${epDesc}</div>` : ""}
+  </div>`;
+
+    item.addEventListener("click", () => {
+      // Marcar activo
+      listContainer
+        .querySelectorAll(".sp-episode-item")
+        .forEach((i) => i.classList.remove("active"));
+      item.classList.add("active");
+
+      window._spCurrentEpisodeData = {
+        ...ep,
+        _season: activeSeasonKey,
+        _index: idx,
+      };
+
+      // Reproducir
+      const t = getLangTracks(ep);
+      const track = t.find((x) => x.lang === lang) || t[0];
+      if (track)
+        loadSeriesInDetailPlayer(
+          track.id,
+          seriesId,
+          { ...ep, _season: activeSeasonKey, _index: idx },
+          track.lang,
+        );
+      _updateSpPsInfo(ep, activeSeasonKey, seriesId, track?.label || "", idx);
+      item.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+
+    listContainer.appendChild(item);
+  });
+
+  // Scroll al episodio activo
+  requestAnimationFrame(() => {
+    listContainer
+      .querySelector(".sp-episode-item.active")
+      ?.scrollIntoView({ block: "nearest" });
+  });
+
+  // Actualizar strip info con el episodio activo actual
+  const activeEp = episodes[activeEpIndex];
+  if (activeEp) {
+    window._spCurrentEpisodeData = {
+      ...activeEp,
+      _season: activeSeasonKey,
+      _index: activeEpIndex,
+    };
+    const t = getLangTracks(activeEp);
+    const track = t.find((x) => x.lang === lang) || t[0];
+    _updateSpPsInfo(
+      activeEp,
+      activeSeasonKey,
+      seriesId,
+      track?.label || "",
+      activeEpIndex,
+    );
+  }
+}
+
+// ── Actualiza la franja info debajo del video ──
+function _updateSpPsInfo(ep, seasonKey, seriesId, langLabel, epIndex = 0) {
+  const postersData =
+    shared.appState.content.seasonPosters[seriesId]?.[seasonKey] || {};
+  const customLabel = postersData.etiqueta || "";
+  const isSpecial = [
+    "pelicula",
+    "película",
+    "especial",
+    "ova",
+    "movie",
+    "special",
+  ].some((s) => String(seasonKey).toLowerCase().includes(s));
+  const epNum = ep.episodeNumber || epIndex + 1;
+  const seasonLabel = customLabel
+    ? `${customLabel} · Ep ${epNum}`
+    : isSpecial
+      ? "Especial / Película"
+      : `Temporada ${String(seasonKey).replace("T", "")} · Ep ${epNum}`;
+
+  const titleBar = document.getElementById("sp-player-title-bar");
+  const epTitleEl = document.getElementById("sp-ps-ep-title");
+  const langEl = document.getElementById("sp-player-lang");
+  const durEl = document.getElementById("sp-player-duration");
+  const finishEl = document.getElementById("sp-player-finish-time");
+  const estrenoEl = document.getElementById("sp-player-estreno");
+  const synEl = document.getElementById("sp-ps-synopsis-text");
+
+  if (titleBar) titleBar.textContent = seasonLabel;
+  if (epTitleEl) epTitleEl.textContent = ep.title || "";
+  if (langEl) langEl.textContent = langLabel;
+
+  // Sincronizar dropdown de idioma inline (sp-ps-inline-lang)
+  const _ib1 = document.getElementById("sp-ps-lang-btn-1");
+  const _ib2 = document.getElementById("sp-ps-lang-btn-2");
+  const _lbLabel = document.getElementById("sp-ps-lang-label");
+  if (_ib1 && _ib2 && langLabel) {
+    const _lbl = langLabel.toLowerCase();
+    const _isEs = ["latino", "español", "castellano", "doblado", "esp"].some(
+      (s) => _lbl.includes(s),
+    );
+    _ib1.classList.toggle("active", !_isEs);
+    _ib2.classList.toggle("active", _isEs);
+    if (_lbLabel)
+      _lbLabel.textContent = _isEs ? _ib2.textContent : _ib1.textContent;
+  }
+  const rawDur = ep.duration || ep.duracion || "";
+  if (durEl) durEl.textContent = rawDur;
+  if (estrenoEl) estrenoEl.textContent = "";
+  if (finishEl) {
+    const ft = rawDur ? calculateFinishTime(rawDur) : null;
+    const rawEstreno = ep.fechaEstreno || "";
+    let fechaStr = "";
+    if (rawEstreno) {
+      const meses = [
+        "Enero",
+        "Febrero",
+        "Marzo",
+        "Abril",
+        "Mayo",
+        "Junio",
+        "Julio",
+        "Agosto",
+        "Septiembre",
+        "Octubre",
+        "Noviembre",
+        "Diciembre",
+      ];
+      let dia, mes, anio;
+      if (rawEstreno.includes("T") || rawEstreno.includes("-")) {
+        const d = new Date(rawEstreno);
+        dia = d.getUTCDate();
+        mes = d.getUTCMonth();
+        anio = d.getUTCFullYear();
+      } else if (rawEstreno.includes("/")) {
+        const p = rawEstreno.split("/");
+        dia = parseInt(p[0], 10);
+        mes = parseInt(p[1], 10) - 1;
+        anio = p[2];
+      }
+      if (dia && meses[mes] && anio)
+        fechaStr = `${dia} de ${meses[mes]} de ${anio}`;
+    }
+    // Desktop: texto completo
+    const partesDesktop = [];
+    if (fechaStr) partesDesktop.push(`Fecha de emisión: ${fechaStr}`);
+    if (ft) partesDesktop.push(`Terminas de ver a las ${ft}`);
+    finishEl.textContent = partesDesktop.join(" · ");
+    // Móvil: dos líneas
+    const finishMobileEl = document.getElementById(
+      "sp-player-finish-time-mobile",
+    );
+    if (finishMobileEl) {
+      const lineaMobile = [];
+      if (fechaStr) lineaMobile.push(`Emisión: ${fechaStr}`);
+      if (ft) lineaMobile.push(`Terminas a las ${ft}`);
+      finishMobileEl.innerHTML = lineaMobile.join("<br>");
+    }
+  }
+  if (synEl) synEl.textContent = ep.description || ep.synopsis || ep.desc || "";
+
+  // Colapsar expandible y resetear chevron al cambiar episodio
+  const _synWrap = document.getElementById("sp-ps-synopsis-wrap");
+  const _chevIcon = document.querySelector(
+    "#sp-ps-chevron .sp-ps-chevron-icon",
+  );
+  if (_synWrap) _synWrap.classList.remove("sp-ps-expanded");
+  if (_chevIcon) _chevIcon.style.transform = "rotate(0deg)";
+
+  // Re-medir .sp-ps-left tras inyectar fechas — el ResizeObserver puede llegar tarde
+  // en algunos browsers; un rAF garantiza que el layout ya fue calculado.
+  if (window.matchMedia("(max-width: 768px)").matches) {
+    requestAnimationFrame(() => {
+      const dv = document.getElementById("sp-detail-view");
+      const lc = dv?.querySelector(".sp-ps-left, .sp-left-col");
+      if (lc) {
+        document.documentElement.style.setProperty(
+          "--sp-left-h",
+          lc.offsetHeight + "px",
         );
       }
     });
   }
+}
+
+function loadSeriesInDetailPlayer(videoId, seriesId, episodeData, lang = "es") {
+  const container = document.getElementById("sp-video-container");
+  if (!container) return;
+
+  // ✅ AGREGAR ESTAS LÍNEAS — setean el estado que lee el panel de episodios
+  shared.appState.player.activeSeriesId = seriesId;
+  if (episodeData?._season !== undefined) {
+    shared.appState.player.state[seriesId] = {
+      ...shared.appState.player.state[seriesId],
+      season: episodeData._season,
+      episodeIndex: episodeData._index ?? 0,
+      lang,
+    };
+  }
+
+  // Guardar pendingHistorySave para registrar historial al cerrar
+  if (
+    episodeData &&
+    episodeData._season !== undefined &&
+    episodeData._index !== undefined
+  ) {
+    commitAndClearPendingSave();
+    shared.appState.player.pendingHistorySave = {
+      contentId: seriesId,
+      type: "series",
+      episodeInfo: {
+        season: episodeData._season,
+        index: episodeData._index,
+        title: episodeData.title || "",
+      },
+    };
+  }
+
+  if (shared.appState.player.activeCineInstance) {
+    shared.appState.player.activeCineInstance.destroy();
+    shared.appState.player.activeCineInstance = null;
+  }
+  container.innerHTML = "";
+
+  // ── NUEVO: Blindaje contra el scroll "aplastante" de móviles ──
+  container.style.setProperty("position", "relative", "important");
+  container.style.setProperty(
+    "flex-shrink",
+    "0",
+    "important",
+  ); /* Prohíbe que se encoja */
+  container.style.setProperty(
+    "aspect-ratio",
+    "16/9",
+    "important",
+  ); /* Mantiene proporción de cine */
+
+  const artContainer = document.createElement("div");
+  artContainer.className = "artplayer-container";
+  // Forzamos posición absoluta para que respete milimétricamente a su contenedor padre
+  artContainer.style.cssText =
+    "position:absolute !important; top:0 !important; left:0 !important; width:100% !important; height:100% !important; background:#000 !important;";
+  container.appendChild(artContainer);
+
+  shared.appState.player.activeCineInstance = new CinePlayer(artContainer);
+
+  // Subtitulos segun idioma
+  let subId, subType;
+  if (lang === "en" && episodeData.subId_en) {
+    subId = episodeData.subId_en;
+    subType = episodeData.subType_en || "srt";
+  } else if (episodeData.subId_es) {
+    subId = episodeData.subId_es;
+    subType = episodeData.subType_es || "srt";
+  } else {
+    const config = ContentManager.getSubtitleConfig(episodeData);
+    subId = config.subId;
+    subType = config.subType;
+  }
+
+  const seriesData = findContentData(seriesId) || {};
+
+  shared.appState.player.activeCineInstance.load({
+    videoId,
+    subId,
+    subType,
+    title: episodeData.title || seriesData.title || "",
+    poster:
+      episodeData.thumbnail ||
+      episodeData.thumb ||
+      episodeData.image ||
+      seriesData.poster ||
+      seriesData.image ||
+      "",
+    grayscale: seriesData.blancoynegro === "si",
+  });
+}
+
+export function loadSeriesTrack(videoId, seriesId, seriesData, lang) {
+  const currentEp = window._spCurrentEpisodeData;
+  if (currentEp) {
+    let resolvedVideoId;
+    if (lang === "en" && currentEp.videoId_en)
+      resolvedVideoId = currentEp.videoId_en;
+    else if (lang === "es" && currentEp.videoId_es)
+      resolvedVideoId = currentEp.videoId_es;
+    else resolvedVideoId = currentEp.videoId;
+
+    loadSeriesInDetailPlayer(resolvedVideoId, seriesId, currentEp, lang);
+    return;
+  }
+
+  // Fallback: primer episodio de primera temporada
+  const episodesData = shared.appState.content.seriesEpisodes[seriesId] || {};
+  const seasonKeys = Object.keys(episodesData);
+  const firstSeasonKey = seasonKeys[0];
+  const firstEpisodes = episodesData[firstSeasonKey] || [];
+  const firstEpisode = Array.isArray(firstEpisodes)
+    ? firstEpisodes[0]
+    : Object.values(firstEpisodes)[0];
+
+  loadSeriesInDetailPlayer(videoId, seriesId, firstEpisode || seriesData, lang);
 }
 
 export function playRandomEpisode(seriesId) {
@@ -2437,4 +5864,8 @@ function calculateFinishTime(durationStr) {
     minute: "2-digit",
     hour12: true,
   });
+}
+
+export function loadMovieTrack(videoId, movieId, movieData, lang) {
+  loadMovieInPlayer(videoId, movieId, movieData, lang);
 }
