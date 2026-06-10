@@ -619,10 +619,15 @@ async function fetchInitialDataWithCache() {
 
   const processData = (data) => {
     window.processDataPublic = processData;
+    // Si Sheets devuelve un error de cuota, abortar silenciosamente
+    if (!data || typeof data === "string") {
+      console.warn("[processData] Datos inválidos recibidos (posible error de cuota de Sheets):", data);
+      return;
+    }
 
     // ── 1. TRADUCTOR UNIVERSAL (Arregla las mayúsculas de la API) ──
     const normalizeItem = (item) => {
-      if (!item) return;
+      if (!item || typeof item !== "object") return;
 
       // Textos y tipo
       item.title =
