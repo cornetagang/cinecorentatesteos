@@ -704,7 +704,7 @@ if (grayscale) {
         this.container.style.filter = bynActivo
           ? "grayscale(100%) contrast(1.15) brightness(0.92)"
           : "";
-        art.notice.show = bynActivo ? "Modo Noir activado 🎞️" : "Color restaurado";
+        art.notice.show = bynActivo ? "Modo Blanco y Negro activado 🎞️" : "Color restaurado";
       },
     });
   });
@@ -1280,7 +1280,7 @@ if (grayscale) {
     // =======================================================
     // 📑 BOTÓN Y PANEL: LISTA DE EPISODIOS (series, desktop y móvil)
     // =======================================================
-    if (window.appState?.player?.activeSeriesId) art.controls.add({
+    if (window.appState?.player?.activeSeriesId && window.innerWidth > 768) art.controls.add({
       name: "episodes-list",
       position: "right",
       index: 25,
@@ -1288,7 +1288,7 @@ if (grayscale) {
       html: '<i class="art-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="#ffffff"><path d="M4 10h12v2H4zm0-4h16v2H4zm0 8h8v2H4zm10 0v6l5-3z"></path></svg></i>',
     });
 
-    if (window.appState?.player?.activeSeriesId) this._epSetupTimer = setTimeout(() => {
+    if (window.appState?.player?.activeSeriesId && window.innerWidth > 768) this._epSetupTimer = setTimeout(() => {
         this._epSetupTimer = null;
         const epControl = this.container.querySelector(
           ".art-control-episodes-list",
@@ -2010,28 +2010,85 @@ if (grayscale) {
     const drawer = document.createElement("div");
     drawer.className = "cp-drawer-mobile";
     drawer.innerHTML = `
-      <div class="cp-drawer-handle"></div>
       <div class="cp-drawer-content"></div>
+      <div class="cp-drawer-handle"></div>
     `;
     art.template.$player.appendChild(drawer);
 
     const drawerContent = drawer.querySelector(".cp-drawer-content");
 
     // ── 3. Contenido por tipo ──────────────────────────────────
-    const buildCCContent = () => `
-      <div class="cp-drawer-title">Subtítulos</div>
-      <div class="cp-drawer-section-label">TAMAÑO</div>
-      <div class="cp-drawer-list">
-        <div class="cp-drawer-item" data-size="16px">Pequeño</div>
-        <div class="cp-drawer-item active" data-size="20px">Normal</div>
-        <div class="cp-drawer-item" data-size="26px">Grande</div>
-      </div>
-      <div class="cp-drawer-section-label" style="margin-top:12px">FONDO</div>
-      <div class="cp-drawer-list">
-        <div class="cp-drawer-item active" data-bg="transparent">Transparente</div>
-        <div class="cp-drawer-item" data-bg="rgba(0,0,0,0.85)">Oscuro</div>
-      </div>
-    `;
+    const COLORS_MOB = [
+      { hex: "#ffffff", label: "Blanco"   },
+      { hex: "#000000", label: "Negro"    },
+      { hex: "#ff0000", label: "Rojo"     },
+      { hex: "#00cc00", label: "Verde"    },
+      { hex: "#0088ff", label: "Azul"     },
+      { hex: "#ffff00", label: "Amarillo" },
+      { hex: "#ff00ff", label: "Magenta"  },
+      { hex: "#00e5ff", label: "Cian"     },
+    ];
+    const buildCCContent = () => {
+      let ccPrefsMob = {};
+      try { ccPrefsMob = JSON.parse(localStorage.getItem("ccPrefs") || "{}"); } catch(_) {}
+      const pSize   = parseInt(ccPrefsMob.size   ?? 20);
+      const pColor  = ccPrefsMob.color  || "#ffffff";
+      const pBg     = ccPrefsMob.bg     || "none";
+      const pOutline= ccPrefsMob.outline !== false;
+      const rawPos  = parseFloat(ccPrefsMob.pos ?? 85);
+      const posLabel = rawPos <= 30 ? "Arriba" : rawPos <= 60 ? "Centro" : "Abajo";
+
+      const colorDots = COLORS_MOB.map(c => `
+        <div class="cp-cc-color-dot${pColor === c.hex ? " active" : ""}"
+          data-cc-color="${c.hex}"
+          style="background:${c.hex};width:32px;height:32px;border-radius:50%;cursor:pointer;border:2.5px solid ${pColor === c.hex ? "#fff" : "transparent"};flex-shrink:0;"
+          title="${c.label}"></div>`).join("");
+
+      const bgBtns = [
+        { val: "none",             label: "Ninguno" },
+        { val: "semi",             label: "Semi"    },
+        { val: "rgba(0,0,0,0.95)", label: "Sólido"  },
+      ].map(b => `<button class="cp-cc-bg-btn${pBg === b.val ? " active" : ""}" data-cc-bg="${b.val}"
+        style="flex:1;padding:10px 0;border-radius:8px;border:1px solid rgba(255,255,255,${pBg===b.val?'0.5':'0.15'});background:${pBg===b.val?'rgba(255,255,255,0.12)':'transparent'};color:#fff;font-size:0.8rem;cursor:pointer;">${b.label}</button>`).join("");
+
+      const stepBtn = "width:40px;height:40px;border-radius:50%;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.08);color:#fff;font-size:1.2rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;-webkit-tap-highlight-color:transparent;";
+
+      return `
+        <div class="cp-drawer-title" style="padding:14px 20px 10px;font-size:1rem;font-weight:700;color:#fff;">Subtítulos</div>
+        <div style="padding:0 20px 16px;display:flex;flex-direction:column;gap:14px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span style="font-size:0.7rem;font-weight:700;letter-spacing:0.08em;color:#94a3b8;">TAMAÑO</span>
+            <div style="display:flex;align-items:center;gap:12px;">
+              <button id="cp-cc-size-minus" style="${stepBtn}">−</button>
+              <span id="cp-cc-size-label" style="font-size:0.85rem;font-weight:700;color:#fff;min-width:40px;text-align:center;">${pSize}px</span>
+              <button id="cp-cc-size-plus"  style="${stepBtn}">+</button>
+            </div>
+          </div>
+          <div>
+            <div style="font-size:0.7rem;font-weight:700;letter-spacing:0.08em;color:#94a3b8;margin-bottom:10px;">COLOR</div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;">${colorDots}</div>
+          </div>
+          <div>
+            <div style="font-size:0.7rem;font-weight:700;letter-spacing:0.08em;color:#94a3b8;margin-bottom:8px;">FONDO</div>
+            <div style="display:flex;gap:8px;">${bgBtns}</div>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span style="font-size:0.7rem;font-weight:700;letter-spacing:0.08em;color:#94a3b8;">CONTORNO</span>
+            <div id="cp-cc-outline-toggle" style="width:42px;height:24px;border-radius:12px;background:${pOutline?'var(--accent-color,#3b82f6)':'rgba(255,255,255,0.15)'};cursor:pointer;position:relative;transition:background 0.2s;">
+              <div style="position:absolute;top:3px;${pOutline?'right:3px':'left:3px'};width:18px;height:18px;border-radius:50%;background:#fff;transition:all 0.2s;"></div>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span style="font-size:0.7rem;font-weight:700;letter-spacing:0.08em;color:#94a3b8;">POSICIÓN</span>
+            <div style="display:flex;align-items:center;gap:12px;">
+              <button id="cp-cc-pos-up"   style="${stepBtn}">↑</button>
+              <span id="cp-cc-pos-label" style="font-size:0.85rem;font-weight:700;color:#fff;min-width:48px;text-align:center;">${posLabel}</span>
+              <button id="cp-cc-pos-down" style="${stepBtn}">↓</button>
+            </div>
+          </div>
+        </div>`;
+    };
+
 
     const buildSettingsContent = () => {
       const pipHtml = document.pictureInPictureEnabled
@@ -2080,6 +2137,7 @@ if (grayscale) {
         </div>`;
 
       const items = epList
+        .filter(ep => String(ep?.proximamente || "").trim().toLowerCase() !== "si")
         .map((ep, idx) => {
           const isActive = idx === epIdx;
           const title = ep?.title || `Episodio ${idx + 1}`;
@@ -2156,29 +2214,106 @@ if (grayscale) {
     // ── 5. Eventos dentro del drawer ──────────────────────────
     const bindDrawerEvents = (type) => {
       if (type === "cc") {
-        drawerContent.querySelectorAll("[data-size]").forEach((el) => {
-          el.addEventListener("click", () => {
-            art.subtitle.style({ fontSize: el.dataset.size });
-            drawerContent
-              .querySelectorAll("[data-size]")
-              .forEach((e) => e.classList.remove("active"));
-            el.classList.add("active");
+        const saveCCPrefsMob = (patch) => {
+          let p = {};
+          try { p = JSON.parse(localStorage.getItem("ccPrefs") || "{}"); } catch(_) {}
+          Object.assign(p, patch);
+          localStorage.setItem("ccPrefs", JSON.stringify(p));
+        };
+        const applySubStyle = () => {
+          let p = {};
+          try { p = JSON.parse(localStorage.getItem("ccPrefs") || "{}"); } catch(_) {}
+          const color   = p.color   || "#ffffff";
+          const bg      = p.bg      || "none";
+          const outline = p.outline !== false;
+          const bgColor = bg === "none" ? "transparent" : bg === "semi" ? "rgba(0,0,0,0.5)" : bg;
+          const isTrans = bg === "none";
+          art.subtitle.style({
+            color,
+            fontSize: `${parseInt(p.size ?? 20)}px`,
+            backgroundColor: bgColor,
+            padding: isTrans ? "0px" : "4px 12px",
+            borderRadius: isTrans ? "0px" : "6px",
+            textShadow: outline ? "1px 1px 3px rgba(0,0,0,0.9), -1px -1px 3px rgba(0,0,0,0.9)" : "none",
+          });
+          const posEl = document.getElementById("sp-subtitle-track") || art.template.$subtitle;
+          if (posEl) posEl.style.bottom = `${p.pos ?? 85}%` === "85%" ? "" : `${100 - (p.pos ?? 85)}%`;
+        };
+        // Tamaño +/−
+        const sizeLabel = drawerContent.querySelector("#cp-cc-size-label");
+        const sizeMinus = drawerContent.querySelector("#cp-cc-size-minus");
+        const sizePlus  = drawerContent.querySelector("#cp-cc-size-plus");
+        const getSize = () => { let p={}; try{p=JSON.parse(localStorage.getItem("ccPrefs")||"{}")}catch(_){}; return parseInt(p.size??20); };
+        if (sizeMinus) sizeMinus.addEventListener("click", () => {
+          const v = Math.max(12, getSize() - 2);
+          sizeLabel.textContent = v + "px";
+          saveCCPrefsMob({ size: v });
+          applySubStyle();
+        });
+        if (sizePlus) sizePlus.addEventListener("click", () => {
+          const v = Math.min(40, getSize() + 2);
+          sizeLabel.textContent = v + "px";
+          saveCCPrefsMob({ size: v });
+          applySubStyle();
+        });
+        // Colores
+        drawerContent.querySelectorAll("[data-cc-color]").forEach(dot => {
+          dot.addEventListener("click", () => {
+            drawerContent.querySelectorAll("[data-cc-color]").forEach(d => {
+              d.style.border = "2.5px solid transparent";
+              d.classList.remove("active");
+            });
+            dot.style.border = "2.5px solid #fff";
+            dot.classList.add("active");
+            saveCCPrefsMob({ color: dot.dataset.ccColor });
+            applySubStyle();
           });
         });
-        drawerContent.querySelectorAll("[data-bg]").forEach((el) => {
-          el.addEventListener("click", () => {
-            const isTrans = el.dataset.bg === "transparent";
-            art.subtitle.style({
-              backgroundColor: el.dataset.bg,
-              padding: isTrans ? "0px" : "4px 12px",
-              borderRadius: isTrans ? "0px" : "6px",
-              textShadow: isTrans ? "1px 1px 3px rgba(0,0,0,0.9)" : "none",
+        // Fondo
+        drawerContent.querySelectorAll("[data-cc-bg]").forEach(btn => {
+          btn.addEventListener("click", () => {
+            drawerContent.querySelectorAll("[data-cc-bg]").forEach(b => {
+              b.style.background = "transparent";
+              b.style.borderColor = "rgba(255,255,255,0.15)";
             });
-            drawerContent
-              .querySelectorAll("[data-bg]")
-              .forEach((e) => e.classList.remove("active"));
-            el.classList.add("active");
+            btn.style.background = "rgba(255,255,255,0.12)";
+            btn.style.borderColor = "rgba(255,255,255,0.5)";
+            saveCCPrefsMob({ bg: btn.dataset.ccBg });
+            applySubStyle();
           });
+        });
+        // Contorno toggle
+        const outlineToggle = drawerContent.querySelector("#cp-cc-outline-toggle");
+        if (outlineToggle) outlineToggle.addEventListener("click", () => {
+          let p = {};
+          try { p = JSON.parse(localStorage.getItem("ccPrefs") || "{}"); } catch(_) {}
+          const newVal = p.outline === false ? true : false;
+          saveCCPrefsMob({ outline: newVal });
+          outlineToggle.style.background = newVal ? "var(--accent-color,#3b82f6)" : "rgba(255,255,255,0.15)";
+          outlineToggle.querySelector("div").style.cssText = `position:absolute;top:3px;${newVal?"right":"left"}:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:all 0.2s;`;
+          applySubStyle();
+        });
+        // Posición ↑/↓ (3 pasos: Arriba=15, Centro=50, Abajo=85)
+        const POS_STEPS = [{ label:"Arriba", val:15 },{ label:"Centro", val:50 },{ label:"Abajo", val:85 }];
+        const posLabel  = drawerContent.querySelector("#cp-cc-pos-label");
+        const posUp     = drawerContent.querySelector("#cp-cc-pos-up");
+        const posDown   = drawerContent.querySelector("#cp-cc-pos-down");
+        const getCurStep = () => {
+          let p={}; try{p=JSON.parse(localStorage.getItem("ccPrefs")||"{}")}catch(_){}
+          const v = parseFloat(p.pos ?? 85);
+          return v <= 30 ? 0 : v <= 60 ? 1 : 2;
+        };
+        if (posUp) posUp.addEventListener("click", () => {
+          const s = POS_STEPS[Math.max(0, getCurStep() - 1)];
+          posLabel.textContent = s.label;
+          saveCCPrefsMob({ pos: s.val });
+          applySubStyle();
+        });
+        if (posDown) posDown.addEventListener("click", () => {
+          const s = POS_STEPS[Math.min(2, getCurStep() + 1)];
+          posLabel.textContent = s.label;
+          saveCCPrefsMob({ pos: s.val });
+          applySubStyle();
         });
       }
 
@@ -2416,7 +2551,9 @@ if (grayscale) {
     // ── Con subs SRT: si el botón ya existe no hay nada que hacer ─
     if (existingBtn) return;
 
-    // ── Con subs SRT: agregar botón + panel ───────────────────
+    // ── Con subs SRT: agregar botón + panel (solo desktop) ───
+    if (window.innerWidth <= 768) return;
+
     const ccIconSvg =
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="#ffffff"><path d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 11H7c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h4v1.5H7.5v3h3.5V15zm8 0h-4c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h4v1.5h-3.5v3H19V15z"/></svg>';
 
@@ -2471,7 +2608,7 @@ if (grayscale) {
       const panel = document.createElement("div");
       panel.className = "custom-cc-panel";
       // Posición y tamaño con !important para ganar al CSS externo
-      panel.style.cssText = "position:absolute;right:0;bottom:100%;box-sizing:border-box;";
+      panel.style.cssText = "position:absolute;right:auto;left:50%;transform:translateX(-50%);bottom:calc(100% + 8px);box-sizing:border-box;";
       panel.style.setProperty("width",      "290px", "important");
       panel.style.setProperty("min-width",  "290px", "important");
       panel.style.setProperty("padding",    "0",     "important");
@@ -2525,13 +2662,13 @@ if (grayscale) {
             <div style="padding:10px 16px 14px;display:flex;flex-direction:column;gap:14px;">
 
               <!-- TAMAÑO -->
-              <div>
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;">
-                  <span style="color:#aaa;font-size:0.7rem;letter-spacing:0.08em;text-transform:uppercase;">Tamaño</span>
-                  <span id="cc-size-val" style="color:var(--accent-color,#e5731a);font-size:0.78rem;font-weight:700;min-width:36px;text-align:right;">${curSize}px</span>
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span style="color:#aaa;font-size:0.7rem;letter-spacing:0.08em;text-transform:uppercase;">Tamaño</span>
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <button id="cc-size-minus" style="width:28px;height:28px;border-radius:50%;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.07);color:#fff;font-size:1rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;">−</button>
+                  <span id="cc-size-val" style="color:var(--accent-color,#e5731a);font-size:0.78rem;font-weight:700;min-width:36px;text-align:center;">${curSize}px</span>
+                  <button id="cc-size-plus"  style="width:28px;height:28px;border-radius:50%;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.07);color:#fff;font-size:1rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;">+</button>
                 </div>
-                <input id="cc-size-slider" type="range" min="12" max="44" step="1" value="${curSize}"
-                  style="width:100%;accent-color:var(--accent-color,#e5731a);cursor:pointer;height:4px;">
               </div>
 
               <!-- COLOR -->
@@ -2584,16 +2721,12 @@ if (grayscale) {
               </div>
 
               <!-- POSICIÓN -->
-              <div>
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;">
-                  <span style="color:#aaa;font-size:0.7rem;letter-spacing:0.08em;text-transform:uppercase;">Posición</span>
-                  <span id="cc-pos-label" style="color:var(--accent-color,#e5731a);font-size:0.78rem;font-weight:700;">${posLabel}</span>
-                </div>
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span style="color:#aaa;font-size:0.7rem;letter-spacing:0.08em;text-transform:uppercase;">Posición</span>
                 <div style="display:flex;align-items:center;gap:8px;">
-                  <span style="color:#555;font-size:0.65rem;">▼</span>
-                  <input id="cc-pos-slider" type="range" min="2" max="50" step="1" value="${curBottom}"
-                    style="flex:1;accent-color:var(--accent-color,#e5731a);cursor:pointer;height:4px;">
-                  <span style="color:#555;font-size:0.65rem;">▲</span>
+                  <button id="cc-pos-up"   style="width:28px;height:28px;border-radius:50%;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.07);color:#fff;font-size:1rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;">↑</button>
+                  <span id="cc-pos-label" style="color:var(--accent-color,#e5731a);font-size:0.78rem;font-weight:700;min-width:44px;text-align:center;">${posLabel}</span>
+                  <button id="cc-pos-down" style="width:28px;height:28px;border-radius:50%;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.07);color:#fff;font-size:1rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;">↓</button>
                 </div>
               </div>
 
@@ -2604,10 +2737,18 @@ if (grayscale) {
 
 
         // — Tamaño —
-        const sizeSlider = panel.querySelector("#cc-size-slider");
-        const sizeVal    = panel.querySelector("#cc-size-val");
-        sizeSlider.addEventListener("input", () => {
-          const v = parseInt(sizeSlider.value);
+        const sizeVal   = panel.querySelector("#cc-size-val");
+        const sizeMinus = panel.querySelector("#cc-size-minus");
+        const sizePlus  = panel.querySelector("#cc-size-plus");
+        const getSize = () => parseInt(ccPrefs.size ?? pSize);
+        sizeMinus.addEventListener("click", () => {
+          const v = Math.max(12, getSize() - 2);
+          sizeVal.textContent = v + "px";
+          savePrefs({ size: v });
+          applySubStyle({ size: v });
+        });
+        sizePlus.addEventListener("click", () => {
+          const v = Math.min(44, getSize() + 2);
           sizeVal.textContent = v + "px";
           savePrefs({ size: v });
           applySubStyle({ size: v });
@@ -2640,13 +2781,25 @@ if (grayscale) {
         });
 
         // — Posición —
-        const posSlider = panel.querySelector("#cc-pos-slider");
-        const posLbl    = panel.querySelector("#cc-pos-label");
-        posSlider.addEventListener("input", () => {
-          const v = parseInt(posSlider.value);
-          posLbl.textContent = v <= 6 ? "Abajo" : v >= 40 ? "Arriba" : "Centro";
-          savePrefs({ bottom: v });
-          applySubStyle({ bottom: v });
+        const POS_STEPS = [{ label:"Abajo", val:5 },{ label:"Centro", val:25 },{ label:"Arriba", val:45 }];
+        const posLbl  = panel.querySelector("#cc-pos-label");
+        const posUp   = panel.querySelector("#cc-pos-up");
+        const posDown = panel.querySelector("#cc-pos-down");
+        const getCurStep = () => {
+          const v = parseInt(ccPrefs.bottom ?? pBottom);
+          return v <= 6 ? 0 : v >= 40 ? 2 : 1;
+        };
+        posUp.addEventListener("click", () => {
+          const s = POS_STEPS[Math.min(2, getCurStep() + 1)];
+          posLbl.textContent = s.label;
+          savePrefs({ bottom: s.val });
+          applySubStyle({ bottom: s.val });
+        });
+        posDown.addEventListener("click", () => {
+          const s = POS_STEPS[Math.max(0, getCurStep() - 1)];
+          posLbl.textContent = s.label;
+          savePrefs({ bottom: s.val });
+          applySubStyle({ bottom: s.val });
         });
       };
 
@@ -4204,6 +4357,7 @@ export function populateEpisodeList(seriesId, seasonNum) {
   container.innerHTML = "";
 
   [...episodes]
+    .filter(ep => String(ep?.proximamente || "").trim().toLowerCase() !== "si")
     .sort((a, b) => a.episodeNumber - b.episodeNumber)
     .forEach((episode, index) => {
       const card = document.createElement("div");
@@ -4403,12 +4557,14 @@ function openEpisode(seriesId, season, newEpisodeIndex) {
       subType = _cfg.subType;
     }
 
+    const _seriesDataForGrayscale = findContentData(seriesId) || {};
     shared.appState.player.activeCineInstance.load({
       videoId,
       subId,
       subType,
       title: episode.title || `Episodio ${newEpisodeIndex + 1}`,
       poster: episode.thumbnail || episode.thumb || episode.image || "",
+      grayscale: _seriesDataForGrayscale.blancoynegro === "si",
     });
   }
 
@@ -4685,6 +4841,7 @@ function loadMovieInPlayer(videoId, movieId, movieData, lang = "es") {
     subType,
     title: movieData.title || "",
     poster: movieData.banner || movieData.poster || movieData.image || "",
+    grayscale: movieData.blancoynegro === "si",
   });
 }
 
@@ -5447,7 +5604,8 @@ function _fillSpPsPanel(seriesId, activeSeasonKey, activeEpIndex, lang) {
   if (!listContainer) return;
   listContainer.innerHTML = "";
 
-  const episodes = episodesData[activeSeasonKey] || [];
+  const episodes = (episodesData[activeSeasonKey] || [])
+    .filter(ep => String(ep?.proximamente || "").trim().toLowerCase() !== "si");
   episodes.forEach((ep, idx) => {
     const thumbUrl = ep.thumbnail || ep.thumb || ep.image || "";
     const epNum = ep.episodeNumber || idx + 1;
