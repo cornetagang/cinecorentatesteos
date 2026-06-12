@@ -152,6 +152,51 @@ export function initPlayer(dependencies) {
       }
     }
   });
+
+  // ─── Guardar "Continuar viendo" si se cierra sin usar el botón Volver ──
+  // Hoy commitAndClearPendingSave() y el flush del tiempo de reproducción
+  // solo ocurren en navegaciones internas (cambiar de episodio, "Volver",
+  // destroyPrevious). Si el usuario cierra la pestaña, el navegador, o
+  // cambia de app/minimiza en móvil, nada de eso se dispara y el episodio
+  // que se estaba viendo nunca queda registrado.
+  //   - pagehide: cerrar pestaña/navegador o navegar fuera de la página.
+  //   - visibilitychange (hidden): cubre minimizar / cambiar de app en
+  //     móviles, donde pagehide no siempre es confiable.
+  const flushOnExit = () => {
+    flushActivePlayerProgress();
+    commitAndClearPendingSave();
+  };
+  window.addEventListener("pagehide", flushOnExit);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushOnExit();
+  });
+}
+
+// Guarda (o limpia, si ya casi terminó) el tiempo actual del player activo
+// en localStorage, igual que hace el timeupdate cada 3s — pero al instante,
+// para no perder hasta 3s de progreso si el cierre ocurre justo entre ciclos.
+function flushActivePlayerProgress() {
+  try {
+    const container = shared?.appState?.player?.activeCineInstance?.container;
+    const art = container?._artInstance;
+    const sid = container?._artStorageId;
+    if (!art || !sid) return;
+
+    const t = art.currentTime;
+    const d = art.duration;
+    if (!(t > 5) || !(d > 0)) return;
+
+    if (d - t < 60) {
+      localStorage.removeItem(sid);
+    } else {
+      localStorage.setItem(sid, t);
+    }
+
+    const pending = shared.appState.player.pendingHistorySave;
+    if (pending) {
+      pending.episodeInfo.progress = d - t < 60 ? 1 : Math.min(1, Math.max(0, t / d));
+    }
+  } catch (_) {}
 }
 
 // ===========================================================
@@ -238,6 +283,7 @@ class CinePlayer {
     title = "",
     poster = "",
     grayscale = false,
+    onHalfway = null,
   }) {
     // Limpiar timers y doc-listeners de la carga anterior (evita acumulación de handlers)
     if (this._epSetupTimer) {
@@ -274,6 +320,10 @@ class CinePlayer {
       this._mobileDrawerEl = null;
     }
 
+    // Detener pre-fetch de la carga anterior
+    this._stopPreFetch?.();
+    this._stopPreFetch = null;
+
     destroyPrevious(this.container);
     this.container.innerHTML = "";
 
@@ -284,6 +334,11 @@ class CinePlayer {
 
     if (!isDriveId(videoId)) {
       this._mountIframeFallback(videoId);
+      // Sin ArtPlayer no hay eventos de progreso; usamos 30 min como proxy
+      if (onHalfway) {
+        clearTimeout(this._halfwayTimer);
+        this._halfwayTimer = setTimeout(onHalfway, 30 * 60 * 1000);
+      }
       return;
     }
 
@@ -294,7 +349,10 @@ class CinePlayer {
       ? ContentManager.getSubtitleConfig({ subId, subType }).subType
       : null;
 
-    const available = await this._pingWorker(videoUrl);
+    const [available, { isFastStart, contentLength }] = await Promise.all([
+      this._pingWorker(videoUrl),
+      this._detectFastStart(videoUrl),
+    ]);
     if (!available) {
       this.showError(
         "El servidor de video no está disponible. Intenta más tarde.",
@@ -324,7 +382,7 @@ class CinePlayer {
       lang: navigator.language.toLocaleLowerCase() || "es",
       moreVideoAttr: {
         playsinline: true,
-        preload: "metadata",
+        preload: "auto",
         crossOrigin: "anonymous",
       },
 
@@ -475,6 +533,22 @@ class CinePlayer {
       this.showError(msg);
     });
 
+    // ─── Listener de 50% para historial de películas ─────────
+    if (onHalfway) {
+      let halfwayFired = false;
+      art.on("timeupdate", () => {
+        if (!halfwayFired && art.duration > 0 && art.currentTime >= art.duration * 0.5) {
+          halfwayFired = true;
+          onHalfway();
+        }
+      });
+    }
+
+    // ─── Pre-fetch en background (solo archivos fast-start) ──
+    if (isFastStart && contentLength > 0) {
+      this._startPreFetch(videoUrl, contentLength, art);
+    }
+
     // ─── ResizeObserver para mantener proporciones ───────────
     this._observeResize();
 
@@ -584,6 +658,9 @@ class CinePlayer {
             );
           },
         });
+
+        // 3. Indicador de conexión + buffer (icono de señal en controles)
+        this._setupNetworkIndicator(art);
       }
     });
 
@@ -799,13 +876,14 @@ if (grayscale) {
               art.play();
             });
 
+            // Limpiar sub anterior antes de asignar el nuevo
+            art.subtitle.show = false;
+            art.subtitle.url = "";
             if (newSubUrl && subType === "srt") {
               art.subtitle.url = newSubUrl;
               art.subtitle.show = true;
             } else if (newSubUrl && subType === "ass") {
               art.plugins?.ass?.setTrack?.(newSubUrl);
-            } else {
-              art.subtitle.show = false;
             }
 
             const cineInst = window.appState?.player?.activeCineInstance;
@@ -961,13 +1039,14 @@ if (grayscale) {
               art.play();
             });
 
+            // Limpiar sub anterior antes de asignar el nuevo
+            art.subtitle.show = false;
+            art.subtitle.url = "";
             if (newSubUrl && subType === "srt") {
               art.subtitle.url = newSubUrl;
               art.subtitle.show = true;
             } else if (newSubUrl && subType === "ass") {
               art.plugins?.ass?.setTrack?.(newSubUrl);
-            } else {
-              art.subtitle.show = false;
             }
 
             const cineInst = window.appState?.player?.activeCineInstance;
@@ -1073,6 +1152,17 @@ if (grayscale) {
         } else {
           localStorage.setItem(videoStorageId, art.currentTime);
         }
+
+        // Actualizamos el % de avance del capítulo actual para que la
+        // barra roja de "Continuar viendo" refleje el progreso exacto.
+        const pending = shared.appState.player.pendingHistorySave;
+        if (pending && art.duration > 0) {
+          pending.episodeInfo.progress =
+            art.duration - art.currentTime < 60
+              ? 1
+              : Math.min(1, Math.max(0, art.currentTime / art.duration));
+        }
+
         lastSaveTime = now;
       }
     });
@@ -1423,13 +1513,14 @@ if (grayscale) {
               hideEpPanel();
             });
 
+            // Limpiar sub anterior antes de asignar el nuevo
+            art.subtitle.show = false;
+            art.subtitle.url = "";
             if (newSubUrl && subType === "srt") {
               art.subtitle.url = newSubUrl;
               art.subtitle.show = true;
             } else if (newSubUrl && subType === "ass") {
               art.plugins?.ass?.setTrack?.(newSubUrl);
-            } else {
-              art.subtitle.show = false;
             }
 
             // ✅ FIX: Actualizar el botón CC según el nuevo episodio.
@@ -1894,6 +1985,295 @@ if (grayscale) {
     }
   }
 
+  // ─── Detecta si el moov está al inicio del archivo (fast-start) ──────────
+  // Hace un GET de los primeros 2 KB y parsea los boxes MP4.
+  // Devuelve también el Content-Length total del archivo.
+  async _detectFastStart(url) {
+    try {
+      const resp = await fetch(url, {
+        headers: { Range: "bytes=0-2047" },
+        redirect: "follow",
+      });
+      if (!resp.ok && resp.status !== 206)
+        return { isFastStart: false, contentLength: null };
+
+      // Content-Range: bytes 0-2047/TOTAL  →  extraer TOTAL
+      const cr = resp.headers.get("content-range");
+      const contentLength = cr
+        ? parseInt(cr.split("/")[1], 10) || null
+        : parseInt(resp.headers.get("content-length"), 10) || null;
+
+      const buf = await resp.arrayBuffer();
+      const view = new DataView(buf);
+      let offset = 0;
+
+      while (offset + 8 <= buf.byteLength) {
+        const size = view.getUint32(offset);
+        const type = String.fromCharCode(
+          view.getUint8(offset + 4),
+          view.getUint8(offset + 5),
+          view.getUint8(offset + 6),
+          view.getUint8(offset + 7),
+        );
+        if (type === "moov") return { isFastStart: true, contentLength };
+        if (type === "mdat") return { isFastStart: false, contentLength };
+        if (size < 8) break;
+        offset += size;
+      }
+      return { isFastStart: false, contentLength };
+    } catch {
+      return { isFastStart: false, contentLength: null };
+    }
+  }
+
+  // ─── Pre-fetch en pausa (estilo YouTube) ─────────────────────────────────
+  // Mientras el video está REPRODUCIÉNDOSE no se hace ningún fetch extra: el
+  // <video> nativo se encarga de su propio buffering sin competir por ancho
+  // de banda con nada (esto es lo que causaba el "se queda cargando" en 3G /
+  // Slow 4G). Cuando el usuario PAUSA, ahí sí se adelantan chunks por delante
+  // del playhead — igual que YouTube llena la barra de buffer al pausar.
+  // Al reanudar o buscar (seek), se corta de inmediato.
+  //
+  // Se respeta navigator.connection:
+  //   - saveData / 2g / slow-2g → nunca se prefetchea, ni en pausa.
+  //   - todo lo demás (3g, 4g, wifi, sin API) → prefetch normal en pausa.
+  _startPreFetch(url, contentLength, art) {
+    const conn =
+      navigator.connection ||
+      navigator.mozConnection ||
+      navigator.webkitConnection;
+
+    const CHUNK = 4 * 1024 * 1024; // 4 MB por chunk
+    const MAX_AHEAD = 4;            // chunks a mantener por delante del playhead
+    const MAX_CONCURRENT = 2;       // máximo de fetches simultáneos
+
+    const fetched = new Set();
+    let stopped = true; // arranca detenido: solo corre mientras está en pausa
+    let active = 0;
+
+    // ─── Estado expuesto para el indicador de buffer ────────────────────
+    // El indicador de red no puede usar art.video.buffered para medir este
+    // pre-fetch (esos bytes van al caché HTTP, no al buffer del <video>).
+    // En su lugar, exponemos chunks descargados + tamaño de chunk + bytes
+    // totales para que el indicador calcule cuántos segundos de adelanto
+    // representan los chunks contiguos ya cacheados por delante del playhead.
+    this._prefetchState = {
+      fetched,
+      CHUNK,
+      contentLength,
+      getCurrentChunk: () =>
+        art.duration > 0
+          ? Math.floor(
+              ((art.currentTime / art.duration) * contentLength) / CHUNK,
+            )
+          : 0,
+    };
+
+    // ¿La conexión permite prefetchear (aunque sea en pausa)?
+    const connAllows = () => {
+      if (!conn) return true;
+      if (conn.saveData) return false;
+      const type = conn.effectiveType;
+      return !(type === "slow-2g" || type === "2g");
+    };
+
+    const fetchChunk = async (idx) => {
+      if (stopped || fetched.has(idx) || active >= MAX_CONCURRENT) return;
+      const start = idx * CHUNK;
+      if (start >= contentLength) return;
+      fetched.add(idx);
+      active++;
+      const end = Math.min(start + CHUNK - 1, contentLength - 1);
+      try {
+        const resp = await fetch(url, {
+          headers: { Range: `bytes=${start}-${end}` },
+        });
+        await resp.arrayBuffer(); // consume el body → queda en caché HTTP
+      } catch {
+        fetched.delete(idx); // permitir reintento en el siguiente ciclo
+      } finally {
+        active--;
+        pump(); // libera el "slot" → encadena el siguiente chunk si sigue en pausa
+      }
+    };
+
+    const pump = () => {
+      if (stopped) return;
+      const estimatedByte =
+        art.duration > 0
+          ? (art.currentTime / art.duration) * contentLength
+          : 0;
+      const currentChunk = Math.floor(estimatedByte / CHUNK);
+      for (let i = 0; i <= MAX_AHEAD; i++) fetchChunk(currentChunk + i);
+    };
+
+    // Reproduciendo o buscando → cortar cualquier prefetch en curso
+    const onPlay = () => { stopped = true; };
+
+    // Pausado → si la conexión lo permite, arrancar/continuar el prefetch
+    const onPause = () => {
+      if (!connAllows()) return;
+      stopped = false;
+      pump();
+    };
+
+    // La conexión cambió mientras está pausado y prefetcheando: si pasa a
+    // saveData/2G, cortar en el acto.
+    const onConnChange = () => {
+      if (stopped) return;
+      if (!connAllows()) stopped = true;
+    };
+
+    art.on("play",    onPlay);
+    art.on("playing", onPlay);
+    art.on("pause",   onPause);
+    art.on("seeking", onPlay);
+    conn?.addEventListener?.("change", onConnChange);
+
+    this._stopPreFetch = () => {
+      stopped = true;
+      this._prefetchState = null;
+      art.off?.("play",    onPlay);
+      art.off?.("playing", onPlay);
+      art.off?.("pause",   onPause);
+      art.off?.("seeking", onPlay);
+      conn?.removeEventListener?.("change", onConnChange);
+    };
+
+    // Si el player carga ya en pausa (poster / antes de darle play), arrancar
+    if (art.paused) onPause();
+  }
+
+  // ─── 📶 Indicador de conexión + buffer ───────────────────────────────────
+  // Ícono de señal (3 barras) en los controles:
+  //   - Cantidad de barras encendidas = calidad de conexión (navigator.connection)
+  //   - Color de las barras           = cuánto video hay bufferizado por
+  //                                      delante del playhead (verde/amarillo/rojo)
+  //   - Tooltip nativo (title)        = detalle en texto, ej. "4G · 38s de
+  //                                      adelanto en buffer"
+  // Solo desktop, igual que CC/episodios/ajustes.
+  _setupNetworkIndicator(art) {
+    if (window.innerWidth <= 768) return;
+
+    const conn =
+      navigator.connection ||
+      navigator.mozConnection ||
+      navigator.webkitConnection;
+
+    const barsSvg =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20">' +
+      '<rect class="cp-net-bar" x="2"  y="14" width="4" height="6"  rx="1"/>' +
+      '<rect class="cp-net-bar" x="9"  y="9"  width="4" height="11" rx="1"/>' +
+      '<rect class="cp-net-bar" x="16" y="4"  width="4" height="16" rx="1"/>' +
+      "</svg>";
+
+    art.controls.add({
+      name: "net-indicator",
+      position: "right",
+      index: 5,
+      html: `<i class="art-icon cp-net-indicator">${barsSvg}</i>`,
+    });
+
+    this._netIndicatorTimer = setTimeout(() => {
+      this._netIndicatorTimer = null;
+      const el = this.container.querySelector(".art-control-net-indicator");
+      if (!el) return;
+      el.style.cursor = "default";
+
+      const bars = el.querySelectorAll(".cp-net-bar");
+
+      // Cantidad de barras según la conexión (1 = mala/ahorro, 3 = buena/desconocida)
+      const connInfo = () => {
+        if (!conn) return { label: "Conexión", level: 3 };
+        if (conn.saveData) return { label: "Ahorro de datos", level: 1 };
+        switch (conn.effectiveType) {
+          case "slow-2g": return { label: "2G lenta", level: 1 };
+          case "2g":      return { label: "2G", level: 1 };
+          case "3g":      return { label: "3G", level: 2 };
+          case "4g":      return { label: "4G", level: 3 };
+          default:        return { label: "Conexión", level: 3 };
+        }
+      };
+
+      // Segundos de video ya bufferizados por delante del playhead actual
+      const nativeBufferSeconds = () => {
+        const buffered = art.video?.buffered;
+        const current = art.currentTime || 0;
+        if (!buffered) return 0;
+        for (let i = 0; i < buffered.length; i++) {
+          if (current >= buffered.start(i) - 0.5 && current <= buffered.end(i)) {
+            return Math.max(0, buffered.end(i) - current);
+          }
+        }
+        return 0;
+      };
+
+      // Segundos "adelantados" gracias al pre-fetch en pausa: cuenta los
+      // chunks contiguos ya descargados (caché HTTP) por delante del
+      // playhead y los convierte a segundos usando el bitrate estimado
+      // (contentLength / duration).
+      const prefetchBufferSeconds = () => {
+        const pf = this._prefetchState;
+        if (!pf || !art.duration) return 0;
+
+        const { fetched, CHUNK, contentLength } = pf;
+        const currentChunk = pf.getCurrentChunk();
+
+        let aheadChunks = 0;
+        let idx = currentChunk;
+        while (fetched.has(idx)) {
+          aheadChunks++;
+          idx++;
+        }
+        if (aheadChunks === 0) return 0;
+
+        const bytesPerSecond = contentLength / art.duration;
+        if (bytesPerSecond <= 0) return 0;
+
+        return (aheadChunks * CHUNK) / bytesPerSecond;
+      };
+
+      const bufferSeconds = () =>
+        Math.max(nativeBufferSeconds(), prefetchBufferSeconds());
+
+      const update = () => {
+        const { label, level } = connInfo();
+        const buf = bufferSeconds();
+
+        let color;
+        if (buf >= 20) color = "#4ade80";      // verde: buen margen
+        else if (buf >= 5) color = "#facc15";  // amarillo: margen ajustado
+        else color = "#f87171";                // rojo: casi sin buffer
+
+        bars.forEach((bar, i) => {
+          bar.setAttribute("fill", i < level ? color : "#5a5a5a");
+        });
+
+        const bufLabel =
+          buf >= 1
+            ? `${Math.round(buf)}s de adelanto en buffer`
+            : "sin buffer adelantado";
+        el.title = `${label} · ${bufLabel}`;
+      };
+
+      update();
+
+      art.on("progress",   update);
+      art.on("timeupdate", update);
+      conn?.addEventListener?.("change", update);
+
+      // El pre-fetch en pausa no dispara "timeupdate" (el video está
+      // detenido), así que refrescamos por intervalo para reflejar los
+      // chunks que se van cacheando mientras el usuario está pausado.
+      const prefetchPoll = setInterval(update, 1000);
+
+      this._netIndicatorCleanup = () => {
+        conn?.removeEventListener?.("change", update);
+        clearInterval(prefetchPoll);
+      };
+    }, 0);
+  }
+
   _observeResize() {
     if (this._resizeObserver) this._resizeObserver.disconnect();
     this._resizeObserver = new ResizeObserver(() => {
@@ -1911,6 +2291,14 @@ if (grayscale) {
 
   destroy() {
     this._mountId++;
+    this._stopPreFetch?.();
+    this._stopPreFetch = null;
+    clearTimeout(this._halfwayTimer);
+    this._halfwayTimer = null;
+    clearTimeout(this._netIndicatorTimer);
+    this._netIndicatorTimer = null;
+    this._netIndicatorCleanup?.();
+    this._netIndicatorCleanup = null;
     this._resizeObserver?.disconnect();
     this._assPlugin = null;
     if (this._mobileDrawerBackdrop) {
@@ -2424,13 +2812,14 @@ if (grayscale) {
               art.video.load();
               art.once("video:canplay", () => art.play());
 
+              // Limpiar sub anterior antes de asignar el nuevo
+              art.subtitle.show = false;
+              art.subtitle.url = "";
               if (newSubUrl && epSubType === "srt") {
                 art.subtitle.url = newSubUrl;
                 art.subtitle.show = true;
               } else if (newSubUrl && epSubType === "ass") {
                 art.plugins?.ass?.setTrack?.(newSubUrl);
-              } else {
-                art.subtitle.show = false;
               }
 
               const cineInst = window.appState?.player?.activeCineInstance;
@@ -4593,11 +4982,23 @@ function openEpisode(seriesId, season, newEpisodeIndex) {
     shared.appState.content.seasonPosters[seriesId]?.[season] || {};
   const customLabelEp = postersDataEp.etiqueta || "";
 
+  const allSeriesSeasons = Object.keys(
+    shared.appState.content.seriesEpisodes[seriesId] || {}
+  ).filter(s => {
+    const sl = String(s).toLowerCase();
+    return !sl.includes("pelicula") && !sl.includes("película") &&
+           !sl.includes("especial") && !sl.includes("ova") &&
+           !sl.includes("movie") && !sl.includes("special");
+  });
+  const isSingleSeason = allSeriesSeasons.length <= 1;
+
   const subTitleText = isSpecialContent
     ? "Especial / Película"
     : customLabelEp
       ? `${customLabelEp} | Ep ${episodeNumber}`
-      : `Temporada ${String(season).replace("T", "")} | Ep ${episodeNumber}`;
+      : isSingleSeason
+        ? `Episodio ${episodeNumber}`
+        : `Temporada ${String(season).replace("T", "")} | Ep ${episodeNumber}`;
 
   if (subTitleEl) subTitleEl.textContent = subTitleText;
   if (titleEl) titleEl.textContent = episodeTitleText;
@@ -4728,6 +5129,10 @@ export function openPlayerModal(movieId, movieTitle) {
       movieId,
       movieData,
       preferredTrack.lang,
+      () => {
+        // Se llama una sola vez al llegar al 50% → guardar en historial
+        shared.addToHistoryIfLoggedIn(movieId, "movie");
+      },
     );
 
     // Barra de info: usar el track real cargado
@@ -4801,7 +5206,7 @@ export function openPlayerModal(movieId, movieTitle) {
   }
 }
 
-function loadMovieInPlayer(videoId, movieId, movieData, lang = "es") {
+function loadMovieInPlayer(videoId, movieId, movieData, lang = "es", onHalfway = null) {
   const container = document.getElementById("dv-video-container");
   if (!container) return;
 
@@ -4842,6 +5247,7 @@ function loadMovieInPlayer(videoId, movieId, movieData, lang = "es") {
     title: movieData.title || "",
     poster: movieData.banner || movieData.poster || movieData.image || "",
     grayscale: movieData.blancoynegro === "si",
+    onHalfway,
   });
 }
 
@@ -5703,11 +6109,22 @@ function _updateSpPsInfo(ep, seasonKey, seriesId, langLabel, epIndex = 0) {
     "special",
   ].some((s) => String(seasonKey).toLowerCase().includes(s));
   const epNum = ep.episodeNumber || epIndex + 1;
+  const allRealSeasons = Object.keys(
+    shared.appState.content.seriesEpisodes[seriesId] || {}
+  ).filter(s => {
+    const sl = String(s).toLowerCase();
+    return !sl.includes("pelicula") && !sl.includes("película") &&
+           !sl.includes("especial") && !sl.includes("ova") &&
+           !sl.includes("movie") && !sl.includes("special");
+  });
+  const isSingleSeasonPs = allRealSeasons.length <= 1;
   const seasonLabel = customLabel
     ? `${customLabel} · Ep ${epNum}`
     : isSpecial
       ? "Especial / Película"
-      : `Temporada ${String(seasonKey).replace("T", "")} · Ep ${epNum}`;
+      : isSingleSeasonPs
+        ? `Episodio ${epNum}`
+        : `Temporada ${String(seasonKey).replace("T", "")} · Ep ${epNum}`;
 
   const titleBar = document.getElementById("sp-player-title-bar");
   const epTitleEl = document.getElementById("sp-ps-ep-title");
