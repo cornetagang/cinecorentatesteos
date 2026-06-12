@@ -217,6 +217,11 @@ export const FEATURES = {
  */
 export const ANALYTICS = { ENABLED: false, TRACK_PAGE_VIEWS: true, TRACK_ERRORS: true, TRACK_USER_ACTIONS: true };
 
+/**
+ * Webhook de Discord para notificaciones de nuevo contenido (solo admin)
+ */
+export const DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1514124602995900568/Krwo-SjD1AXXX1QvUvqZorz2sQrTYLPZ1yM25PigE7WXRUFFw4vWZNTqJR5_IdnPpwQQ";
+
 // Exportar todo como objeto único también
 export default {
     WORKER_URL,
