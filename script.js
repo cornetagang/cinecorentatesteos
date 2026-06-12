@@ -6,7 +6,7 @@
 // ===========================================================
 // 1. IMPORTS
 // ===========================================================
-import { API_URL, firebaseConfig, UI, THEMES } from "./core/config.js";
+import { API_URL, firebaseConfig, UI, THEMES, DISCORD_WEBHOOK_URL } from "./core/config.js";
 import { logError, ErrorHandler } from "./utils/logger.js";
 import CacheManager from "./utils/cache-manager.js";
 import ModalManager from "./utils/modal-manager.js";
@@ -1962,6 +1962,589 @@ const ADMIN_EMAIL = "baquezadat@gmail.com";
 function isAdminUser() {
   const u = typeof auth !== "undefined" ? auth.currentUser : null;
   return !!(u && u.email === ADMIN_EMAIL);
+}
+
+/**
+ * Envía un embed al canal de Discord vía webhook.
+ * Solo se llama desde el botón Discord del popover (admin only).
+ */
+async function notifyDiscordNewContent({ title, year, poster, type, season, episode, episodeTitle, totalSeasons, lastEpisodeType, requestedBy, seasonWord }) {
+  // Palabra para nombrar las "temporadas" de esta serie (ej. "Parte" para
+  // JoJo's Bizarre Adventure, que se divide en Partes y no en Temporadas).
+  // Por defecto "Temporada".
+  const _word = String(seasonWord || "").trim() || "Temporada";
+  const wordCap = _word.charAt(0).toUpperCase() + _word.slice(1).toLowerCase();
+  const wordLower = _word.toLowerCase();
+
+  const configs = {
+    "movie": {
+      emoji: "🎬",
+      label: "Película",
+      description: "¡Ya está disponible en el cine! 🍿"
+    },
+    "series-new": {
+      emoji: "📺",
+      label: "Serie",
+      description: "¡Nueva serie disponible en el cine! 🍿"
+    },
+    "series-episode": {
+      emoji: "🆕",
+      label: "Serie",
+      description: "¡Nuevo capítulo disponible! 🎬"
+    },
+    "series-season": {
+      emoji: "📅",
+      label: "Serie",
+      description: `¡Nueva ${wordLower} disponible! 🎬`
+    }
+  };
+
+  const { emoji, label, description } = configs[type] || configs["movie"];
+
+  // Color del embed según tipo de cierre
+  const embedColor = lastEpisodeType === "series"
+    ? 0xFF4444   // rojo — fin de serie
+    : lastEpisodeType === "season"
+      ? 0xFFB400  // amarillo — fin de temporada
+      : 0x00D4FF; // azul — normal
+
+  // Construir fields para series-episode
+  const fields = [];
+
+  // Field "Pedida por" para películas y series nuevas
+  if ((type === "movie" || type === "series-new") && requestedBy) {
+    fields.push({ name: "🙋 Pedida por", value: requestedBy, inline: false });
+  }
+
+  if (type === "series-episode" && (season || episode)) {
+    // Field temporada/parte (inline)
+    if (season && totalSeasons > 1) {
+      fields.push({ name: `📅 ${wordCap}`, value: `${season}`, inline: true });
+    }
+    // Field episodio (inline)
+    if (episode) {
+      fields.push({ name: "🎞️ Episodio", value: `${episode}`, inline: true });
+    }
+    // Field título del episodio (ancho completo)
+    if (episodeTitle) {
+      fields.push({ name: "📝 Título", value: episodeTitle, inline: false });
+    }
+    // Field cierre si aplica
+    if (lastEpisodeType === "season") {
+      fields.push({ name: "\u200b", value: `🏁 **¡Último capítulo de la ${wordLower}!**`, inline: false });
+    } else if (lastEpisodeType === "series") {
+      fields.push({ name: "\u200b", value: "🎬 **¡Último capítulo de la serie!**", inline: false });
+    }
+  } else if (type === "series-season" && season) {
+    fields.push({ name: `📅 ${wordCap}`, value: `${season}`, inline: true });
+  }
+
+  const payload = {
+    embeds: [{
+      author: {
+        name: "Cine Corneta",
+        url: "https://cornetagang.github.io/cinecorneta/"
+      },
+      title: `${emoji} ${title} (${year || "?????"})`  ,
+      description,
+      fields: fields.length ? fields : undefined,
+      color: embedColor,
+      thumbnail: poster ? { url: poster } : undefined,
+      footer: { text: label },
+      timestamp: new Date().toISOString()
+    }]
+  };
+
+  const res = await fetch(DISCORD_WEBHOOK_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  if (!res.ok) throw new Error(`Webhook error: ${res.status}`);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────
+// Mini modal para avisos de Discord (series) — con lista real de eps
+// ─────────────────────────────────────────────────────────────────
+function openDiscordNotifyModal({ initialType, seriesData, seriesId }) {
+  document.getElementById("dc-notify-modal")?.remove();
+
+  // ── Estilos ──────────────────────────────────────────────────
+  if (!document.getElementById("dc-modal-style")) {
+    const s = document.createElement("style");
+    s.id = "dc-modal-style";
+    s.textContent = `
+      @keyframes dcFadeIn  { from{opacity:0} to{opacity:1} }
+      @keyframes dcScaleIn { from{opacity:0;transform:scale(.93) translateY(10px)} to{opacity:1;transform:scale(1) translateY(0)} }
+      #dc-notify-modal .dc-ep-row:hover    { background:rgba(114,137,218,.13) !important; }
+      #dc-notify-modal .dc-season-row:hover{ background:rgba(114,137,218,.13) !important; }
+    `;
+    document.head.appendChild(s);
+  }
+
+  const DISC_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg>`;
+
+  const TYPES = [
+    { type: "series-new",     emoji: "📺", label: "Serie nueva"    },
+    { type: "series-episode", emoji: "🆕", label: "Nuevo capítulo" },
+    { type: "series-season",  emoji: "📅", label: "Nueva temporada"},
+  ];
+
+  let selectedType = initialType;
+  let selectedItem = null; // { season, episode?, label }
+
+  const posterUrl   = seriesData.poster || seriesData.image || seriesData.banner || "";
+  const episodesRaw = (seriesId && appState?.content?.seriesEpisodes?.[seriesId]) || {};
+  const seasons     = Object.keys(episodesRaw).sort((a, b) =>
+    (parseInt(a.replace(/\D/g,""))||0) - (parseInt(b.replace(/\D/g,""))||0)
+  );
+  const realSeasonCount = seasons.filter(s => {
+    const sl = String(s).toLowerCase();
+    return !sl.includes("pelicula") && !sl.includes("película") &&
+           !sl.includes("especial") && !sl.includes("ova") &&
+           !sl.includes("movie") && !sl.includes("special");
+  }).length;
+
+  // Algunas series (ej. JoJo's Bizarre Adventure) se dividen en "Partes" y no
+  // en "Temporadas". El campo custom "nombreTemporadas" de la serie indica
+  // qué palabra usar (ej. "Parte"); si no está definido, se usa "Temporada".
+  const seasonWordRaw  = String(seriesData.nombreTemporadas || "").trim();
+  const seasonWord     = seasonWordRaw || "Temporada";
+  const seasonWordCap  = seasonWord.charAt(0).toUpperCase() + seasonWord.slice(1).toLowerCase();
+  const seasonWordLower = seasonWord.toLowerCase();
+  const seasonAbbr     = (seasonWord[0] || "T").toUpperCase();
+
+  // Posters/etiquetas por temporada (ej. seasonPosters[id]["temporada4"].etiqueta = "Parte 5")
+  const seasonPostersData = (seriesId && appState?.content?.seasonPosters?.[seriesId]) || {};
+
+  // Devuelve { label, num, abbr } para una temporada: usa la "etiqueta" custom
+  // si existe (ej. "Parte 5"), si no arma "{seasonWordCap} {sNum}".
+  function getSeasonMeta(sKey, sNum) {
+    const entry = seasonPostersData[sKey];
+    const etiqueta = (typeof entry === "object" ? (entry?.etiqueta || "") : "").trim();
+    if (etiqueta) {
+      const numMatch = etiqueta.match(/\d+/);
+      return {
+        label: etiqueta,
+        num: numMatch ? numMatch[0] : sNum,
+        abbr: `${etiqueta[0].toUpperCase()}${numMatch ? numMatch[0] : ""}`
+      };
+    }
+    return { label: `${seasonWordCap} ${sNum}`, num: sNum, abbr: `${seasonAbbr}${sNum}` };
+  }
+
+  // ── Overlay ──────────────────────────────────────────────────
+  const overlay = document.createElement("div");
+  overlay.id = "dc-notify-modal";
+  overlay.style.cssText = `
+    position:fixed; inset:0; z-index:99999;
+    display:flex; align-items:center; justify-content:center;
+    background:rgba(0,0,0,0.58); backdrop-filter:blur(6px);
+    animation:dcFadeIn .15s ease;`;
+  overlay.onclick = () => overlay.remove();
+
+  const card = document.createElement("div");
+  card.style.cssText = `
+    background:#1a1d27; border:1px solid rgba(255,255,255,.1);
+    border-radius:16px; padding:20px; width:380px; max-width:94vw;
+    box-shadow:0 24px 64px rgba(0,0,0,.75);
+    animation:dcScaleIn .22s cubic-bezier(.34,1.56,.64,1);`;
+  card.onclick = e => e.stopPropagation();
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+
+  // ── Helpers de construcción ───────────────────────────────────
+  function mkHeader(backCb, title) {
+    const h = document.createElement("div");
+    h.style.cssText = `display:flex; align-items:center; gap:9px; margin-bottom:16px;`;
+    if (backCb) {
+      const b = document.createElement("button");
+      b.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>`;
+      b.style.cssText = `background:none;border:none;color:rgba(255,255,255,.45);cursor:pointer;padding:0;display:flex;align-items:center;transition:color .15s;`;
+      b.onmouseenter = () => b.style.color = "#fff";
+      b.onmouseleave = () => b.style.color = "rgba(255,255,255,.45)";
+      b.onclick = backCb;
+      h.appendChild(b);
+    } else {
+      const icon = document.createElement("span");
+      icon.style.color = "#7289da";
+      icon.innerHTML = DISC_ICON;
+      h.appendChild(icon);
+    }
+    const t = document.createElement("span");
+    t.style.cssText = `font-size:14px;font-weight:700;color:#fff;letter-spacing:.01em;`;
+    t.textContent = title || "Avisar en Discord";
+    h.appendChild(t);
+    const x = document.createElement("button");
+    x.innerHTML = "×";
+    x.style.cssText = `margin-left:auto;background:none;border:none;color:rgba(255,255,255,.3);cursor:pointer;font-size:22px;line-height:1;padding:0;transition:color .15s;`;
+    x.onmouseenter = () => x.style.color = "rgba(255,255,255,.8)";
+    x.onmouseleave = () => x.style.color = "rgba(255,255,255,.3)";
+    x.onclick = () => overlay.remove();
+    h.appendChild(x);
+    return h;
+  }
+
+  function mkSeriesRow() {
+    const row = document.createElement("div");
+    row.style.cssText = `
+      display:flex; align-items:center; gap:11px; margin-bottom:16px;
+      padding:10px 12px; background:rgba(255,255,255,.05);
+      border-radius:10px; border:1px solid rgba(255,255,255,.07);`;
+    row.innerHTML = posterUrl
+      ? `<img src="${posterUrl}" style="width:34px;height:50px;object-fit:cover;border-radius:5px;flex-shrink:0;box-shadow:0 2px 8px rgba(0,0,0,.5);">`
+      : `<div style="width:34px;height:50px;border-radius:5px;background:rgba(255,255,255,.08);flex-shrink:0;"></div>`;
+    const info = document.createElement("div");
+    info.style.cssText = "overflow:hidden;";
+    info.innerHTML = `
+      <div style="font-size:13px;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${seriesData.title}</div>
+      <div style="font-size:11px;color:rgba(255,255,255,.4);margin-top:3px;">${seriesData.year || seriesData.anio || ""}</div>`;
+    row.appendChild(info);
+    return row;
+  }
+
+  function mkPills() {
+    const row = document.createElement("div");
+    row.style.cssText = `display:flex; gap:6px; margin-bottom:16px;`;
+    TYPES.forEach(({ type, emoji, label }) => {
+      const p = document.createElement("button");
+      const on = type === selectedType;
+      const displayLabel = type === "series-season" ? `Nueva ${seasonWordCap}` : label;
+      p.dataset.type = type;
+      p.style.cssText = `
+        flex:1; display:flex; align-items:center; justify-content:center; gap:4px;
+        padding:6px 4px; border-radius:20px; font-size:11px; cursor:pointer;
+        transition:all .15s; text-align:center;
+        border:1px solid ${on ? "rgba(114,137,218,.65)" : "rgba(255,255,255,.1)"};
+        background:${on ? "rgba(114,137,218,.3)"      : "rgba(255,255,255,.06)"};
+        color:${on ? "#fff" : "rgba(255,255,255,.5)"};
+        font-weight:${on ? "600" : "400"};`;
+      p.innerHTML = `${emoji} ${displayLabel}`;
+      p.onclick = () => { selectedType = type; selectedItem = null; renderMain(); };
+      row.appendChild(p);
+    });
+    return row;
+  }
+
+  // ── Lista de episodios ────────────────────────────────────────
+  function mkEpisodeList() {
+    const wrap = document.createElement("div");
+    wrap.style.cssText = `
+      max-height:260px; overflow-y:auto; border-radius:10px;
+      border:1px solid rgba(255,255,255,.07); margin-bottom:16px;
+      scrollbar-width:thin; scrollbar-color:rgba(255,255,255,.15) transparent;`;
+
+    if (!seasons.length) {
+      wrap.innerHTML = `<div style="padding:24px;text-align:center;color:rgba(255,255,255,.3);font-size:12px;">Sin episodios disponibles</div>`;
+      return wrap;
+    }
+
+    seasons.forEach((sKey, si) => {
+      const raw  = episodesRaw[sKey];
+      const eps  = Array.isArray(raw) ? raw : Object.values(raw || {});
+      const sNum = parseInt(sKey.replace(/\D/g,"")) || (si + 1);
+      const meta = getSeasonMeta(sKey, sNum);
+
+      // Cabecera de temporada/parte
+      const sh = document.createElement("div");
+      sh.style.cssText = `
+        padding:7px 13px; font-size:10px; font-weight:700; letter-spacing:.09em;
+        text-transform:uppercase; color:rgba(255,255,255,.35);
+        background:rgba(0,0,0,.25);
+        ${si > 0 ? "border-top:1px solid rgba(255,255,255,.06);" : ""}`;
+      sh.textContent = meta.label;
+      wrap.appendChild(sh);
+
+      eps.forEach((ep, idx) => {
+        const epNum   = ep.episode || ep.numero || ep.ep || (idx + 1);
+        const epTitle = ep.title   || ep.titulo || ep.name || "";
+        const row = document.createElement("div");
+        row.className = "dc-ep-row";
+        row.style.cssText = `
+          display:flex; align-items:center; gap:10px; padding:9px 13px;
+          cursor:pointer; border-bottom:1px solid rgba(255,255,255,.04);
+          transition:background .12s;`;
+        row.innerHTML = `
+          <span style="font-size:11px;font-weight:700;color:rgba(114,137,218,.85);min-width:30px;flex-shrink:0;">E${epNum}</span>
+          <span style="font-size:12px;color:rgba(255,255,255,.78);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${epTitle || `Episodio ${epNum}`}</span>
+          <span style="margin-left:auto;font-size:11px;color:rgba(255,255,255,.2);flex-shrink:0;">›</span>`;
+        row.onclick = () => {
+          selectedItem = { season: meta.num, episode: epNum, episodeTitle: epTitle || "", label: realSeasonCount > 1 ? `${meta.abbr} · E${epNum}${epTitle ? " — " + epTitle : ""}` : `Episodio ${epNum}${epTitle ? " — " + epTitle : ""}` };
+          renderConfirm();
+        };
+        wrap.appendChild(row);
+      });
+    });
+    return wrap;
+  }
+
+  // ── Lista de temporadas ───────────────────────────────────────
+  function mkSeasonList() {
+    const wrap = document.createElement("div");
+    wrap.style.cssText = `display:flex; flex-direction:column; gap:7px; margin-bottom:16px;`;
+
+    if (!seasons.length) {
+      wrap.innerHTML = `<div style="padding:24px;text-align:center;color:rgba(255,255,255,.3);font-size:12px;">Sin temporadas disponibles</div>`;
+      return wrap;
+    }
+
+    seasons.forEach((sKey, si) => {
+      const raw   = episodesRaw[sKey];
+      const eps   = Array.isArray(raw) ? raw : Object.values(raw || {});
+      const sNum  = parseInt(sKey.replace(/\D/g,"")) || (si + 1);
+      const meta  = getSeasonMeta(sKey, sNum);
+      const row   = document.createElement("div");
+      row.className = "dc-season-row";
+      row.style.cssText = `
+        display:flex; align-items:center; justify-content:space-between;
+        padding:12px 14px; border-radius:10px; cursor:pointer;
+        background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.07);
+        transition:background .12s;`;
+      row.innerHTML = `
+        <span style="font-size:13px;font-weight:600;color:#fff;">📅 ${meta.label}</span>
+        <span style="font-size:11px;color:rgba(255,255,255,.3);">${eps.length} eps ›</span>`;
+      row.onclick = () => {
+        selectedItem = { season: meta.num, label: meta.label };
+        renderConfirm();
+      };
+      wrap.appendChild(row);
+    });
+    return wrap;
+  }
+
+  // ── Vista de confirmación ─────────────────────────────────────
+  let lastEpisodeType = null; // null | "season" | "series"
+
+  function mkConfirmContent() {
+    const t = TYPES.find(x => x.type === selectedType);
+    const frag = document.createDocumentFragment();
+
+    // Preview del embed
+    const preview = document.createElement("div");
+    preview.id = "dc-preview-box";
+    const accentColor = () => lastEpisodeType === "series" ? "#FF4444" : lastEpisodeType === "season" ? "#FFB400" : "#00D4FF";
+    const updatePreviewAccent = () => { preview.style.borderLeftColor = accentColor(); };
+    preview.style.cssText = `
+      padding:14px 14px 14px 16px; border-radius:10px; margin-bottom:16px;
+      background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.08);
+      border-left:4px solid ${accentColor()};`;
+
+    const buildPreviewHTML = () => {
+      const epNum    = selectedItem?.episode ?? null;
+      const epSeason = (selectedItem?.season && realSeasonCount > 1) ? selectedItem.season : null;
+      const epTitle  = selectedItem?.episodeTitle || "";
+      const closeBadge = lastEpisodeType === "season"
+        ? `<div style="margin-top:6px;font-size:11px;font-weight:700;color:#FFB400;">🏁 Último capítulo de la ${seasonWordLower}</div>`
+        : lastEpisodeType === "series"
+          ? `<div style="margin-top:6px;font-size:11px;font-weight:700;color:#FF4444;">🎬 Último capítulo de la serie</div>`
+          : "";
+      const fieldsHTML = (epSeason || epNum) ? `
+        <div style="display:flex;gap:12px;margin-top:8px;flex-wrap:wrap;">
+          ${epSeason ? `<div style="background:rgba(255,255,255,.06);border-radius:6px;padding:4px 9px;">
+            <div style="font-size:9px;color:rgba(255,255,255,.35);text-transform:uppercase;letter-spacing:.07em;margin-bottom:2px;">${seasonWordCap}</div>
+            <div style="font-size:12px;font-weight:700;color:#fff;">${epSeason}</div>
+          </div>` : ""}
+          ${epNum ? `<div style="background:rgba(255,255,255,.06);border-radius:6px;padding:4px 9px;">
+            <div style="font-size:9px;color:rgba(255,255,255,.35);text-transform:uppercase;letter-spacing:.07em;margin-bottom:2px;">Episodio</div>
+            <div style="font-size:12px;font-weight:700;color:#fff;">${epNum}</div>
+          </div>` : ""}
+        </div>
+        ${epTitle ? `<div style="margin-top:6px;font-size:11px;color:rgba(255,255,255,.5);font-style:italic;">${epTitle}</div>` : ""}
+        ${closeBadge}` : "";
+      const TYPE_DESC = {
+        "movie":          "¡Ya está disponible en el cine! 🍿",
+        "series-new":     "¡Nueva serie disponible en el cine! 🍿",
+        "series-episode": "¡Nuevo capítulo disponible! 🎬",
+        "series-season":  `¡Nueva ${seasonWordLower} disponible! 🎬`
+      };
+      return `
+        <div style="font-size:10px;color:rgba(255,255,255,.3);text-transform:uppercase;letter-spacing:.09em;margin-bottom:10px;">Vista previa del aviso</div>
+        <div style="display:flex;align-items:flex-start;gap:10px;">
+          ${posterUrl ? `<img src="${posterUrl}" style="width:30px;height:44px;object-fit:cover;border-radius:4px;flex-shrink:0;">` : ""}
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:11px;color:rgba(255,255,255,.35);margin-bottom:3px;">${t.emoji} ${seriesData.title}</div>
+            <div style="font-size:13px;font-weight:700;color:#fff;">${TYPE_DESC[selectedType] || ""}</div>
+            ${fieldsHTML}
+          </div>
+        </div>`;
+    };
+    preview.innerHTML = buildPreviewHTML();
+    frag.appendChild(preview);
+
+    // Selector "Último capítulo" — solo para series-episode
+    if (selectedType === "series-episode") {
+      const wrap = document.createElement("div");
+      wrap.style.cssText = `margin-bottom:14px;`;
+
+      const sectionLabel = document.createElement("div");
+      sectionLabel.style.cssText = `font-size:10px;color:rgba(255,255,255,.3);text-transform:uppercase;letter-spacing:.09em;margin-bottom:7px;`;
+      sectionLabel.textContent = "¿Es el último capítulo?";
+      wrap.appendChild(sectionLabel);
+
+      const btnRow = document.createElement("div");
+      btnRow.style.cssText = `display:flex; gap:7px;`;
+
+      const OPTIONS = [
+        { value: null,     emoji: "—",  label: "No"                   },
+        { value: "season", emoji: "🏁", label: `De la ${seasonWordLower}` },
+        { value: "series", emoji: "🎬", label: "De la serie"          },
+      ];
+
+      OPTIONS.forEach(opt => {
+        const btn = document.createElement("button");
+        const isActive = () => lastEpisodeType === opt.value;
+        const getStyle = () => `
+          flex:1; padding:8px 6px; border-radius:8px; border:1px solid;
+          font-size:11px; font-weight:600; cursor:pointer; transition:all .15s;
+          border-color:${isActive() ? (opt.value === "series" ? "rgba(255,80,80,.7)" : opt.value === "season" ? "rgba(255,180,0,.6)" : "rgba(255,255,255,.15)") : "rgba(255,255,255,.08)"};
+          background:${isActive() ? (opt.value === "series" ? "rgba(255,80,80,.15)" : opt.value === "season" ? "rgba(255,180,0,.12)" : "rgba(255,255,255,.08)") : "rgba(255,255,255,.04)"};
+          color:${isActive() ? "#fff" : "rgba(255,255,255,.45)"};`;
+        btn.style.cssText = getStyle();
+        btn.innerHTML = `${opt.emoji}<br><span style="font-size:10px;">${opt.label}</span>`;
+        btn.onclick = () => {
+          lastEpisodeType = opt.value;
+          btnRow.querySelectorAll("button").forEach(b => b.style.cssText = getStyle.call(b));
+          // re-aplicar estilos a todos
+          Array.from(btnRow.children).forEach((b, i) => {
+            const o = OPTIONS[i];
+            const active = lastEpisodeType === o.value;
+            b.style.cssText = `
+              flex:1; padding:8px 6px; border-radius:8px; border:1px solid;
+              font-size:11px; font-weight:600; cursor:pointer; transition:all .15s;
+              border-color:${active ? (o.value === "series" ? "rgba(255,80,80,.7)" : o.value === "season" ? "rgba(255,180,0,.6)" : "rgba(255,255,255,.15)") : "rgba(255,255,255,.08)"};
+              background:${active ? (o.value === "series" ? "rgba(255,80,80,.15)" : o.value === "season" ? "rgba(255,180,0,.12)" : "rgba(255,255,255,.08)") : "rgba(255,255,255,.04)"};
+              color:${active ? "#fff" : "rgba(255,255,255,.45)"};`;
+          });
+          document.getElementById("dc-preview-box").style.borderLeftColor = accentColor();
+          document.getElementById("dc-preview-box").innerHTML = buildPreviewHTML();
+        };
+        btnRow.appendChild(btn);
+      });
+
+      wrap.appendChild(btnRow);
+      frag.appendChild(wrap);
+    }
+
+    // Botones
+    const actions = document.createElement("div");
+    actions.style.cssText = `display:flex; gap:8px;`;
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.textContent = "Cancelar";
+    cancelBtn.style.cssText = `
+      flex:1; padding:10px; border-radius:9px;
+      border:1px solid rgba(255,255,255,.1);
+      background:rgba(255,255,255,.05); color:rgba(255,255,255,.6);
+      font-size:13px; cursor:pointer; transition:background .15s;`;
+    cancelBtn.onmouseenter = () => cancelBtn.style.background = "rgba(255,255,255,.1)";
+    cancelBtn.onmouseleave = () => cancelBtn.style.background = "rgba(255,255,255,.05)";
+    cancelBtn.onclick = () => { selectedItem = null; lastEpisodeType = null; renderMain(); };
+
+    const sendBtn = document.createElement("button");
+    sendBtn.textContent = "Confirmar y enviar";
+    sendBtn.style.cssText = `
+      flex:1.4; padding:10px; border-radius:9px; border:none;
+      background:linear-gradient(135deg,#7289da,#5b6eae);
+      color:#fff; font-size:13px; font-weight:700;
+      cursor:pointer; transition:opacity .15s;`;
+    sendBtn.onmouseenter = () => sendBtn.style.opacity = ".85";
+    sendBtn.onmouseleave = () => sendBtn.style.opacity = "1";
+    sendBtn.onclick = async () => {
+      sendBtn.textContent = "Enviando…";
+      sendBtn.disabled = true; cancelBtn.disabled = true;
+      try {
+        await notifyDiscordNewContent({
+          title:         seriesData.title,
+          year:          seriesData.year || seriesData.anio,
+          poster:        posterUrl || null,
+          type:          selectedType,
+          season:        selectedItem?.season        ?? null,
+          episode:       selectedItem?.episode       ?? null,
+          episodeTitle:  selectedItem?.episodeTitle  ?? "",
+          totalSeasons:  realSeasonCount,
+          lastEpisodeType: selectedType === "series-episode" ? lastEpisodeType : null,
+          seasonWord:    seasonWord
+        });
+        sendBtn.textContent = "✓ Enviado";
+        sendBtn.style.background = "linear-gradient(135deg,#43b581,#3aa36e)";
+        setTimeout(() => overlay.remove(), 1400);
+      } catch (err) {
+        console.error("[Discord]", err);
+        sendBtn.textContent = "✗ Error al enviar";
+        sendBtn.style.background = "linear-gradient(135deg,#f04747,#d93535)";
+        sendBtn.disabled = false; cancelBtn.disabled = false;
+        setTimeout(() => {
+          sendBtn.textContent = "Confirmar y enviar";
+          sendBtn.style.background = "linear-gradient(135deg,#7289da,#5b6eae)";
+        }, 3000);
+      }
+    };
+
+    actions.append(cancelBtn, sendBtn);
+    frag.appendChild(actions);
+    return frag;
+  }
+
+  // ── Renderizados ──────────────────────────────────────────────
+  function renderMain() {
+    card.innerHTML = "";
+    card.appendChild(mkHeader(null, "Avisar en Discord"));
+    card.appendChild(mkSeriesRow());
+    card.appendChild(mkPills());
+
+    if (selectedType === "series-new") {
+      // Botón directo sin lista
+      const sendBtn = document.createElement("button");
+      sendBtn.textContent = "Enviar aviso";
+      sendBtn.style.cssText = `
+        width:100%; padding:11px; border-radius:9px; border:none;
+        background:linear-gradient(135deg,#7289da,#5b6eae);
+        color:#fff; font-size:13px; font-weight:700;
+        cursor:pointer; transition:opacity .15s;`;
+      sendBtn.onmouseenter = () => sendBtn.style.opacity = ".85";
+      sendBtn.onmouseleave = () => sendBtn.style.opacity = "1";
+      sendBtn.onclick = async () => {
+        sendBtn.textContent = "Enviando…"; sendBtn.disabled = true;
+        try {
+          await notifyDiscordNewContent({
+            title: seriesData.title, year: seriesData.year || seriesData.anio,
+            poster: posterUrl || null, type: "series-new",
+            requestedBy: seriesData.pedido || seriesData.requestedBy || seriesData.pedidaPor || seriesData.pedida_por || ""
+          });
+          sendBtn.textContent = "✓ Enviado";
+          sendBtn.style.background = "linear-gradient(135deg,#43b581,#3aa36e)";
+          setTimeout(() => overlay.remove(), 1400);
+        } catch (err) {
+          console.error("[Discord]", err);
+          sendBtn.textContent = "✗ Error";
+          sendBtn.style.background = "linear-gradient(135deg,#f04747,#d93535)";
+          sendBtn.disabled = false;
+          setTimeout(() => {
+            sendBtn.textContent = "Enviar aviso";
+            sendBtn.style.background = "linear-gradient(135deg,#7289da,#5b6eae)";
+          }, 3000);
+        }
+      };
+      card.appendChild(sendBtn);
+
+    } else if (selectedType === "series-episode") {
+      card.appendChild(mkEpisodeList());
+
+    } else if (selectedType === "series-season") {
+      card.appendChild(mkSeasonList());
+    }
+  }
+
+  function renderConfirm() {
+    card.innerHTML = "";
+    card.appendChild(mkHeader(() => { selectedItem = null; renderMain(); }, "Confirmar aviso"));
+    card.appendChild(mkSeriesRow());
+    card.appendChild(mkConfirmContent());
+  }
+
+  renderMain();
 }
 function isAdminContent(item) {
   return item && (item.admin === "si" || item.admin === "yes" || item.admin === "true");
@@ -4211,6 +4794,7 @@ function generateContinueWatchingCarousel(snapshot) {
         totalSeasons,
         nombreTemporadas: String(seriesData.nombreTemporadas || "").trim(),
         nombreEspecial: episodeNombreEspecial,
+        progress: historyItem.progress,
       },
     );
 
@@ -4771,17 +5355,38 @@ async function openDetailsModal(id, type, triggerElement = null) {
           popover.appendChild(popEye);
         }
 
-        // — Ítem Discord —
-        const divider2 = document.createElement("div");
-        divider2.className = "dv-more-popover-divider";
-        popover.appendChild(divider2);
+        // — Ítem Discord (solo admin) —
+        if (isAdminUser()) {
+          const divider2 = document.createElement("div");
+          divider2.className = "dv-more-popover-divider";
+          popover.appendChild(divider2);
 
-        const popDiscord = document.createElement("a");
-        popDiscord.className = "dv-more-popover-item pop-discord";
-        popDiscord.href = "#";
-        popDiscord.target = "_blank";
-        popDiscord.innerHTML = `<span class="dv-pop-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg></span><span>Discord</span>`;
-        popover.appendChild(popDiscord);
+          const popDiscord = document.createElement("button");
+          popDiscord.className = "dv-more-popover-item pop-discord";
+          popDiscord.innerHTML = `<span class="dv-pop-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg></span><span>Avisar en Discord</span>`;
+          popDiscord.onclick = async () => {
+            popover.classList.remove("open");
+            moreBtn.classList.remove("active");
+            const label = popDiscord.querySelector("span:last-child");
+            try {
+              label.textContent = "Enviando...";
+              await notifyDiscordNewContent({
+                title: data.title,
+                year: data.year,
+                poster: data.poster || data.image || data.banner || null,
+                type: "movie",
+                requestedBy: data.pedido || data.requestedBy || data.pedidaPor || data.pedida_por || ""
+              });
+              label.textContent = "✓ Enviado";
+            } catch (err) {
+              console.error("[Discord]", err);
+              label.textContent = "✗ Error";
+            } finally {
+              setTimeout(() => { label.textContent = "Avisar en Discord"; }, 3000);
+            }
+          };
+          popover.appendChild(popDiscord);
+        }
 
         // — Toggle popover —
         moreBtn.onclick = (e) => {
@@ -5331,17 +5936,28 @@ async function openSeriesDetailView(id) {
       };
       spPopover.appendChild(spPopStar);
 
-      // — Ítem Discord —
-      const spDivider = document.createElement("div");
-      spDivider.className = "dv-more-popover-divider";
-      spPopover.appendChild(spDivider);
+      // — Ítem Discord (solo admin) —
+      if (isAdminUser()) {
+        const spDivider = document.createElement("div");
+        spDivider.className = "dv-more-popover-divider";
+        spPopover.appendChild(spDivider);
 
-      const spPopDiscord = document.createElement("a");
-      spPopDiscord.className = "dv-more-popover-item pop-discord";
-      spPopDiscord.href = "#";
-      spPopDiscord.target = "_blank";
-      spPopDiscord.innerHTML = `<span class="dv-pop-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg></span><span>Discord</span>`;
-      spPopover.appendChild(spPopDiscord);
+        const DISCORD_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg>`;
+
+        // — Botón directo → abre el modal —
+        const spPopDiscord = document.createElement("button");
+        spPopDiscord.className = "dv-more-popover-item pop-discord";
+        spPopDiscord.innerHTML = `
+          <span class="dv-pop-icon">${DISCORD_SVG}</span>
+          <span>Avisar en Discord</span>`;
+        spPopDiscord.onclick = () => {
+          spPopover.classList.remove("open");
+          spMoreBtn.classList.remove("active");
+          openDiscordNotifyModal({ initialType: "series-episode", seriesData: data, seriesId: id });
+        };
+
+        spPopover.appendChild(spPopDiscord);
+      }
 
       // — Toggle —
       spMoreBtn.onclick = (e) => {
@@ -6058,8 +6674,9 @@ function addToHistoryIfLoggedIn(contentId, type, episodeInfo = {}) {
   let posterUrl = itemData.poster;
   const isSeries = type === "series" || type === "serie";
 
+  let seasonPosterEntry = null;
   if (isSeries && episodeInfo.season) {
-    const seasonPosterEntry =
+    seasonPosterEntry =
       appState.content.seasonPosters[contentId]?.[episodeInfo.season];
     if (seasonPosterEntry) {
       posterUrl =
@@ -6074,9 +6691,32 @@ function addToHistoryIfLoggedIn(contentId, type, episodeInfo = {}) {
   const totalSeasonsForTitle = Object.keys(
     appState.content.seriesEpisodes[contentId] || {},
   ).length;
+
+  // Sufijo de temporada/parte para el título del historial.
+  // Por defecto: prefijo de nombreTemporadas (ej. "P") + número interno
+  // de temporada (ej. "P4").
+  let seasonSuffix = `${(itemData.nombreTemporadas?.[0]?.toUpperCase()) || 'T'}${episodeInfo.season}`;
+
+  // Algunas series (ej. JoJo's Bizarre Adventure) numeran sus "Partes" de
+  // forma distinta a como están ordenadas las temporadas internamente — una
+  // Parte puede abarcar el contenido de varias "temporadas" del sitio, así
+  // que el número de temporada interno no coincide con el número de Parte
+  // que ve el usuario (S4 interno = "Parte 5", por ejemplo). Si esa
+  // temporada tiene una "etiqueta" custom definida (ej. "Parte 5"), la
+  // usamos en vez de asumir season == parte.
+  const etiqueta =
+    typeof seasonPosterEntry === "object"
+      ? (seasonPosterEntry.etiqueta || "").trim()
+      : "";
+  if (etiqueta) {
+    const firstLetter = etiqueta[0].toUpperCase();
+    const numMatch = etiqueta.match(/\d+/);
+    seasonSuffix = numMatch ? `${firstLetter}${numMatch[0]}` : etiqueta;
+  }
+
   const historyTitle = isSeries
     ? totalSeasonsForTitle > 1
-      ? `${itemData.title}: ${(itemData.nombreTemporadas?.[0]?.toUpperCase()) || 'T'}${episodeInfo.season}`
+      ? `${itemData.title}: ${seasonSuffix}`
       : itemData.title
     : itemData.title;
 
@@ -6088,6 +6728,10 @@ function addToHistoryIfLoggedIn(contentId, type, episodeInfo = {}) {
     viewedAt: firebase.database.ServerValue.TIMESTAMP,
     season: isSeries ? episodeInfo.season : null,
     lastEpisode: isSeries ? episodeInfo.index : null,
+    progress:
+      typeof episodeInfo.progress === "number"
+        ? Math.min(1, Math.max(0, episodeInfo.progress))
+        : 0,
   };
 
   db.ref(`users/${user.uid}/history/${historyKey}`).set(historyEntry);
@@ -7021,6 +7665,20 @@ function createMovieCardElement(
             </div>
         `;
     card.appendChild(overlay);
+
+    // ─── Barra de progreso exacta ──────────────────────────────────────
+    // Muestra cuánto del capítulo ya se vio, basado en el % de avance
+    // guardado junto con la entrada del historial (currentTime / duration).
+    const progressRatio =
+      typeof options.progress === "number"
+        ? Math.min(1, Math.max(0, options.progress))
+        : 0;
+    if (progressRatio > 0) {
+      const progressBar = document.createElement("div");
+      progressBar.className = "cw-progress-bar";
+      progressBar.innerHTML = `<div class="cw-progress-fill" style="width:${(progressRatio * 100).toFixed(2)}%"></div>`;
+      card.appendChild(progressBar);
+    }
   }
 
   const watchBtn = card.querySelector(".btn-watchlist");
@@ -8100,6 +8758,42 @@ function injectOnlineCounter() {
           Sin datos todavía
         </div>
       </div>
+      <div class="adash-discord-card" id="adash-discord-card">
+        <div class="adash-discord-header">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0;opacity:.7"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg>
+          <span>Mensaje personalizado al cine</span>
+        </div>
+        <div class="adash-discord-body">
+          <div class="adash-discord-row">
+            <label class="adash-discord-label">Tipo</label>
+            <div class="adash-discord-type-btns" id="adash-dc-types">
+              <button class="adash-dc-type active" data-color="#00D4FF" data-emoji="📢">📢 Aviso</button>
+              <button class="adash-dc-type" data-color="#FFB400" data-emoji="🔧">🔧 Mantenimiento</button>
+              <button class="adash-dc-type" data-color="#43b581" data-emoji="✅">✅ Novedad</button>
+              <button class="adash-dc-type" data-color="#FF4444" data-emoji="🚨">🚨 Urgente</button>
+            </div>
+          </div>
+          <div class="adash-discord-row">
+            <label class="adash-discord-label" for="adash-dc-title">Título</label>
+            <input id="adash-dc-title" class="adash-dc-input" type="text" placeholder="Ej: Mantenimiento programado">
+          </div>
+          <div class="adash-discord-row">
+            <label class="adash-discord-label" for="adash-dc-msg">Mensaje</label>
+            <textarea id="adash-dc-msg" class="adash-dc-input adash-dc-textarea" rows="3" placeholder="Escribe el aviso para los usuarios del cine..."></textarea>
+          </div>
+          <div class="adash-discord-preview" id="adash-dc-preview">
+            <div class="adash-dc-preview-label">Vista previa</div>
+            <div class="adash-dc-preview-embed" id="adash-dc-embed">
+              <div class="adash-dc-embed-title" id="adash-dc-embed-title">📢 Aviso</div>
+              <div class="adash-dc-embed-desc" id="adash-dc-embed-desc"><span style="opacity:.3;font-style:italic;">Sin mensaje todavía...</span></div>
+            </div>
+          </div>
+          <button class="adash-dc-send-btn" id="adash-dc-send">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+            Enviar al cine
+          </button>
+        </div>
+      </div>
     </div>
   `;
 
@@ -8219,6 +8913,158 @@ function injectOnlineCounter() {
   });
 
   renderChart("week");
+
+  // ── Estilos del bloque de mensaje personalizado ───────────────
+  if (!document.getElementById("adash-discord-style")) {
+    const s = document.createElement("style");
+    s.id = "adash-discord-style";
+    s.textContent = `
+      .adash-discord-card {
+        background: rgba(255,255,255,.03);
+        border: 1px solid rgba(255,255,255,.07);
+        border-radius: 14px;
+        overflow: hidden;
+        margin-top: 14px;
+      }
+      .adash-discord-header {
+        display: flex; align-items: center; gap: 8px;
+        padding: 12px 16px 10px;
+        font-size: 11px; font-weight: 700; letter-spacing: .07em;
+        text-transform: uppercase; color: rgba(255,255,255,.35);
+        border-bottom: 1px solid rgba(255,255,255,.05);
+      }
+      .adash-discord-body { padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 12px; }
+      .adash-discord-row  { display: flex; flex-direction: column; gap: 6px; }
+      .adash-discord-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: rgba(255,255,255,.3); }
+      .adash-discord-type-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+      .adash-dc-type {
+        padding: 5px 11px; border-radius: 7px; border: 1px solid rgba(255,255,255,.1);
+        background: rgba(255,255,255,.04); color: rgba(255,255,255,.45);
+        font-size: 11px; font-weight: 600; cursor: pointer; transition: all .15s;
+      }
+      .adash-dc-type.active {
+        border-color: var(--adash-dc-color, #00D4FF);
+        background: color-mix(in srgb, var(--adash-dc-color, #00D4FF) 15%, transparent);
+        color: #fff;
+      }
+      .adash-dc-input {
+        width: 100%; padding: 8px 10px; border-radius: 8px; box-sizing: border-box;
+        background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.09);
+        color: #fff; font-size: 12px; outline: none; transition: border-color .15s;
+        font-family: inherit; resize: none;
+      }
+      .adash-dc-input:focus { border-color: rgba(255,255,255,.25); }
+      .adash-dc-textarea { line-height: 1.5; }
+      .adash-discord-preview { background: rgba(0,0,0,.2); border-radius: 9px; padding: 10px 12px; }
+      .adash-dc-preview-label { font-size: 9px; text-transform: uppercase; letter-spacing: .08em; color: rgba(255,255,255,.25); margin-bottom: 8px; }
+      .adash-dc-preview-embed {
+        border-left: 3px solid var(--adash-dc-color, #00D4FF);
+        padding: 8px 10px; border-radius: 0 6px 6px 0;
+        background: rgba(255,255,255,.04);
+      }
+      .adash-dc-embed-title { font-size: 13px; font-weight: 700; color: #fff; margin-bottom: 5px; }
+      .adash-dc-embed-desc  { font-size: 12px; color: rgba(255,255,255,.6); line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
+      .adash-dc-send-btn {
+        display: flex; align-items: center; justify-content: center; gap: 7px;
+        padding: 10px; border-radius: 9px; border: none; cursor: pointer;
+        background: linear-gradient(135deg, #7289da, #5b6eae);
+        color: #fff; font-size: 13px; font-weight: 700; transition: opacity .15s;
+      }
+      .adash-dc-send-btn:hover { opacity: .85; }
+      .adash-dc-send-btn:disabled { opacity: .5; cursor: not-allowed; }
+    `;
+    document.head.appendChild(s);
+  }
+
+  // ── Lógica del mensaje personalizado ─────────────────────────
+  let _dcActiveType = { emoji: "📢", color: "#00D4FF", label: "Aviso" };
+
+  const dcTypes   = document.getElementById("adash-dc-types");
+  const dcTitle   = document.getElementById("adash-dc-title");
+  const dcMsg     = document.getElementById("adash-dc-msg");
+  const dcEmbed   = document.getElementById("adash-dc-embed");
+  const dcEmbedT  = document.getElementById("adash-dc-embed-title");
+  const dcEmbedD  = document.getElementById("adash-dc-embed-desc");
+  const dcSendBtn = document.getElementById("adash-dc-send");
+
+  function dcUpdatePreview() {
+    const title = dcTitle.value.trim();
+    const msg   = dcMsg.value.trim();
+    dcEmbedT.textContent = _dcActiveType.emoji + " " + (title || _dcActiveType.label);
+    dcEmbedD.innerHTML   = msg
+      ? msg.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+      : '<span style="opacity:.3;font-style:italic;">Sin mensaje todavía...</span>';
+    dcEmbed.style.setProperty("--adash-dc-color", _dcActiveType.color);
+    document.getElementById("adash-discord-card").style.setProperty("--adash-dc-color", _dcActiveType.color);
+  }
+
+  dcTypes.addEventListener("click", e => {
+    const btn = e.target.closest(".adash-dc-type");
+    if (!btn) return;
+    dcTypes.querySelectorAll(".adash-dc-type").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    _dcActiveType = {
+      emoji: btn.dataset.emoji,
+      color: btn.dataset.color,
+      label: btn.textContent.replace(btn.dataset.emoji, "").trim()
+    };
+    dcUpdatePreview();
+  });
+
+  dcTitle.addEventListener("input", dcUpdatePreview);
+  dcMsg.addEventListener("input", dcUpdatePreview);
+
+  document.getElementById("adash-discord-card").style.setProperty("--adash-dc-color", _dcActiveType.color);
+
+  dcSendBtn.addEventListener("click", async () => {
+    const title = dcTitle.value.trim();
+    const msg   = dcMsg.value.trim();
+    if (!msg) {
+      dcMsg.focus();
+      dcMsg.style.borderColor = "#FF4444";
+      setTimeout(() => dcMsg.style.borderColor = "", 1500);
+      return;
+    }
+    dcSendBtn.disabled = true;
+    dcSendBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg> Enviando\u2026';
+    const colorInt = parseInt(_dcActiveType.color.replace("#", ""), 16);
+    try {
+      const res = await fetch(DISCORD_WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          embeds: [{
+            author: { name: "Cine Corneta", url: "https://cornetagang.github.io/cinecorneta/" },
+            title: _dcActiveType.emoji + " " + (title || _dcActiveType.label),
+            description: msg,
+            color: colorInt,
+            footer: { text: "Aviso del cine" },
+            timestamp: new Date().toISOString()
+          }]
+        })
+      });
+      if (!res.ok) throw new Error(res.status);
+      dcSendBtn.innerHTML = "\u2713 Enviado";
+      dcSendBtn.style.background = "linear-gradient(135deg,#43b581,#3aa36e)";
+      setTimeout(() => {
+        dcTitle.value = "";
+        dcMsg.value   = "";
+        dcUpdatePreview();
+        dcSendBtn.disabled = false;
+        dcSendBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg> Enviar al cine';
+        dcSendBtn.style.background = "";
+      }, 2000);
+    } catch (err) {
+      console.error("[Discord custom]", err);
+      dcSendBtn.innerHTML = "\u2717 Error al enviar";
+      dcSendBtn.style.background = "linear-gradient(135deg,#f04747,#d93535)";
+      dcSendBtn.disabled = false;
+      setTimeout(() => {
+        dcSendBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg> Enviar al cine';
+        dcSendBtn.style.background = "";
+      }, 3000);
+    }
+  });
 }
 
 window.adminForceUpdate = async () => {
@@ -9008,6 +9854,12 @@ window.closeFiltersDrawer = function () {
       const seriesTitle = seriesData.title || seriesId;
       const poster      = seriesData.poster || "";
       const seasons     = eps[seriesId];
+      const realSeasonCount = Object.keys(seasons).filter(s => {
+        const sl = String(s).toLowerCase();
+        return !sl.includes("pelicula") && !sl.includes("película") &&
+               !sl.includes("especial") && !sl.includes("ova") &&
+               !sl.includes("movie") && !sl.includes("special");
+      }).length;
 
       for (const seasonKey in seasons) {
         const epList = Array.isArray(seasons[seasonKey])
@@ -9032,6 +9884,7 @@ window.closeFiltersDrawer = function () {
             epNum:   ep.episode || ep.numero || (idx + 1),
             epTitle: ep.title || ep.titulo || "",
             upcoming: isProximamente,
+            realSeasonCount,
           });
         });
       }
@@ -9115,7 +9968,7 @@ window.closeFiltersDrawer = function () {
             <img src="${ep.poster}" class="scal-ep-poster" onerror="this.style.display='none'">
             <div class="scal-ep-info">
               <span class="scal-ep-title">${ep.seriesTitle}</span>
-              <span class="scal-ep-sub">${ep.season} · Ep. ${ep.epNum}${ep.epTitle ? " — " + ep.epTitle : ""}</span>
+              <span class="scal-ep-sub">${ep.realSeasonCount <= 1 ? `Ep. ${ep.epNum}` : `${ep.season} · Ep. ${ep.epNum}`}${ep.epTitle ? " — " + ep.epTitle : ""}</span>
             </div>
             <span class="scal-ep-soon"><i class="fas fa-clock"></i> Próximamente</span>
           </div>
@@ -9124,7 +9977,7 @@ window.closeFiltersDrawer = function () {
             <img src="${ep.poster}" class="scal-ep-poster" onerror="this.style.display='none'">
             <div class="scal-ep-info">
               <span class="scal-ep-title">${ep.seriesTitle}</span>
-              <span class="scal-ep-sub">${ep.season} · Ep. ${ep.epNum}${ep.epTitle ? " — " + ep.epTitle : ""}</span>
+              <span class="scal-ep-sub">${ep.realSeasonCount <= 1 ? `Ep. ${ep.epNum}` : `${ep.season} · Ep. ${ep.epNum}`}${ep.epTitle ? " — " + ep.epTitle : ""}</span>
             </div>
             <i class="fas fa-chevron-right scal-ep-arrow"></i>
           </div>
