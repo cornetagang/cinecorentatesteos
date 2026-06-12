@@ -3864,6 +3864,24 @@ body.modal-open {
   transform: scale(1);
 }
 
+/* ─── Barra de progreso exacta (Continuar Viendo) ──────────────────── */
+.cw-progress-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.2);
+  z-index: 6;
+  pointer-events: none;
+}
+
+.cw-progress-fill {
+  height: 100%;
+  background: var(--accent-color, #e50914);
+  transition: width 0.3s ease;
+}
+
 .btn-remove-continue-watching:hover {
   background: var(--accent-color);
   border-color: var(--accent-color);
