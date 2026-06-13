@@ -218,9 +218,12 @@ export const FEATURES = {
 export const ANALYTICS = { ENABLED: false, TRACK_PAGE_VIEWS: true, TRACK_ERRORS: true, TRACK_USER_ACTIONS: true };
 
 /**
- * Webhook de Discord para notificaciones de nuevo contenido (solo admin)
+ * Notas de seguridad:
+ * El webhook de Discord ya NO se expone en el frontend.
+ * El envío se hace vía WORKER_URL + "/discord-notify",
+ * que verifica el token de Firebase del usuario antes de reenviar
+ * al webhook real (guardado como secret en Cloudflare).
  */
-export const DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1514124602995900568/Krwo-SjD1AXXX1QvUvqZorz2sQrTYLPZ1yM25PigE7WXRUFFw4vWZNTqJR5_IdnPpwQQ";
 
 // Exportar todo como objeto único también
 export default {
