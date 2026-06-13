@@ -320,6 +320,12 @@ class CinePlayer {
       this._mobileDrawerEl = null;
     }
 
+    // Cancelar listeners de teclado/mouse de la carga anterior (evita acumulacion)
+    if (this._keyboardAbortCtrl) {
+      this._keyboardAbortCtrl.abort();
+      this._keyboardAbortCtrl = null;
+    }
+
     // Detener pre-fetch de la carga anterior
     this._stopPreFetch?.();
     this._stopPreFetch = null;
@@ -544,8 +550,13 @@ class CinePlayer {
       });
     }
 
-    // ─── Pre-fetch en background (solo archivos fast-start) ──
-    if (isFastStart && contentLength > 0) {
+    // ─── Pre-fetch en background ─────────────────────────────────────────
+    // No requiere "fast-start" (moov al inicio): el cálculo de qué chunk
+    // descargar es por proporción de tiempo (currentTime/duration), y el
+    // moov es minúsculo frente al mdat, así que la estimación es válida
+    // igual para archivos con moov al final (muy común en remuxes de
+    // fansubs). Solo se necesita conocer el tamaño total del archivo.
+    if (contentLength > 0) {
       this._startPreFetch(videoUrl, contentLength, art);
     }
 
@@ -679,10 +690,16 @@ class CinePlayer {
     // =======================================================
     // ⌨️ CONTROL MAESTRO DE TECLADO (ESTILO YOUTUBE)
     // =======================================================
+    // BUG FIX: usar AbortController para poder remover los listeners de
+    // teclado y mousedown en cada load(), evitando acumulacion de handlers.
+    if (this._keyboardAbortCtrl) this._keyboardAbortCtrl.abort();
+    this._keyboardAbortCtrl = new AbortController();
+    const _kbSignal = this._keyboardAbortCtrl.signal;
+
     // Variable para saber si el player tiene el foco
     let isPlayerFocused = false;
 
-    // Detectamos cuándo el usuario hace clic dentro del reproductor
+    // Detectamos cuando el usuario hace clic dentro del reproductor
     this.container.addEventListener("mousedown", () => {
       isPlayerFocused = true;
     });
@@ -692,14 +709,14 @@ class CinePlayer {
       if (!this.container.contains(e.target)) {
         isPlayerFocused = false;
       }
-    });
+    }, { signal: _kbSignal });
 
-    // Escuchamos las teclas a nivel global, pero SOLO actuamos si está enfocado
+    // Escuchamos las teclas a nivel global, pero SOLO actuamos si esta enfocado
     document.addEventListener("keydown", (e) => {
-      // Si no está enfocado, dejamos que el navegador haga lo normal (scroll, etc.)
+      // Si no esta enfocado, dejamos que el navegador haga lo normal (scroll, etc.)
       if (!isPlayerFocused) return;
 
-      // Si presionó alguna de las teclas que nos interesan, bloqueamos el scroll nativo
+      // Si presiono alguna de las teclas que nos interesan, bloqueamos el scroll nativo
       if (
         ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(e.key)
       ) {
@@ -733,7 +750,7 @@ class CinePlayer {
           break;
 
         case " ": // Tecla Espacio
-          // Play / Pausa (Funciona perfecto ahora que apagamos el nativo)
+          // Play / Pausa
           art.toggle();
           break;
 
@@ -742,7 +759,7 @@ class CinePlayer {
           const fps = 30;
           art.video.pause();
           art.currentTime = Math.max(art.currentTime - 1 / fps, 0);
-          art.notice.show = "◀ 1 fotograma";
+          art.notice.show = "\u25c4 1 fotograma";
           break;
         }
 
@@ -751,7 +768,7 @@ class CinePlayer {
           const fps = 30;
           art.video.pause();
           art.currentTime = Math.min(art.currentTime + 1 / fps, art.duration);
-          art.notice.show = "1 fotograma ▶";
+          art.notice.show = "1 fotograma \u25ba";
           break;
         }
 
@@ -761,7 +778,7 @@ class CinePlayer {
           art.fullscreen = !art.fullscreen;
           break;
       }
-    });
+    }, { signal: _kbSignal });
 
     // =======================================================
 // 🎞️ BOTÓN BLANCO Y NEGRO (solo si la serie lo requiere)
@@ -876,17 +893,23 @@ if (grayscale) {
               art.play();
             });
 
-            // Limpiar sub anterior antes de asignar el nuevo
+            const cineInst = window.appState?.player?.activeCineInstance;
+
+            // Limpiar sub anterior antes de asignar el nuevo (incluye
+            // destruir el canvas .ass del capítulo anterior si lo había,
+            // sin esto se quedaba el sub viejo "pegado" sobre el video nuevo)
             art.subtitle.show = false;
             art.subtitle.url = "";
             if (newSubUrl && subType === "srt") {
+              cineInst?._clearAssPlugin?.();
               art.subtitle.url = newSubUrl;
               art.subtitle.show = true;
             } else if (newSubUrl && subType === "ass") {
-              art.plugins?.ass?.setTrack?.(newSubUrl);
+              cineInst?._remountAssPlugin?.(newSubUrl);
+            } else {
+              cineInst?._clearAssPlugin?.();
             }
 
-            const cineInst = window.appState?.player?.activeCineInstance;
             if (cineInst) cineInst._refreshCCButton(art, newSubUrl, subType);
 
             window.appState.player.state[seriesId] = {
@@ -1039,17 +1062,23 @@ if (grayscale) {
               art.play();
             });
 
-            // Limpiar sub anterior antes de asignar el nuevo
+            const cineInst = window.appState?.player?.activeCineInstance;
+
+            // Limpiar sub anterior antes de asignar el nuevo (incluye
+            // destruir el canvas .ass del capítulo anterior si lo había,
+            // sin esto se quedaba el sub viejo "pegado" sobre el video nuevo)
             art.subtitle.show = false;
             art.subtitle.url = "";
             if (newSubUrl && subType === "srt") {
+              cineInst?._clearAssPlugin?.();
               art.subtitle.url = newSubUrl;
               art.subtitle.show = true;
             } else if (newSubUrl && subType === "ass") {
-              art.plugins?.ass?.setTrack?.(newSubUrl);
+              cineInst?._remountAssPlugin?.(newSubUrl);
+            } else {
+              cineInst?._clearAssPlugin?.();
             }
 
-            const cineInst = window.appState?.player?.activeCineInstance;
             if (cineInst) cineInst._refreshCCButton(art, newSubUrl, subType);
 
             window.appState.player.state[seriesId] = {
@@ -1513,14 +1542,20 @@ if (grayscale) {
               hideEpPanel();
             });
 
-            // Limpiar sub anterior antes de asignar el nuevo
+            const cineInstSel = window.appState?.player?.activeCineInstance;
+
+            // Limpiar sub anterior antes de asignar el nuevo (incluye
+            // destruir el canvas .ass del episodio anterior si lo había)
             art.subtitle.show = false;
             art.subtitle.url = "";
             if (newSubUrl && subType === "srt") {
+              cineInstSel?._clearAssPlugin?.();
               art.subtitle.url = newSubUrl;
               art.subtitle.show = true;
             } else if (newSubUrl && subType === "ass") {
-              art.plugins?.ass?.setTrack?.(newSubUrl);
+              cineInstSel?._remountAssPlugin?.(newSubUrl);
+            } else {
+              cineInstSel?._clearAssPlugin?.();
             }
 
             // ✅ FIX: Actualizar el botón CC según el nuevo episodio.
@@ -1716,7 +1751,39 @@ if (grayscale) {
   }
 
   // ===========================================================
-  // 🔌 _loadAssPlugin: Carga dinámica del módulo ESM con cache
+  // 🧹 _clearAssPlugin: Destruye el canvas/worker ASS activo (si existe)
+  //
+  //   Necesario al cambiar de episodio sin recrear el <CinePlayer>
+  //   (ej. botones siguiente/anterior en pantalla completa): si no se
+  //   destruye, el canvas de JASSUB sigue renderizando los subtítulos
+  //   .ass del capítulo anterior sobre el nuevo video.
+  // ===========================================================
+  _clearAssPlugin() {
+    // Invalida cualquier _mountAssPlugin en vuelo (fetch del .ass anterior
+    // que pudiera resolver tarde y reactivar subs viejos)
+    this._mountId++;
+    try {
+      this._assPlugin?.instance?.destroy?.();
+    } catch (_) {}
+    try {
+      this._assPlugin?.destroy?.();
+    } catch (_) {}
+    this._assPlugin = null;
+    if (this.container) this.container._assPluginRef = null;
+  }
+
+  // ===========================================================
+  // 🔁 _remountAssPlugin: Cambia los subtítulos .ass sin recrear el player
+  //
+  //   El plugin self-hosted (artplayer-plugin-jassub) no expone un
+  //   `setTrack` real para cambiar de pista en caliente, así que la
+  //   forma confiable de "cambiar" de subtítulo .ass es: destruir el
+  //   canvas/worker actual y volver a montar el plugin con el nuevo .ass.
+  // ===========================================================
+  async _remountAssPlugin(subUrl) {
+    this._clearAssPlugin();
+    await this._mountAssPlugin(subUrl);
+  }
   //
   //   Técnica "blob import":
   //     1. fetch() del .js remoto
@@ -2037,6 +2104,18 @@ if (grayscale) {
   // Se respeta navigator.connection:
   //   - saveData / 2g / slow-2g → nunca se prefetchea, ni en pausa.
   //   - todo lo demás (3g, 4g, wifi, sin API) → prefetch normal en pausa.
+  // ─── Pre-fetch en pausa Y durante reproducción (estilo YouTube) ──────────
+  // En PAUSA: prefetch agresivo (varios chunks, 2 a la vez) — igual que antes.
+  // REPRODUCIENDO: prefetch ligero (1 chunk de margen, 1 a la vez) en
+  // conexiones razonables, para que el <video> nativo siempre tenga un
+  // colchón extra cuando llega una escena de acción con bitrate más alto
+  // (esto es lo que causa los "freezes" de medio segundo en anime/AV1).
+  // En SEEK se reinicia el cálculo de "chunk actual" inmediatamente.
+  // Se respeta navigator.connection:
+  //   - saveData / 2g / slow-2g → nunca se prefetchea, ni en pausa ni jugando.
+  //   - reproduciendo + 3g → no se prefetchea extra (evita competir con el
+  //     buffering nativo, que es justo lo que rompía la reproducción en 3G).
+  //   - reproduciendo + 4g / wifi / sin API → prefetch ligero permitido.
   _startPreFetch(url, contentLength, art) {
     const conn =
       navigator.connection ||
@@ -2044,11 +2123,25 @@ if (grayscale) {
       navigator.webkitConnection;
 
     const CHUNK = 4 * 1024 * 1024; // 4 MB por chunk
-    const MAX_AHEAD = 4;            // chunks a mantener por delante del playhead
-    const MAX_CONCURRENT = 2;       // máximo de fetches simultáneos
+
+    // En pausa: igual de agresivo que antes (estilo "llenar la barra")
+    const PAUSED_AHEAD = 4;
+    const PAUSED_CONCURRENT = 2;
+
+    // Reproduciendo, conexión "normal" (4g sin dato de downlink, o sin API):
+    // colchón pequeño, sin arriesgarse a competir por ancho de banda
+    const PLAYING_AHEAD_DEFAULT = 1;
+    const PLAYING_CONCURRENT_DEFAULT = 1;
+
+    // Reproduciendo, conexión RÁPIDA confirmada (downlink alto, ej. fibra):
+    // colchón grande — igual de agresivo que en pausa, no hay riesgo real
+    // de "robarle" ancho de banda al <video> nativo.
+    const PLAYING_AHEAD_FAST = 6;
+    const PLAYING_CONCURRENT_FAST = 3;
+    const FAST_DOWNLINK_MBPS = 8; // ~8 Mbps+ ya sobra para cualquier 1080p
 
     const fetched = new Set();
-    let stopped = true; // arranca detenido: solo corre mientras está en pausa
+    let stopped = false;
     let active = 0;
 
     // ─── Estado expuesto para el indicador de buffer ────────────────────
@@ -2069,16 +2162,50 @@ if (grayscale) {
           : 0,
     };
 
-    // ¿La conexión permite prefetchear (aunque sea en pausa)?
-    const connAllows = () => {
+    // Conexión permite prefetch en pausa (igual de permisivo que antes)
+    const connAllowsPaused = () => {
       if (!conn) return true;
       if (conn.saveData) return false;
       const type = conn.effectiveType;
       return !(type === "slow-2g" || type === "2g");
     };
 
-    const fetchChunk = async (idx) => {
-      if (stopped || fetched.has(idx) || active >= MAX_CONCURRENT) return;
+    // Conexión permite prefetch ligero MIENTRAS SE REPRODUCE (más estricto:
+    // solo 4g, wifi, o navegadores sin Network Information API)
+    const connAllowsPlaying = () => {
+      if (!conn) return true;
+      if (conn.saveData) return false;
+      const type = conn.effectiveType;
+      return type === "4g" || type == null;
+    };
+
+    // ¿La conexión es claramente rápida (fibra/wifi bueno)? Si downlink no
+    // está disponible (Safari, etc.) pero tampoco hay señales de conexión
+    // lenta, se trata igual como "rápida" — mejor sobrar colchón que faltar.
+    const connIsFast = () => {
+      if (!conn) return true;
+      if (conn.saveData) return false;
+      const type = conn.effectiveType;
+      if (type === "slow-2g" || type === "2g" || type === "3g") return false;
+      if (typeof conn.downlink === "number") return conn.downlink >= FAST_DOWNLINK_MBPS;
+      return true; // 4g/desconocido sin dato de downlink → asumir rápida
+    };
+
+    // ¿Cuánto margen / paralelismo corresponde según el estado actual?
+    const currentLimits = () => {
+      if (art.paused) {
+        return connAllowsPaused()
+          ? { ahead: PAUSED_AHEAD, concurrent: PAUSED_CONCURRENT }
+          : null;
+      }
+      if (!connAllowsPlaying()) return null;
+      return connIsFast()
+        ? { ahead: PLAYING_AHEAD_FAST, concurrent: PLAYING_CONCURRENT_FAST }
+        : { ahead: PLAYING_AHEAD_DEFAULT, concurrent: PLAYING_CONCURRENT_DEFAULT };
+    };
+
+    const fetchChunk = async (idx, maxConcurrent) => {
+      if (stopped || fetched.has(idx) || active >= maxConcurrent) return;
       const start = idx * CHUNK;
       if (start >= contentLength) return;
       fetched.add(idx);
@@ -2093,55 +2220,64 @@ if (grayscale) {
         fetched.delete(idx); // permitir reintento en el siguiente ciclo
       } finally {
         active--;
-        pump(); // libera el "slot" → encadena el siguiente chunk si sigue en pausa
+        pump(); // libera el "slot" → encadena el siguiente chunk si toca
       }
     };
 
     const pump = () => {
       if (stopped) return;
+      const limits = currentLimits();
+      if (!limits) return;
+
       const estimatedByte =
         art.duration > 0
           ? (art.currentTime / art.duration) * contentLength
           : 0;
       const currentChunk = Math.floor(estimatedByte / CHUNK);
-      for (let i = 0; i <= MAX_AHEAD; i++) fetchChunk(currentChunk + i);
+      for (let i = 0; i <= limits.ahead; i++) {
+        fetchChunk(currentChunk + i, limits.concurrent);
+      }
     };
 
-    // Reproduciendo o buscando → cortar cualquier prefetch en curso
-    const onPlay = () => { stopped = true; };
+    // Cambios de estado relevantes → reevaluar y bombear
+    const onStateChange = () => pump();
 
-    // Pausado → si la conexión lo permite, arrancar/continuar el prefetch
-    const onPause = () => {
-      if (!connAllows()) return;
-      stopped = false;
+    // Seek → el "chunk actual" cambia de golpe; recalcular ya mismo
+    const onSeeking = () => pump();
+
+    // Mientras reproduce, recalcular cada pocos segundos para ir
+    // "siguiendo" al playhead con el colchón ligero
+    let lastTickPump = 0;
+    const onTimeUpdate = () => {
+      const now = Date.now();
+      if (now - lastTickPump < 4000) return;
+      lastTickPump = now;
       pump();
     };
 
-    // La conexión cambió mientras está pausado y prefetcheando: si pasa a
-    // saveData/2G, cortar en el acto.
-    const onConnChange = () => {
-      if (stopped) return;
-      if (!connAllows()) stopped = true;
-    };
+    // Conexión cambió → reevaluar (puede habilitar o cortar el prefetch)
+    const onConnChange = () => pump();
 
-    art.on("play",    onPlay);
-    art.on("playing", onPlay);
-    art.on("pause",   onPause);
-    art.on("seeking", onPlay);
+    art.on("play",       onStateChange);
+    art.on("playing",    onStateChange);
+    art.on("pause",      onStateChange);
+    art.on("seeking",    onSeeking);
+    art.on("timeupdate", onTimeUpdate);
     conn?.addEventListener?.("change", onConnChange);
 
     this._stopPreFetch = () => {
       stopped = true;
       this._prefetchState = null;
-      art.off?.("play",    onPlay);
-      art.off?.("playing", onPlay);
-      art.off?.("pause",   onPause);
-      art.off?.("seeking", onPlay);
+      art.off?.("play",       onStateChange);
+      art.off?.("playing",    onStateChange);
+      art.off?.("pause",      onStateChange);
+      art.off?.("seeking",    onSeeking);
+      art.off?.("timeupdate", onTimeUpdate);
       conn?.removeEventListener?.("change", onConnChange);
     };
 
-    // Si el player carga ya en pausa (poster / antes de darle play), arrancar
-    if (art.paused) onPause();
+    // Arranque inicial (poster / antes de darle play, o ya reproduciendo)
+    pump();
   }
 
   // ─── 📶 Indicador de conexión + buffer ───────────────────────────────────
@@ -2291,6 +2427,11 @@ if (grayscale) {
 
   destroy() {
     this._mountId++;
+    // Cancelar listeners de teclado/mouse
+    if (this._keyboardAbortCtrl) {
+      this._keyboardAbortCtrl.abort();
+      this._keyboardAbortCtrl = null;
+    }
     this._stopPreFetch?.();
     this._stopPreFetch = null;
     clearTimeout(this._halfwayTimer);
@@ -2812,14 +2953,20 @@ if (grayscale) {
               art.video.load();
               art.once("video:canplay", () => art.play());
 
-              // Limpiar sub anterior antes de asignar el nuevo
+              const cineInstDrawer = window.appState?.player?.activeCineInstance;
+
+              // Limpiar sub anterior antes de asignar el nuevo (incluye
+              // destruir el canvas .ass del episodio anterior si lo había)
               art.subtitle.show = false;
               art.subtitle.url = "";
               if (newSubUrl && epSubType === "srt") {
+                cineInstDrawer?._clearAssPlugin?.();
                 art.subtitle.url = newSubUrl;
                 art.subtitle.show = true;
               } else if (newSubUrl && epSubType === "ass") {
-                art.plugins?.ass?.setTrack?.(newSubUrl);
+                cineInstDrawer?._remountAssPlugin?.(newSubUrl);
+              } else {
+                cineInstDrawer?._clearAssPlugin?.();
               }
 
               const cineInst = window.appState?.player?.activeCineInstance;
@@ -4745,15 +4892,17 @@ export function populateEpisodeList(seriesId, seasonNum) {
 
   container.innerHTML = "";
 
-  [...episodes]
-    .filter(ep => String(ep?.proximamente || "").trim().toLowerCase() !== "si")
-    .sort((a, b) => a.episodeNumber - b.episodeNumber)
-    .forEach((episode, index) => {
+  // BUG FIX: guardar el indice original antes de filtrar proximamente,
+  // para que openEpisode use la posicion correcta en seriesEpisodes[season].
+  [...episodes.map((ep, originalIndex) => ({ ep, originalIndex }))]
+    .filter(({ ep }) => String(ep?.proximamente || "").trim().toLowerCase() !== "si")
+    .sort((a, b) => a.ep.episodeNumber - b.ep.episodeNumber)
+    .forEach(({ ep: episode, originalIndex }) => {
       const card = document.createElement("div");
       card.className = "sp-episode-item sp-episode-item-mobile";
-      card.id = `episode-card-${seriesId}-${seasonNum}-${index}`;
+      card.id = `episode-card-${seriesId}-${seasonNum}-${originalIndex}`;
       card.addEventListener("click", () =>
-        openEpisode(seriesId, seasonNum, index),
+        openEpisode(seriesId, seasonNum, originalIndex),
       );
 
       const thumbSrc =
