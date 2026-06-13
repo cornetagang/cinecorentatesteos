@@ -320,12 +320,6 @@ class CinePlayer {
       this._mobileDrawerEl = null;
     }
 
-    // Cancelar listeners de teclado/mouse de la carga anterior (evita acumulacion)
-    if (this._keyboardAbortCtrl) {
-      this._keyboardAbortCtrl.abort();
-      this._keyboardAbortCtrl = null;
-    }
-
     // Detener pre-fetch de la carga anterior
     this._stopPreFetch?.();
     this._stopPreFetch = null;
@@ -690,16 +684,10 @@ class CinePlayer {
     // =======================================================
     // ⌨️ CONTROL MAESTRO DE TECLADO (ESTILO YOUTUBE)
     // =======================================================
-    // BUG FIX: usar AbortController para poder remover los listeners de
-    // teclado y mousedown en cada load(), evitando acumulacion de handlers.
-    if (this._keyboardAbortCtrl) this._keyboardAbortCtrl.abort();
-    this._keyboardAbortCtrl = new AbortController();
-    const _kbSignal = this._keyboardAbortCtrl.signal;
-
     // Variable para saber si el player tiene el foco
     let isPlayerFocused = false;
 
-    // Detectamos cuando el usuario hace clic dentro del reproductor
+    // Detectamos cuándo el usuario hace clic dentro del reproductor
     this.container.addEventListener("mousedown", () => {
       isPlayerFocused = true;
     });
@@ -709,14 +697,14 @@ class CinePlayer {
       if (!this.container.contains(e.target)) {
         isPlayerFocused = false;
       }
-    }, { signal: _kbSignal });
+    });
 
-    // Escuchamos las teclas a nivel global, pero SOLO actuamos si esta enfocado
+    // Escuchamos las teclas a nivel global, pero SOLO actuamos si está enfocado
     document.addEventListener("keydown", (e) => {
-      // Si no esta enfocado, dejamos que el navegador haga lo normal (scroll, etc.)
+      // Si no está enfocado, dejamos que el navegador haga lo normal (scroll, etc.)
       if (!isPlayerFocused) return;
 
-      // Si presiono alguna de las teclas que nos interesan, bloqueamos el scroll nativo
+      // Si presionó alguna de las teclas que nos interesan, bloqueamos el scroll nativo
       if (
         ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(e.key)
       ) {
@@ -750,7 +738,7 @@ class CinePlayer {
           break;
 
         case " ": // Tecla Espacio
-          // Play / Pausa
+          // Play / Pausa (Funciona perfecto ahora que apagamos el nativo)
           art.toggle();
           break;
 
@@ -759,7 +747,7 @@ class CinePlayer {
           const fps = 30;
           art.video.pause();
           art.currentTime = Math.max(art.currentTime - 1 / fps, 0);
-          art.notice.show = "\u25c4 1 fotograma";
+          art.notice.show = "◀ 1 fotograma";
           break;
         }
 
@@ -768,7 +756,7 @@ class CinePlayer {
           const fps = 30;
           art.video.pause();
           art.currentTime = Math.min(art.currentTime + 1 / fps, art.duration);
-          art.notice.show = "1 fotograma \u25ba";
+          art.notice.show = "1 fotograma ▶";
           break;
         }
 
@@ -778,7 +766,7 @@ class CinePlayer {
           art.fullscreen = !art.fullscreen;
           break;
       }
-    }, { signal: _kbSignal });
+    });
 
     // =======================================================
 // 🎞️ BOTÓN BLANCO Y NEGRO (solo si la serie lo requiere)
@@ -949,6 +937,19 @@ if (grayscale) {
               }
             }
 
+            // BUG FIX: actualizar pendingHistorySave con el episodio actual
+            // para que al presionar Volver se guarde el ultimo episodio visto,
+            // no el primero con el que se abrio el player.
+            window.appState.player.pendingHistorySave = {
+              contentId: seriesId,
+              type: "series",
+              episodeInfo: {
+                season: targetSeason,
+                index: targetIdx,
+                title: targetEp.title || "",
+              },
+            };
+
             try {
               const allProgress =
                 JSON.parse(localStorage.getItem("seriesProgress")) || {};
@@ -1117,6 +1118,19 @@ if (grayscale) {
                   ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
               }
             }
+
+            // BUG FIX: actualizar pendingHistorySave con el episodio actual
+            // para que al presionar Volver se guarde el ultimo episodio visto,
+            // no el primero con el que se abrio el player.
+            window.appState.player.pendingHistorySave = {
+              contentId: seriesId,
+              type: "series",
+              episodeInfo: {
+                season: targetSeason,
+                index: targetIdx,
+                title: targetEp.title || "",
+              },
+            };
 
             try {
               const allProgress =
@@ -2427,11 +2441,6 @@ if (grayscale) {
 
   destroy() {
     this._mountId++;
-    // Cancelar listeners de teclado/mouse
-    if (this._keyboardAbortCtrl) {
-      this._keyboardAbortCtrl.abort();
-      this._keyboardAbortCtrl = null;
-    }
     this._stopPreFetch?.();
     this._stopPreFetch = null;
     clearTimeout(this._halfwayTimer);
@@ -4892,17 +4901,15 @@ export function populateEpisodeList(seriesId, seasonNum) {
 
   container.innerHTML = "";
 
-  // BUG FIX: guardar el indice original antes de filtrar proximamente,
-  // para que openEpisode use la posicion correcta en seriesEpisodes[season].
-  [...episodes.map((ep, originalIndex) => ({ ep, originalIndex }))]
-    .filter(({ ep }) => String(ep?.proximamente || "").trim().toLowerCase() !== "si")
-    .sort((a, b) => a.ep.episodeNumber - b.ep.episodeNumber)
-    .forEach(({ ep: episode, originalIndex }) => {
+  [...episodes]
+    .filter(ep => String(ep?.proximamente || "").trim().toLowerCase() !== "si")
+    .sort((a, b) => a.episodeNumber - b.episodeNumber)
+    .forEach((episode, index) => {
       const card = document.createElement("div");
       card.className = "sp-episode-item sp-episode-item-mobile";
-      card.id = `episode-card-${seriesId}-${seasonNum}-${originalIndex}`;
+      card.id = `episode-card-${seriesId}-${seasonNum}-${index}`;
       card.addEventListener("click", () =>
-        openEpisode(seriesId, seasonNum, originalIndex),
+        openEpisode(seriesId, seasonNum, index),
       );
 
       const thumbSrc =
