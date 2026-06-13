@@ -6,13 +6,13 @@
 // ===========================================================
 // 1. IMPORTS
 // ===========================================================
-import { API_URL, firebaseConfig, UI, THEMES, DISCORD_WEBHOOK_URL } from "./core/config.js";
-import { logError, ErrorHandler } from "./utils/logger.js";
+import { API_URL, firebaseConfig, UI, THEMES, WORKER_URL } from "./core/config.js";
+import { logError, ErrorHandler, initLogger } from "./utils/logger.js";
 import CacheManager from "./utils/cache-manager.js";
 import ModalManager from "./utils/modal-manager.js";
 import ContentManager from "./utils/content-manager.js";
 import ThemeManager, { updateThemeAssets } from "./utils/theme-manager.js";
-import LazyImageLoader from "./utils/lazy-loader.js";
+import LazyImageLoader, { injectLazyLoadingStyles } from "./utils/lazy-loader.js";
 import { initUniverses, renderUniversesHub } from "./features/universes.js";
 
 // Instancias vacías (se llenan abajo)
@@ -81,7 +81,6 @@ let rouletteModule = null;
 let reviewsModule = null;
 let iptvModule = null;
 let universesModule = null;
-let reportsModule = null;
 
 async function getPlayerModule() {
   if (playerModule) return playerModule;
@@ -163,14 +162,6 @@ async function getUniversesModule() {
     openSeriesDetailView,
   });
   universesModule = module;
-  return module;
-}
-
-async function getReportsModule() {
-  if (reportsModule) return reportsModule;
-  const module = await import("./features/reports.js?v=" + Date.now());
-  module.initReports({ appState, DOM, auth, db, ErrorHandler });
-  reportsModule = module;
   return module;
 }
 
@@ -287,6 +278,7 @@ const DOM = {
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.database();
+initLogger(db, auth);
 
 // ===========================================================
 // 2. INICIO Y CARGA DE DATOS (🆕 MEJORADO CON CACHÉ)
@@ -310,6 +302,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   cacheManager = new CacheManager();
   lazyLoader = new LazyImageLoader();
+  injectLazyLoadingStyles();
 
   modalManager = ModalManager;
   contentManager = ContentManager;
@@ -342,30 +335,6 @@ document.addEventListener("DOMContentLoaded", () => {
   document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
   document.addEventListener("mozfullscreenchange", handleFullscreenChange);
   document.addEventListener("msfullscreenchange", handleFullscreenChange);
-
-  const seriesModal = document.getElementById("series-player-page");
-  if (seriesModal) {
-    new MutationObserver(async (mutations) => {
-      for (const m of mutations) {
-        if (m.type !== "attributes" || m.attributeName !== "class") continue;
-        if (seriesModal.classList.contains("show")) {
-          const rptMod = await getReportsModule();
-          setTimeout(() => rptMod.syncSeriesReportButton(), 400);
-        }
-      }
-    }).observe(seriesModal, { attributes: true });
-
-    seriesModal.addEventListener("click", async (e) => {
-      const isNavBtn = e.target.closest(".episode-nav-btn");
-      const isEpisode = e.target.closest(
-        ".episode-card, .episode-item, [data-episode]",
-      );
-      if (isNavBtn || isEpisode) {
-        const rptMod = await getReportsModule();
-        setTimeout(() => rptMod.syncSeriesReportButton(), 350);
-      }
-    });
-  }
 });
 
 function preloadImage(url) {
@@ -573,19 +542,6 @@ async function smartRefreshAndPatch() {
 }
 
 async function fetchInitialDataWithCache() {
-  const cores = navigator.hardwareConcurrency || 4;
-  if (cores <= 4) {
-    console.log(
-      `💻 Hardware modesto detectado (${cores} núcleos): Activando Modo Rendimiento.`,
-    );
-    document.body.classList.add("low-spec");
-  } else {
-    console.log(
-      `🚀 Hardware potente detectado (${cores} núcleos): Gráficos en Ultra.`,
-    );
-    document.body.classList.remove("low-spec");
-  }
-
   const startLoadTime = Date.now();
 
   if (typeof db !== "undefined") {
@@ -1065,7 +1021,6 @@ async function switchView(filter) {
     document.getElementById("profile-hub-container"),
     document.getElementById("sagas-hub-container"),
     document.getElementById("reviews-container"),
-    document.getElementById("reports-container"),
     document.getElementById("live-tv-section"),
     document.getElementById("iptv-section"),
     document.getElementById("series-player-page"),
@@ -1248,7 +1203,6 @@ async function switchView(filter) {
       });
     populateFilters(filter);
     applyAndDisplayFilters(filter);
-    if (window._syncCalendarBtn) window._syncCalendarBtn(filter);
     return;
   }
 
@@ -1279,26 +1233,6 @@ async function switchView(filter) {
       if (mod && mod.renderReviewsGrid) mod.renderReviewsGrid();
     });
     window.scrollTo({ top: 0, behavior: "instant" });
-    return;
-  }
-
-  if (filter === "reports") {
-    const rptContainer = document.getElementById("reports-container");
-    if (rptContainer) {
-      rptContainer.style.display = "block";
-      rptContainer.style.padding = "30px clamp(15px, 4vw, 60px)";
-      rptContainer.innerHTML = `
-                <div class="reports-page-header">
-                    <h1 class="reports-page-title"><i class="fas fa-flag"></i> Reportes</h1>
-                    <p class="reports-page-subtitle">Problemas reportados por los usuarios</p>
-                </div>
-                <div id="reports-admin-body"></div>
-            `;
-      const rptBody = document.getElementById("reports-admin-body");
-      const rptMod = await getReportsModule();
-      await rptMod.renderAdminReports(rptBody);
-    }
-    window.scrollTo(0, 0);
     return;
   }
 
@@ -1358,7 +1292,6 @@ async function switchView(filter) {
   }
 
   window.scrollTo(0, 0);
-  if (window._syncCalendarBtn) window._syncCalendarBtn(filter);
 }
 
 // ==========================================
@@ -2055,9 +1988,15 @@ async function notifyDiscordNewContent({ title, year, poster, type, season, epis
     }]
   };
 
-  const res = await fetch(DISCORD_WEBHOOK_URL, {
+  const idToken = await auth.currentUser?.getIdToken();
+  if (!idToken) throw new Error("No autenticado");
+
+  const res = await fetch(`${WORKER_URL}/discord-notify`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${idToken}`
+    },
     body: JSON.stringify(payload)
   });
 
@@ -4244,7 +4183,24 @@ function _initNovedadesSection() {
     ];
   });
 
-  const all = [...movieItems, ...seriesItems, ...newEpisodeItems]
+  // ── Universos (sagas) con date_added en sagas_list ───────────
+  const sagasList = appState.content.sagasList || [];
+  const sagaItems = sagasList
+    .filter((s) => s.date_added)
+    .map((s) => ({
+      id: s.id,
+      data: { title: s.titulo || s.title || "" },
+      type: "saga",
+      typeLabel: "Universo",
+      typeColor: "#a855f7",
+      sortDate: new Date(s.date_added),
+      epThumb: s.banner || "",
+      epDetail: null,
+      lastSeason: null,
+      lastEpIdx: null,
+    }));
+
+  const all = [...movieItems, ...seriesItems, ...newEpisodeItems, ...sagaItems]
     .sort((a, b) => b.sortDate - a.sortDate)
     .slice(0, 10);
 
@@ -4312,7 +4268,10 @@ function _initNovedadesSection() {
       </div>`;
 
       card.onclick = async () => {
-        if (isSeries && lastSeason != null && lastEpIdx != null) {
+        if (type === "saga") {
+          appState.ui._fromUniverse = id;
+          switchView("sagas");
+        } else if (isSeries && lastSeason != null && lastEpIdx != null) {
           await openSeriesDetailView(id);
           const player = await getPlayerModule();
           player.playEpisodeInDetailView(id, lastSeason, lastEpIdx);
@@ -4393,6 +4352,14 @@ function _bentoCreateUniversosCarousel() {
 
     card.appendChild(logoWrap);
     card.appendChild(badge);
+
+    if (isDateRecent(saga.date_added)) {
+      const ribbon = document.createElement("div");
+      ribbon.className = "badges-container";
+      ribbon.innerHTML = `<div class="new-episode-badge badge-estreno">NUEVO</div>`;
+      card.appendChild(ribbon);
+    }
+
     row.appendChild(card);
   });
 
@@ -6589,33 +6556,6 @@ function updateUIAfterAuthStateChange(user) {
     const settingsMobileDrawer = document.querySelector('.mobile-drawer-item[onclick*="settings"]');
     if (settingsMobileDrawer) settingsMobileDrawer.style.display = isAdmin ? "" : "none";
 
-    const ADMIN_EMAIL_REPORTS = "baquezadat@gmail.com";
-    const reportsNavLink = document.getElementById("reports-nav-link");
-    if (reportsNavLink) {
-      if (user.email === ADMIN_EMAIL_REPORTS) {
-        reportsNavLink.style.display = "flex";
-        firebase
-          .database()
-          .ref("reports")
-          .orderByChild("status")
-          .equalTo("pending")
-          .on("value", (snap) => {
-            const badge = document.getElementById("reports-badge");
-            if (badge) {
-              const count = snap.numChildren();
-              if (count > 0) {
-                badge.textContent = count;
-                badge.style.display = "inline-flex";
-              } else {
-                badge.style.display = "none";
-              }
-            }
-          });
-      } else {
-        reportsNavLink.style.display = "none";
-      }
-    }
-
     resetNavigationActiveState();
     // No redirigir si hay un guardado de perfil en curso (condición de carrera:
     // updateProfile() dispara onAuthStateChanged antes de que los awaits terminen).
@@ -6630,9 +6570,6 @@ function updateUIAfterAuthStateChange(user) {
     if (mobileDrawerGuest)     mobileDrawerGuest.style.display     = "flex";
     if (mobileDrawerUser)      mobileDrawerUser.style.display      = "none";
     if (mobileDrawerLoggedIn)  mobileDrawerLoggedIn.style.display  = "none";
-
-    const reportsNavLinkOut = document.getElementById("reports-nav-link");
-    if (reportsNavLinkOut) reportsNavLinkOut.style.display = "none";
 
     if (hubLoggedIn) hubLoggedIn.style.display = "none";
     if (hubGuest) hubGuest.style.display = "block";
@@ -7611,7 +7548,15 @@ function createMovieCardElement(
   if (!imageUrl) imageUrl = data.banner || "";
 
   const img = new Image();
-  img.onload = () => {
+  img.alt = data.title;
+  img.addEventListener("load", () => {
+    // Quitar el posicionamiento temporal usado mientras estaba dentro del placeholder
+    img.style.position = "";
+    img.style.inset = "";
+    img.style.width = "";
+    img.style.height = "";
+    img.style.objectFit = "";
+
     const placeholder = card.querySelector(".img-container-placeholder");
     if (placeholder) placeholder.replaceWith(img);
     card.classList.add("img-loaded");
@@ -7621,9 +7566,7 @@ function createMovieCardElement(
     if (isVetada) {
       img.style.filter = "grayscale(100%)";
     }
-  };
-  img.src = imageUrl;
-  img.alt = data.title;
+  });
 
   const ratingHTML =
     reviewsModule && reviewsModule.getStarsHTML
@@ -7631,6 +7574,27 @@ function createMovieCardElement(
       : '<div class="card-rating-container"></div>';
 
   card.innerHTML = `${ribbonHTML}<div class="img-container-placeholder"></div>${ratingHTML}${watchlistBtnHTML}`;
+
+  // La imagen se coloca dentro del placeholder (con tamaño real para que el
+  // IntersectionObserver pueda detectarla) y solo se descarga cuando entra
+  // en viewport gracias a lazyLoader.observe().
+  const imgPlaceholder = card.querySelector(".img-container-placeholder");
+  if (imgPlaceholder) {
+    imgPlaceholder.style.position = "relative";
+    img.style.position = "absolute";
+    img.style.inset = "0";
+    img.style.width = "100%";
+    img.style.height = "100%";
+    img.style.objectFit = "cover";
+    imgPlaceholder.appendChild(img);
+  }
+
+  img.dataset.src = imageUrl;
+  if (lazyLoader && imageUrl) {
+    lazyLoader.observe(img);
+  } else {
+    img.src = imageUrl;
+  }
 
   if (
     options.source === "continuar-viendo" &&
@@ -8764,6 +8728,19 @@ function injectOnlineCounter() {
           <span>Mensaje personalizado al cine</span>
         </div>
         <div class="adash-discord-body">
+          <div class="adash-discord-row adash-dc-webhook-row">
+            <label class="adash-discord-label" for="adash-dc-webhook">Webhook URL (Discord)</label>
+            <div class="adash-dc-webhook-inputwrap">
+              <input id="adash-dc-webhook" class="adash-dc-input" type="password" placeholder="https://discord.com/api/webhooks/...">
+              <button id="adash-dc-webhook-toggle" class="adash-dc-webhook-icon-btn" title="Mostrar/ocultar" type="button">
+                <i class="fas fa-eye"></i>
+              </button>
+            </div>
+            <div class="adash-dc-webhook-actions">
+              <button id="adash-dc-webhook-save" class="adash-dc-webhook-save-btn" type="button">Guardar</button>
+              <span id="adash-dc-webhook-status" class="adash-dc-webhook-status"></span>
+            </div>
+          </div>
           <div class="adash-discord-row">
             <label class="adash-discord-label">Tipo</label>
             <div class="adash-discord-type-btns" id="adash-dc-types">
@@ -8972,6 +8949,27 @@ function injectOnlineCounter() {
       }
       .adash-dc-send-btn:hover { opacity: .85; }
       .adash-dc-send-btn:disabled { opacity: .5; cursor: not-allowed; }
+      .adash-dc-webhook-row { padding-bottom: 12px; border-bottom: 1px solid rgba(255,255,255,.08); margin-bottom: 4px; }
+      .adash-dc-webhook-inputwrap { position: relative; display: flex; }
+      .adash-dc-webhook-inputwrap .adash-dc-input { flex: 1; padding-right: 38px; }
+      .adash-dc-webhook-icon-btn {
+        position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+        background: none; border: none; color: rgba(255,255,255,.4); cursor: pointer;
+        width: 30px; height: 30px; display: flex; align-items: center; justify-content: center;
+        border-radius: 6px; font-size: 12px;
+      }
+      .adash-dc-webhook-icon-btn:hover { color: rgba(255,255,255,.8); background: rgba(255,255,255,.06); }
+      .adash-dc-webhook-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+      .adash-dc-webhook-save-btn {
+        padding: 7px 14px; border-radius: 8px; border: none; cursor: pointer;
+        background: rgba(255,255,255,.08); color: #fff; font-size: 12px; font-weight: 700;
+        transition: background .15s;
+      }
+      .adash-dc-webhook-save-btn:hover { background: rgba(255,255,255,.14); }
+      .adash-dc-webhook-save-btn:disabled { opacity: .5; cursor: not-allowed; }
+      .adash-dc-webhook-status { font-size: 11px; color: rgba(255,255,255,.45); }
+      .adash-dc-webhook-status.ok { color: #43b581; }
+      .adash-dc-webhook-status.err { color: #FF4444; }
     `;
     document.head.appendChild(s);
   }
@@ -9016,6 +9014,55 @@ function injectOnlineCounter() {
 
   document.getElementById("adash-discord-card").style.setProperty("--adash-dc-color", _dcActiveType.color);
 
+  // ── Configuración del Webhook de Discord (guardado en Firebase) ──
+  const dcWebhookInput  = document.getElementById("adash-dc-webhook");
+  const dcWebhookToggle = document.getElementById("adash-dc-webhook-toggle");
+  const dcWebhookSave   = document.getElementById("adash-dc-webhook-save");
+  const dcWebhookStatus = document.getElementById("adash-dc-webhook-status");
+
+  // Cargar el valor actual (solo admins pueden leer esta ruta según las reglas de Firebase)
+  db.ref("config/discord_webhook").once("value")
+    .then(snap => {
+      const val = snap.val();
+      if (val) dcWebhookInput.value = val;
+    })
+    .catch(err => console.warn("No se pudo leer config/discord_webhook:", err));
+
+  dcWebhookToggle.addEventListener("click", () => {
+    const showing = dcWebhookInput.type === "text";
+    dcWebhookInput.type = showing ? "password" : "text";
+    dcWebhookToggle.innerHTML = showing
+      ? '<i class="fas fa-eye"></i>'
+      : '<i class="fas fa-eye-slash"></i>';
+  });
+
+  dcWebhookSave.addEventListener("click", async () => {
+    const url = dcWebhookInput.value.trim();
+
+    if (url && !/^https:\/\/discord(app)?\.com\/api\/webhooks\//.test(url)) {
+      dcWebhookStatus.textContent = "URL inválida";
+      dcWebhookStatus.className = "adash-dc-webhook-status err";
+      return;
+    }
+
+    dcWebhookSave.disabled = true;
+    dcWebhookStatus.textContent = "Guardando…";
+    dcWebhookStatus.className = "adash-dc-webhook-status";
+
+    try {
+      await db.ref("config/discord_webhook").set(url || null);
+      dcWebhookStatus.textContent = "Guardado ✓";
+      dcWebhookStatus.className = "adash-dc-webhook-status ok";
+    } catch (err) {
+      console.error("Error guardando webhook:", err);
+      dcWebhookStatus.textContent = "Error al guardar";
+      dcWebhookStatus.className = "adash-dc-webhook-status err";
+    } finally {
+      dcWebhookSave.disabled = false;
+      setTimeout(() => { dcWebhookStatus.textContent = ""; dcWebhookStatus.className = "adash-dc-webhook-status"; }, 3000);
+    }
+  });
+
   dcSendBtn.addEventListener("click", async () => {
     const title = dcTitle.value.trim();
     const msg   = dcMsg.value.trim();
@@ -9029,9 +9076,15 @@ function injectOnlineCounter() {
     dcSendBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg> Enviando\u2026';
     const colorInt = parseInt(_dcActiveType.color.replace("#", ""), 16);
     try {
-      const res = await fetch(DISCORD_WEBHOOK_URL, {
+      const idToken = await auth.currentUser?.getIdToken();
+      if (!idToken) throw new Error("No autenticado");
+
+      const res = await fetch(`${WORKER_URL}/discord-notify`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${idToken}`
+        },
         body: JSON.stringify({
           embeds: [{
             author: { name: "Cine Corneta", url: "https://cornetagang.github.io/cinecorneta/" },
@@ -9820,219 +9873,6 @@ window.closeFiltersDrawer = function () {
   document.body.classList.remove("modal-open");
 };
 
-
-// ══════════════════════════════════════════════════════════════════════════════
-// CALENDARIO DE EMISIÓN DE SERIES
-// ══════════════════════════════════════════════════════════════════════════════
-(function initSeriesCalendar() {
-  const MONTHS_ES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
-                     "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
-  const DAYS_ES   = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"];
-
-  let calDate = new Date();
-  calDate.setDate(1);
-
-  function parseReleaseDate(raw) {
-    if (!raw) return null;
-    let s = raw;
-    if (typeof s === "string" && s.includes("/")) {
-      const parts = s.trim().split(" ");
-      const dmy   = parts[0].split("/");
-      if (dmy.length === 3) s = `${dmy[1]}/${dmy[0]}/${dmy[2]} ${parts[1] || ""}`.trim();
-    }
-    const d = new Date(s);
-    return isNaN(d.getTime()) ? null : d;
-  }
-
-  function getEpisodesByDate() {
-    const byDate = {};
-    const eps    = appState.content.seriesEpisodes || {};
-    const series = appState.content.series || {};
-
-    for (const seriesId in eps) {
-      const seriesData  = series[seriesId] || {};
-      const seriesTitle = seriesData.title || seriesId;
-      const poster      = seriesData.poster || "";
-      const seasons     = eps[seriesId];
-      const realSeasonCount = Object.keys(seasons).filter(s => {
-        const sl = String(s).toLowerCase();
-        return !sl.includes("pelicula") && !sl.includes("película") &&
-               !sl.includes("especial") && !sl.includes("ova") &&
-               !sl.includes("movie") && !sl.includes("special");
-      }).length;
-
-      for (const seasonKey in seasons) {
-        const epList = Array.isArray(seasons[seasonKey])
-          ? seasons[seasonKey]
-          : Object.values(seasons[seasonKey] || {});
-
-        epList.forEach((ep, idx) => {
-          const isProximamente = String(ep.proximamente || "").trim().toLowerCase() === "si";
-          const epReleaseDate = ep?.releaseDate || ep?.fechaEstreno || null;
-          if (!epReleaseDate) return;
-          const d = parseReleaseDate(epReleaseDate);
-          if (!d) return;
-          if (!isProximamente && !ep.videoId && !ep.videoId_es && !ep.videoId_en) return;
-          if (typeof isAdminUser === "function" && !isAdminUser() &&
-              typeof isAdminContent === "function" && isAdminContent(seriesData)) return;
-
-          const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-          if (!byDate[key]) byDate[key] = [];
-          byDate[key].push({
-            seriesId, seriesTitle, poster,
-            season:  seasonKey.replace(/^T|^temp/i, "T"),
-            epNum:   ep.episode || ep.numero || (idx + 1),
-            epTitle: ep.title || ep.titulo || "",
-            upcoming: isProximamente,
-            realSeasonCount,
-          });
-        });
-      }
-    }
-    return byDate;
-  }
-
-  function renderCalendar() {
-    const grid    = document.getElementById("scal-grid");
-    const label   = document.getElementById("scal-month-label");
-    const epPanel = document.getElementById("scal-episodes");
-    if (!grid || !label) return;
-
-    const byDate  = getEpisodesByDate();
-    const year    = calDate.getFullYear();
-    const month   = calDate.getMonth();
-    label.textContent = `${MONTHS_ES[month]} ${year}`;
-
-    const firstDay = new Date(year, month, 1);
-    const lastDay  = new Date(year, month + 1, 0);
-    const startDow = (firstDay.getDay() + 6) % 7;
-
-    grid.innerHTML = "";
-    epPanel.innerHTML = "";
-
-    for (let i = 0; i < startDow; i++) {
-      const empty = document.createElement("div");
-      empty.className = "scal-cell scal-empty";
-      grid.appendChild(empty);
-    }
-
-    const today = new Date();
-    today.setHours(0,0,0,0);
-
-    for (let day = 1; day <= lastDay.getDate(); day++) {
-      const dateKey = `${year}-${String(month+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
-      const hasEps  = !!byDate[dateKey];
-      const d       = new Date(year, month, day);
-      const isToday = d.getTime() === today.getTime();
-
-      const cell = document.createElement("div");
-      cell.className = "scal-cell" +
-        (hasEps  ? " scal-has-eps" : "") +
-        (isToday ? " scal-today"   : "");
-      cell.textContent = day;
-
-      if (hasEps) {
-        const dot = document.createElement("span");
-        dot.className = "scal-dot";
-        cell.appendChild(dot);
-        cell.addEventListener("click", () => {
-          document.querySelectorAll(".scal-cell.scal-selected")
-            .forEach(c => c.classList.remove("scal-selected"));
-          cell.classList.add("scal-selected");
-          showEpisodes(dateKey, byDate[dateKey]);
-        });
-      }
-      grid.appendChild(cell);
-    }
-
-    const todayKey = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
-    if (byDate[todayKey] && month === today.getMonth() && year === today.getFullYear()) {
-      const todayCell = grid.children[startDow + today.getDate() - 1];
-      if (todayCell) todayCell.classList.add("scal-selected");
-      showEpisodes(todayKey, byDate[todayKey]);
-    }
-  }
-
-  function showEpisodes(dateKey, items) {
-    const panel = document.getElementById("scal-episodes");
-    if (!panel) return;
-    const [y, m, d] = dateKey.split("-").map(Number);
-    const date = new Date(y, m-1, d);
-    const dow  = DAYS_ES[(date.getDay() + 6) % 7];
-    const MS   = ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
-    panel.innerHTML = `
-      <p class="scal-ep-date">${dow} ${d} de ${MS[m-1]}</p>
-      <div class="scal-ep-list">
-        ${items.map(ep => ep.upcoming ? `
-          <div class="scal-ep-item scal-ep-upcoming">
-            <img src="${ep.poster}" class="scal-ep-poster" onerror="this.style.display='none'">
-            <div class="scal-ep-info">
-              <span class="scal-ep-title">${ep.seriesTitle}</span>
-              <span class="scal-ep-sub">${ep.realSeasonCount <= 1 ? `Ep. ${ep.epNum}` : `${ep.season} · Ep. ${ep.epNum}`}${ep.epTitle ? " — " + ep.epTitle : ""}</span>
-            </div>
-            <span class="scal-ep-soon"><i class="fas fa-clock"></i> Próximamente</span>
-          </div>
-        ` : `
-          <div class="scal-ep-item" onclick="window.openSeriesDetailView && window.openSeriesDetailView('${ep.seriesId}')">
-            <img src="${ep.poster}" class="scal-ep-poster" onerror="this.style.display='none'">
-            <div class="scal-ep-info">
-              <span class="scal-ep-title">${ep.seriesTitle}</span>
-              <span class="scal-ep-sub">${ep.realSeasonCount <= 1 ? `Ep. ${ep.epNum}` : `${ep.season} · Ep. ${ep.epNum}`}${ep.epTitle ? " — " + ep.epTitle : ""}</span>
-            </div>
-            <i class="fas fa-chevron-right scal-ep-arrow"></i>
-          </div>
-        `).join("")}
-      </div>`;
-  }
-
-  function openCalendar() {
-    calDate = new Date();
-    calDate.setDate(1);
-    const modal = document.getElementById("series-calendar-modal");
-    if (modal) { modal.style.display = "flex"; renderCalendar(); }
-  }
-
-  function closeCalendar() {
-    const modal = document.getElementById("series-calendar-modal");
-    if (modal) modal.style.display = "none";
-  }
-
-  // Mostrar botón solo en la vista de series
-  function syncCalendarBtn(filter) {
-    const btn = document.getElementById("series-calendar-btn");
-    if (btn) btn.style.display = (filter === "series") ? "flex" : "none";
-  }
-  window._syncCalendarBtn = syncCalendarBtn;
-
-  document.addEventListener("DOMContentLoaded", () => {
-    document.getElementById("series-calendar-btn")
-      ?.addEventListener("click", openCalendar);
-    document.getElementById("scal-close")
-      ?.addEventListener("click", closeCalendar);
-    document.getElementById("series-calendar-backdrop")
-      ?.addEventListener("click", closeCalendar);
-    document.getElementById("scal-prev")
-      ?.addEventListener("click", () => {
-        calDate.setMonth(calDate.getMonth() - 1);
-        renderCalendar();
-        const ep = document.getElementById("scal-episodes");
-        if (ep) ep.innerHTML = "";
-      });
-    document.getElementById("scal-next")
-      ?.addEventListener("click", () => {
-        calDate.setMonth(calDate.getMonth() + 1);
-        renderCalendar();
-        const ep = document.getElementById("scal-episodes");
-        if (ep) ep.innerHTML = "";
-      });
-
-    // ✅ Sincronizar el botón con el filtro actual al cargar
-    // appState puede no estar listo aún, esperamos un tick
-    setTimeout(() => {
-      syncCalendarBtn(appState?.currentFilter || "all");
-    }, 0);
-  });
-})();
 
 document.addEventListener("DOMContentLoaded", () => {
   /* Botón que abre el drawer */
